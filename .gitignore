@@ -1,0 +1,10 @@
+# Design docs (not committed yet)
+docs/
+
+# OS
+.DS_Store
+
+# Editors
+.idea/
+.vscode/
+*.swp
