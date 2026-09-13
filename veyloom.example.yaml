@@ -1,0 +1,66 @@
+# Example configuration for veyloom.
+#
+# Copy to ./veyloom.yaml or ~/.veyloom/veyloom.yaml, or pass --config PATH.
+# Every value below is the built-in default; delete what you do not change.
+#
+# Precedence, highest first: command-line flags, environment variables,
+# this file, built-in defaults. Each key maps to an environment variable by
+# upper-casing it, replacing dots with underscores and prefixing VEYLOOM_,
+# e.g. server.addr -> VEYLOOM_SERVER_ADDR.
+#
+# Durations use Go syntax: 500ms, 15s, 2m, 1h.
+
+database:
+  # Postgres connection URL. The default matches docker-compose.yml.
+  url: postgres://veyloom:veyloom@localhost:5432/veyloom?sslmode=disable
+
+state:
+  # Directory for what must persist on this machine between runs, starting
+  # with the local worker's identity. "~/" expands to the home directory.
+  dir: ~/.veyloom
+
+server:
+  # Listen address of the HTTP API.
+  addr: 127.0.0.1:7788
+  # How long a client may take to send request headers.
+  read_header_timeout: 5s
+  # How long in-flight requests get to finish on shutdown.
+  shutdown_timeout: 5s
+  # How long one event write to a WebSocket client may take.
+  write_timeout: 10s
+  # Browser origins, as host patterns, allowed to open the event stream
+  # from another origin, e.g. a Web UI dev server. Same-origin and
+  # non-browser clients need no entry.
+  allowed_origins: []
+  # allowed_origins: ["localhost:5173"]
+
+hub:
+  # How often workers must report in.
+  heartbeat_interval: 15s
+  # How long a new worker connection may take to introduce itself.
+  handshake_timeout: 10s
+  # How long each database operation outside a request may take: recording
+  # disconnects, finishing turns, posting agent replies.
+  store_timeout: 10s
+  # Where turn transcripts go, one JSONL file per turn. Empty means the
+  # "turns" directory under state.dir.
+  transcript_dir: ""
+  # How many thread messages an agent's brief includes, most recent first.
+  brief_messages: 40
+  # How long an agent's permission request waits for someone to decide
+  # before it is denied. Negative waits forever.
+  approval_timeout: 15m
+
+worker:
+  # Label shown for this machine. Defaults to the hostname; it is not the
+  # worker's identity, which the hub assigns and the state dir remembers.
+  # name: my-laptop
+  # How long each agent CLI may take to answer version and login probes.
+  detect_timeout: 15s
+  # How long the hub may take to answer the worker's hello.
+  handshake_timeout: 10s
+  # Heartbeat interval used only if the hub does not specify one.
+  heartbeat_interval: 15s
+  # How long streamed reply text is buffered before it is sent to the hub
+  # as one event. Negative sends every chunk as it arrives.
+  event_flush_interval: 50ms

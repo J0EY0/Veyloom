@@ -1,0 +1,12 @@
+# Code generation for the store package. Run `make sqlc` (or the docker
+# command in docs/progress.md); the generated package is committed.
+version: "2"
+sql:
+  - engine: "postgresql"
+    schema: "internal/store/migrations"
+    queries: "internal/store/queries"
+    gen:
+      go:
+        package: "db"
+        out: "internal/store/db"
+        sql_package: "pgx/v5"

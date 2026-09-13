@@ -1,0 +1,74 @@
+package api
+
+import (
+	"context"
+	"net/http"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/coder/websocket/wsjson"
+)
+
+// EventsOptions tunes the WebSocket event stream.
+type EventsOptions struct {
+	// AllowedOrigins lists host patterns of browser origins allowed to
+	// connect cross-origin. Same-origin requests and clients that send no
+	// Origin header are always accepted.
+	AllowedOrigins []string
+	// WriteTimeout bounds each event write; zero means unbounded.
+	WriteTimeout time.Duration
+}
+
+// roomEvents upgrades GET /api/v1/rooms/{id}/events to a WebSocket and
+// streams the room's live events as JSON, one hub.Event per message. The
+// stream is one-way: a client that sends data is disconnected. A client
+// too slow to keep up is closed with StatusPolicyViolation and should
+// reload over REST before reconnecting.
+func (h *handlers) roomEvents(w http.ResponseWriter, r *http.Request) {
+	roomID := r.PathValue("id")
+	if _, err := h.deps.Projects.GetRoom(r.Context(), roomID); err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: h.deps.Events.AllowedOrigins})
+	if err != nil {
+		// Accept has already answered with the reason.
+		return
+	}
+	defer conn.CloseNow()
+
+	sub := h.deps.Chat.Subscribe(roomID)
+	defer sub.Close()
+
+	// CloseRead keeps reading so pings are answered and a closed peer is
+	// noticed; its context ends when the connection does.
+	ctx := conn.CloseRead(r.Context())
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case ev, ok := <-sub.Events():
+			if !ok {
+				if sub.Lagged() {
+					_ = conn.Close(websocket.StatusPolicyViolation, "too slow: events were dropped, resync over REST")
+				} else {
+					_ = conn.Close(websocket.StatusNormalClosure, "")
+				}
+				return
+			}
+			if err := h.writeEvent(ctx, conn, ev); err != nil {
+				return
+			}
+		}
+	}
+}
+
+// writeEvent sends one event within the configured write timeout.
+func (h *handlers) writeEvent(ctx context.Context, conn *websocket.Conn, ev any) error {
+	if h.deps.Events.WriteTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, h.deps.Events.WriteTimeout)
+		defer cancel()
+	}
+	return wsjson.Write(ctx, conn, ev)
+}

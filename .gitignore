@@ -8,3 +8,6 @@ docs/
 .idea/
 .vscode/
 *.swp
+
+# Build output
+bin/
