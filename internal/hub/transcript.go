@@ -8,23 +8,25 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/J0EY0/veyloom/internal/engine"
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
 // transcriptLine is one JSONL record of a turn's transcript. The first
 // line is the start record with the spec, then one line per event (an
 // approval request is an event), one per approval decision, then the done
-// record.
+// record. A turn run again in a new session, because its own would not
+// resume, has a restart record in between: the error of the first run and
+// the spec of the second.
 type transcriptLine struct {
 	Kind     string              `json:"kind"`
 	At       time.Time           `json:"at"`
 	TurnID   string              `json:"turn_id,omitempty"`
-	Engine   string              `json:"engine,omitempty"`
-	Spec     *engine.TurnSpec    `json:"spec,omitempty"`
-	Event    *engine.Event       `json:"event,omitempty"`
+	Runtime  string              `json:"runtime,omitempty"`
+	Spec     *runtime.TurnSpec   `json:"spec,omitempty"`
+	Event    *runtime.Event      `json:"event,omitempty"`
 	Approval *transcriptApproval `json:"approval,omitempty"`
-	Result   *engine.Result      `json:"result,omitempty"`
+	Result   *runtime.Result     `json:"result,omitempty"`
 	Error    string              `json:"error,omitempty"`
 }
 

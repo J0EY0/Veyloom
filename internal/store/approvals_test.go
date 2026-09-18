@@ -26,13 +26,13 @@ func newApprovalFixture(t *testing.T) approvalFixture {
 
 func (f approvalFixture) newApproval(requestID string) store.NewApproval {
 	return store.NewApproval{
-		TurnID:          f.turn.ID,
-		RoomID:          f.room.ID,
-		ThreadID:        f.thread.ID,
-		AgentInstanceID: f.instance.ID,
-		RequestID:       requestID,
-		Tool:            "Bash",
-		Input:           `{"command":"make test"}`,
+		TurnID:    f.turn.ID,
+		RoomID:    f.room.ID,
+		ThreadID:  f.thread.ID,
+		MemberID:  f.member.ID,
+		RequestID: requestID,
+		Tool:      "Bash",
+		Input:     `{"command":"make test"}`,
 	}
 }
 
@@ -53,7 +53,7 @@ func TestApprovals_CreateDecideGet(t *testing.T) {
 	if a.Status != store.ApprovalPending || a.Kind != store.ApprovalToolUse || a.Tool != "Bash" || string(a.Input) != `{"command":"make test"}` {
 		t.Errorf("unexpected approval: %+v", a)
 	}
-	if a.MessageID != note.ID || a.TurnID != f.turn.ID || a.AgentInstanceID != f.instance.ID || a.DecidedAt != nil || a.DecidedBy != "" {
+	if a.MessageID != note.ID || a.TurnID != f.turn.ID || a.MemberID != f.member.ID || a.DecidedAt != nil || a.DecidedBy != "" {
 		t.Errorf("unexpected approval: %+v", a)
 	}
 

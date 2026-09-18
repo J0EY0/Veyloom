@@ -4,10 +4,18 @@ docs/
 # OS
 .DS_Store
 
-# Editors
+# Editors and local tooling
 .idea/
 .vscode/
+.claude/
 *.swp
+
+# Local settings (copied from .env.example)
+.env
 
 # Build output
 bin/
+
+# Web client: dependencies and build output
+web/node_modules/
+web/dist/

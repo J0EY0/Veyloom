@@ -56,3 +56,19 @@ func (q *Queries) ListUsers(ctx context.Context) ([]User, error) {
 	}
 	return items, nil
 }
+
+const renameUser = `-- name: RenameUser :one
+UPDATE users SET name = $2 WHERE id = $1 RETURNING id, name, created_at
+`
+
+type RenameUserParams struct {
+	ID   pgtype.UUID
+	Name string
+}
+
+func (q *Queries) RenameUser(ctx context.Context, arg RenameUserParams) (User, error) {
+	row := q.db.QueryRow(ctx, renameUser, arg.ID, arg.Name)
+	var i User
+	err := row.Scan(&i.ID, &i.Name, &i.CreatedAt)
+	return i, err
+}

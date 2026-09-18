@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/J0EY0/veyloom/internal/engine"
+	"github.com/J0EY0/veyloom/internal/runtime"
 )
 
 func TestTranscript_WritesJSONLAndCreatesDir(t *testing.T) {
@@ -17,10 +17,10 @@ func TestTranscript_WritesJSONLAndCreatesDir(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	spec := engine.TurnSpec{Prompt: "hi"}
-	tx.write(transcriptLine{Kind: "start", TurnID: "turn-1", Engine: "fake", Spec: &spec})
-	tx.write(transcriptLine{Kind: "event", Event: &engine.Event{Kind: engine.EventText, Text: "chunk"}})
-	tx.write(transcriptLine{Kind: "done", Result: &engine.Result{Output: "chunk"}})
+	spec := runtime.TurnSpec{Prompt: "hi"}
+	tx.write(transcriptLine{Kind: "start", TurnID: "turn-1", Runtime: "fake", Spec: &spec})
+	tx.write(transcriptLine{Kind: "event", Event: &runtime.Event{Kind: runtime.EventText, Text: "chunk"}})
+	tx.write(transcriptLine{Kind: "done", Result: &runtime.Result{Output: "chunk"}})
 	if err := tx.close(); err != nil {
 		t.Fatal(err)
 	}

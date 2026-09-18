@@ -1,6 +1,6 @@
 // Package hub is the central coordinator. It holds the authoritative view of
 // everything shared between agents; at this stage that is the set of
-// connected workers and the engines each of them offers.
+// connected machines and the runtimes each of them offers.
 package hub
 
 import (
@@ -12,15 +12,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/J0EY0/veyloom/internal/engine"
 	"github.com/J0EY0/veyloom/internal/protocol"
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
 // Config holds the hub's tunables. Zero fields are filled from
 // DefaultConfig, so callers may set only what they care about.
 type Config struct {
-	// HeartbeatInterval is how often workers are asked to report in.
+	// HeartbeatInterval is how often machines are asked to report in.
 	HeartbeatInterval time.Duration `mapstructure:"heartbeat_interval"`
 	// HandshakeTimeout bounds how long a new connection may take to send
 	// Hello.
@@ -32,12 +32,33 @@ type Config struct {
 	// TranscriptDir is where turn transcripts are written, one JSONL file
 	// per turn. Empty means a "turns" directory under the state dir.
 	TranscriptDir string `mapstructure:"transcript_dir"`
-	// BriefMessages caps how many thread messages a turn's brief includes.
+	// AttachmentDir is where uploaded attachments are stored; the brief
+	// names files by their path under it. Empty means an "attachments"
+	// directory under the state dir.
+	AttachmentDir string `mapstructure:"attachment_dir"`
+	// AvatarDir is where the pictures uploaded for agents are stored. Empty
+	// means an "avatars" directory under the state dir.
+	AvatarDir string `mapstructure:"avatar_dir"`
+	// BriefMessages caps how many messages of the topic a turn is in its
+	// brief includes. A brief tells a session only what it has not read, so
+	// the caps below matter for a new session and after a long absence;
+	// what a cap leaves out is counted in the brief.
 	BriefMessages int `mapstructure:"brief_messages"`
+	// BriefRoomMessages caps the new top-level messages of the room in a
+	// brief.
+	BriefRoomMessages int `mapstructure:"brief_room_messages"`
+	// BriefTopics caps the other topics a brief lists as having news.
+	BriefTopics int `mapstructure:"brief_topics"`
 	// ApprovalTimeout is how long an approval request waits for a decision
 	// before it is denied. Zero takes the default; a negative value waits
 	// forever.
 	ApprovalTimeout time.Duration `mapstructure:"approval_timeout"`
+	// RelayBudget is how many agent-to-agent turns a topic may run in a
+	// row without a person speaking: an agent's reply that @-mentions
+	// another agent wakes it, up to this many times, then the topic waits
+	// for a person. Zero takes the default; a negative value turns the
+	// relay off, leaving mentions as hand-off buttons.
+	RelayBudget int `mapstructure:"relay_budget"`
 }
 
 // DefaultConfig returns the defaults every Config is completed with.
@@ -48,7 +69,10 @@ func DefaultConfig() Config {
 		StoreTimeout:      10 * time.Second,
 		TranscriptDir:     "",
 		BriefMessages:     40,
+		BriefRoomMessages: 30,
+		BriefTopics:       10,
 		ApprovalTimeout:   15 * time.Minute,
+		RelayBudget:       4,
 	}
 }
 
@@ -67,54 +91,67 @@ func (c Config) withDefaults() Config {
 	if c.BriefMessages <= 0 {
 		c.BriefMessages = def.BriefMessages
 	}
+	if c.BriefRoomMessages <= 0 {
+		c.BriefRoomMessages = def.BriefRoomMessages
+	}
+	if c.BriefTopics <= 0 {
+		c.BriefTopics = def.BriefTopics
+	}
 	if c.ApprovalTimeout == 0 {
 		c.ApprovalTimeout = def.ApprovalTimeout
+	}
+	if c.RelayBudget == 0 {
+		c.RelayBudget = def.RelayBudget
 	}
 	return c
 }
 
-// ErrUnknownWorker is returned when a worker ID is not connected.
-var ErrUnknownWorker = errors.New("hub: unknown worker")
+// ErrUnknownMachine is returned when a machine ID is not connected.
+var ErrUnknownMachine = errors.New("hub: unknown machine")
 
 // ErrAlreadyConnected is returned when a second connection claims the
-// identity of a worker that is already connected.
-var ErrAlreadyConnected = errors.New("hub: worker already connected")
+// identity of a machine that is already connected.
+var ErrAlreadyConnected = errors.New("hub: machine already connected")
 
 // ErrUnknownTurn is returned when a turn ID is not running.
 var ErrUnknownTurn = errors.New("hub: unknown turn")
 
-// WorkerStore persists worker registrations. The hub keeps live connections
+// MachineStore persists machine registrations. The hub keeps live connections
 // in memory; the store is the durable record that survives restarts and
-// hands out worker IDs. *store.Store satisfies it.
-type WorkerStore interface {
-	// RegisterWorker records a connecting worker and returns its ID.
-	// presentedID is what the worker sent in Hello: a known id reconnects
-	// that worker, while an empty or unknown id registers a new one.
-	RegisterWorker(ctx context.Context, presentedID, name string, engines []engine.Info) (id string, err error)
-	// TouchWorker records that the worker was heard from.
-	TouchWorker(ctx context.Context, id string) error
-	// UpdateWorkerEngines replaces the worker's discovered engines.
-	UpdateWorkerEngines(ctx context.Context, id string, engines []engine.Info) error
-	// MarkWorkerDisconnected records that the worker's connection ended.
-	MarkWorkerDisconnected(ctx context.Context, id string) error
+// hands out machine IDs. *store.Store satisfies it.
+type MachineStore interface {
+	// RegisterMachine records a connecting machine and returns its ID.
+	// presentedID is what the machine sent in Hello: a known id reconnects
+	// that machine, while an empty or unknown id registers a new one.
+	RegisterMachine(ctx context.Context, presentedID, name string, runtimes []runtime.Info) (id string, err error)
+	// TouchMachine records that the machine was heard from.
+	TouchMachine(ctx context.Context, id string) error
+	// UpdateMachineRuntimes replaces the machine's discovered runtimes.
+	UpdateMachineRuntimes(ctx context.Context, id string, runtimes []runtime.Info) error
+	// MarkMachineDisconnected records that the machine's connection ended.
+	MarkMachineDisconnected(ctx context.Context, id string) error
 }
 
-// WorkerInfo is the hub's view of one connected worker.
-type WorkerInfo struct {
-	ID          string        `json:"id"`
-	Name        string        `json:"name"`
-	Engines     []engine.Info `json:"engines"`
-	ConnectedAt time.Time     `json:"connected_at"`
-	LastSeen    time.Time     `json:"last_seen"`
+// MachineInfo is the hub's view of one connected machine.
+type MachineInfo struct {
+	ID          string         `json:"id"`
+	Name        string         `json:"name"`
+	Runtimes    []runtime.Info `json:"runtimes"`
+	ConnectedAt time.Time      `json:"connected_at"`
+	LastSeen    time.Time      `json:"last_seen"`
+	// ProbedAt is when Runtimes was last discovered: at connect, since Hello
+	// carries them, and at every runtimes report after that. Whoever asked
+	// for a probe knows it is answered once this moves.
+	ProbedAt time.Time `json:"probed_at"`
 }
 
-// connectedWorker pairs a worker's info with the connection used to reach it.
-type connectedWorker struct {
-	info WorkerInfo
+// connectedMachine pairs a machine's info with the connection used to reach it.
+type connectedMachine struct {
+	info MachineInfo
 	conn protocol.Conn
 }
 
-// Hub is the central coordinator: it serves worker connections, accepts
+// Hub is the central coordinator: it serves machine connections, accepts
 // messages, decides which agents they wake and runs their turns. It is
 // safe for concurrent use.
 type Hub struct {
@@ -126,8 +163,8 @@ type Hub struct {
 	turns  *TurnManager
 	events *broker
 
-	mu      sync.Mutex
-	workers map[string]*connectedWorker
+	mu       sync.Mutex
+	machines map[string]*connectedMachine
 }
 
 // Option customises a Hub.
@@ -147,18 +184,19 @@ func WithLogger(logger *slog.Logger) Option {
 // New creates a Hub over st.
 func New(st Store, cfg Config, opts ...Option) *Hub {
 	h := &Hub{
-		store:   st,
-		cfg:     cfg.withDefaults(),
-		now:     time.Now,
-		logger:  slog.Default(),
-		workers: make(map[string]*connectedWorker),
+		store:    st,
+		cfg:      cfg.withDefaults(),
+		now:      time.Now,
+		logger:   slog.Default(),
+		machines: make(map[string]*connectedMachine),
 	}
 	for _, opt := range opts {
 		opt(h)
 	}
 	h.router = NewRouter(st)
 	h.events = newBroker(subscriptionBuffer)
-	h.turns = newTurnManager(st, newBriefBuilder(st, h.cfg.BriefMessages), h.connFor, h.events.publish, h.cfg.TranscriptDir, h.cfg.StoreTimeout, h.cfg.ApprovalTimeout, h.logger)
+	limits := briefLimits{Thread: h.cfg.BriefMessages, Room: h.cfg.BriefRoomMessages, Topics: h.cfg.BriefTopics}
+	h.turns = newTurnManager(st, newBriefBuilder(st, limits, h.cfg.AttachmentDir), h.connFor, h.events.publish, h.cfg.TranscriptDir, h.cfg.StoreTimeout, h.cfg.ApprovalTimeout, h.cfg.RelayBudget, h.logger)
 	return h
 }
 
@@ -169,10 +207,10 @@ func (h *Hub) Subscribe(roomID string) Subscription {
 	return h.events.subscribe(roomID)
 }
 
-// Serve handles one worker connection: it performs the handshake, registers
-// the worker, then processes messages until the peer disconnects or ctx is
+// Serve handles one machine connection: it performs the handshake, registers
+// the machine, then processes messages until the peer disconnects or ctx is
 // cancelled. It blocks, so callers run it in a goroutine per connection. The
-// worker is unregistered when Serve returns.
+// machine is unregistered when Serve returns.
 func (h *Hub) Serve(ctx context.Context, conn protocol.Conn) error {
 	defer conn.Close()
 
@@ -181,9 +219,9 @@ func (h *Hub) Serve(ctx context.Context, conn protocol.Conn) error {
 		return err
 	}
 
-	id, err := h.store.RegisterWorker(ctx, hello.WorkerID, hello.Name, hello.Engines)
+	id, err := h.store.RegisterMachine(ctx, hello.MachineID, hello.Name, hello.Runtimes)
 	if err != nil {
-		return fmt.Errorf("register worker %q: %w", hello.Name, err)
+		return fmt.Errorf("register machine %q: %w", hello.Name, err)
 	}
 	w, err := h.track(id, hello, conn)
 	if err != nil {
@@ -192,7 +230,7 @@ func (h *Hub) Serve(ctx context.Context, conn protocol.Conn) error {
 	defer h.forget(w)
 
 	welcome := protocol.Welcome{
-		WorkerID:          id,
+		MachineID:         id,
 		HeartbeatInterval: protocol.Duration(h.cfg.HeartbeatInterval),
 	}
 	if err := conn.Send(ctx, welcome); err != nil {
@@ -231,87 +269,91 @@ func awaitHello(ctx context.Context, conn protocol.Conn, timeout time.Duration) 
 	return hello, nil
 }
 
-// track adds the worker to the live set. A worker ID can only be connected
+// track adds the machine to the live set. A machine ID can only be connected
 // once; a second connection presenting the same identity is refused rather
 // than silently replacing the first.
-func (h *Hub) track(id string, hello protocol.Hello, conn protocol.Conn) (*connectedWorker, error) {
+func (h *Hub) track(id string, hello protocol.Hello, conn protocol.Conn) (*connectedMachine, error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	if _, exists := h.workers[id]; exists {
+	if _, exists := h.machines[id]; exists {
 		return nil, fmt.Errorf("%w: %s (%q)", ErrAlreadyConnected, id, hello.Name)
 	}
 
 	now := h.now()
-	w := &connectedWorker{
-		info: WorkerInfo{
+	w := &connectedMachine{
+		info: MachineInfo{
 			ID:          id,
 			Name:        hello.Name,
-			Engines:     hello.Engines,
+			Runtimes:    hello.Runtimes,
 			ConnectedAt: now,
 			LastSeen:    now,
+			ProbedAt:    now,
 		},
 		conn: conn,
 	}
-	h.workers[id] = w
+	h.machines[id] = w
 	return w, nil
 }
 
-// forget removes the worker from the live set, fails the turns it was
+// forget removes the machine from the live set, fails the turns it was
 // running and records the disconnect.
-func (h *Hub) forget(w *connectedWorker) {
+func (h *Hub) forget(w *connectedMachine) {
 	h.mu.Lock()
-	delete(h.workers, w.info.ID)
+	delete(h.machines, w.info.ID)
 	h.mu.Unlock()
-	h.turns.WorkerGone(w.info.ID)
+	h.turns.MachineGone(w.info.ID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), h.cfg.StoreTimeout)
 	defer cancel()
 	// Nothing useful can be done about a failure here: the connection is
 	// already gone and the next reconnect resets the row anyway.
-	_ = h.store.MarkWorkerDisconnected(ctx, w.info.ID)
+	_ = h.store.MarkMachineDisconnected(ctx, w.info.ID)
 }
 
-// handle applies one inbound message. Any message proves the worker is
+// handle applies one inbound message. Any message proves the machine is
 // alive, so LastSeen is refreshed regardless of kind, but only heartbeats
-// and engine reports touch the database: turn traffic can be frequent and
+// and runtime reports touch the database: turn traffic can be frequent and
 // is recorded by the turn manager in memory and in transcripts instead.
-// Unexpected kinds are ignored rather than fatal, so a newer worker cannot
+// Unexpected kinds are ignored rather than fatal, so a newer machine cannot
 // take down an older hub.
-func (h *Hub) handle(ctx context.Context, w *connectedWorker, m protocol.Message) error {
-	var engines []engine.Info
+func (h *Hub) handle(ctx context.Context, w *connectedMachine, m protocol.Message) error {
+	var runtimes []runtime.Info
 	switch m := m.(type) {
 	case protocol.Heartbeat:
-		if err := h.store.TouchWorker(ctx, w.info.ID); err != nil {
-			return fmt.Errorf("persist heartbeat from worker %s: %w", w.info.ID, err)
+		if err := h.store.TouchMachine(ctx, w.info.ID); err != nil {
+			return fmt.Errorf("persist heartbeat from machine %s: %w", w.info.ID, err)
 		}
-	case protocol.EnginesReport:
-		if err := h.store.UpdateWorkerEngines(ctx, w.info.ID, m.Engines); err != nil {
-			return fmt.Errorf("persist engines report from worker %s: %w", w.info.ID, err)
+	case protocol.RuntimesReport:
+		if err := h.store.UpdateMachineRuntimes(ctx, w.info.ID, m.Runtimes); err != nil {
+			return fmt.Errorf("persist runtimes report from machine %s: %w", w.info.ID, err)
 		}
-		engines = m.Engines
+		runtimes = m.Runtimes
 	case protocol.TurnEvent:
 		h.turns.OnEvent(m.TurnID, m.Event)
 	case protocol.TurnDone:
 		h.turns.OnDone(m.TurnID, m)
 	case protocol.ApprovalRequest:
 		h.turns.OnApproval(w.conn, m)
+	case protocol.RoomQuery:
+		h.turns.OnRoomQuery(w.conn, m)
 	}
 
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	w.info.LastSeen = h.now()
-	if engines != nil {
-		w.info.Engines = engines
+	if runtimes != nil {
+		w.info.Runtimes = runtimes
+		w.info.ProbedAt = w.info.LastSeen
 	}
 	return nil
 }
 
-// connFor returns the connection of a connected worker.
-func (h *Hub) connFor(workerID string) (protocol.Conn, bool) {
+// connFor returns the connection of a connected machine.
+func (h *Hub) connFor(machineID string) (protocol.Conn, bool) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	w, ok := h.workers[workerID]
+	w, ok := h.machines[machineID]
 	if !ok {
 		return nil, false
 	}
@@ -345,9 +387,25 @@ func (h *Hub) dispatch(ctx context.Context, msg store.Message) {
 		h.logger.Error("route message", "message", msg.ID, "err", err)
 		return
 	}
-	for _, agent := range targets {
-		if err := h.turns.Trigger(ctx, agent, msg); err != nil {
-			h.logger.Error("trigger agent", "agent", agent.ID, "message", msg.ID, "err", err)
+	// Several agents asked at once share one topic, rooted at the ask
+	// itself, so each sees what the others say (docs/webui.md §4.1).
+	if len(targets) > 1 && msg.ThreadID == "" {
+		thread, err := h.store.ThreadForMessage(ctx, msg.ID)
+		if err != nil {
+			h.logger.Error("open topic for message", "message", msg.ID, "err", err)
+			return
+		}
+		h.events.publish(Event{Kind: EventMessage, RoomID: msg.Room, At: msg.CreatedAt, Message: &msg, Thread: &store.ThreadSummary{ID: thread.ID}})
+		for _, member := range targets {
+			if err := h.turns.TriggerIn(ctx, member, msg, thread); err != nil {
+				h.logger.Error("trigger member", "member", member.ID, "message", msg.ID, "err", err)
+			}
+		}
+		return
+	}
+	for _, member := range targets {
+		if err := h.turns.Trigger(ctx, member, msg); err != nil {
+			h.logger.Error("trigger member", "member", member.ID, "message", msg.ID, "err", err)
 		}
 	}
 }
@@ -365,33 +423,33 @@ func (h *Hub) TurnRunning(turnID string) bool {
 // DecideApproval applies userID's decision to a pending approval and
 // forwards it to the waiting turn. An unknown approval is
 // store.ErrNotFound; one already decided is store.ErrConflict.
-func (h *Hub) DecideApproval(ctx context.Context, approvalID, userID string, d engine.Decision) (store.Approval, error) {
+func (h *Hub) DecideApproval(ctx context.Context, approvalID, userID string, d runtime.Decision) (store.Approval, error) {
 	return h.turns.Decide(ctx, approvalID, userID, d)
 }
 
-// Workers returns a snapshot of every connected worker, ordered by ID.
-func (h *Hub) Workers() []WorkerInfo {
+// Machines returns a snapshot of every connected machine, ordered by ID.
+func (h *Hub) Machines() []MachineInfo {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	out := make([]WorkerInfo, 0, len(h.workers))
-	for _, w := range h.workers {
+	out := make([]MachineInfo, 0, len(h.machines))
+	for _, w := range h.machines {
 		info := w.info
-		info.Engines = append([]engine.Info(nil), w.info.Engines...)
+		info.Runtimes = append([]runtime.Info(nil), w.info.Runtimes...)
 		out = append(out, info)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
 	return out
 }
 
-// Probe asks a worker to re-run engine discovery. The refreshed engines show
-// up in Workers once the worker answers.
-func (h *Hub) Probe(ctx context.Context, workerID string) error {
+// Probe asks a machine to re-run runtime discovery. The refreshed runtimes show
+// up in Machines once the machine answers.
+func (h *Hub) Probe(ctx context.Context, machineID string) error {
 	h.mu.Lock()
-	w, ok := h.workers[workerID]
+	w, ok := h.machines[machineID]
 	h.mu.Unlock()
 	if !ok {
-		return fmt.Errorf("%w: %s", ErrUnknownWorker, workerID)
+		return fmt.Errorf("%w: %s", ErrUnknownMachine, machineID)
 	}
 	return w.conn.Send(ctx, protocol.Probe{})
 }

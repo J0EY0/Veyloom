@@ -8,17 +8,20 @@ import (
 	"time"
 	"unicode/utf8"
 
-	"github.com/J0EY0/veyloom/internal/engine"
 	"github.com/J0EY0/veyloom/internal/protocol"
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
 // pendingApproval is an approval request awaiting a decision.
 type pendingApproval struct {
-	// requestID is the engine's id, which the decision is routed back with.
+	// requestID is the runtime's id, which the decision is routed back with.
 	requestID string
 	tool      string
 	input     string
+	// messageID is the thread note announcing the request; the decision
+	// rewrites it rather than adding a second note.
+	messageID string
 	// timer denies the request when nobody decides in time; nil when
 	// approvals never expire.
 	timer *time.Timer
@@ -27,19 +30,19 @@ type pendingApproval struct {
 // OnApproval takes a permission request from a running turn. It returns at
 // once, like OnEvent; recording the request and telling the room happen on
 // a goroutine. A request for a turn the hub no longer tracks is denied on
-// the spot so the engine does not wait for an answer that cannot come.
+// the spot so the runtime does not wait for an answer that cannot come.
 func (m *TurnManager) OnApproval(conn protocol.Conn, req protocol.ApprovalRequest) {
 	m.mu.Lock()
 	at := m.active[req.TurnID]
 	m.mu.Unlock()
 	if at == nil {
-		go m.send(conn, protocol.ApprovalDecision{TurnID: req.TurnID, ApprovalID: req.ApprovalID, Decision: engine.Decision{Allow: false, Message: "the turn is no longer running"}})
+		go m.send(conn, protocol.ApprovalDecision{TurnID: req.TurnID, ApprovalID: req.ApprovalID, Decision: runtime.Decision{Allow: false, Message: "the turn is no longer running"}})
 		return
 	}
 
 	at.mu.Lock()
 	if at.transcript != nil {
-		ev := engine.Event{Kind: engine.EventApprovalRequest, At: req.At, ApprovalID: req.ApprovalID, Tool: req.Tool, Input: req.Input}
+		ev := runtime.Event{Kind: runtime.EventApprovalRequest, At: req.At, ApprovalID: req.ApprovalID, Tool: req.Tool, Input: req.Input}
 		if err := at.transcript.write(transcriptLine{Kind: "event", At: req.At, Event: &ev}); err != nil {
 			m.logger.Warn("transcript", "turn", req.TurnID, "err", err)
 		}
@@ -69,7 +72,11 @@ func (m *TurnManager) raise(at *activeTurn, req protocol.ApprovalRequest) {
 	m.approvals[id] = at
 	m.mu.Unlock()
 
-	name := at.instance.DisplayName
+	// Asking permission ends whatever the agent was saying: that text is
+	// stored first so the request note reads after it.
+	m.closeSegment(ctx, at, true)
+
+	name := at.member.DisplayName
 	what := describeToolUse(req.Tool, req.Input)
 	var messageID string
 	note, err := m.post(ctx, store.NewMessage{
@@ -77,29 +84,33 @@ func (m *TurnManager) raise(at *activeTurn, req protocol.ApprovalRequest) {
 		ThreadID:   at.thread.ID,
 		SenderKind: store.SenderSystem,
 		Body:       fmt.Sprintf("%s wants to run %s (approval %s pending)", name, what, id),
+		TurnID:     at.turn.ID,
 	})
 	if err != nil {
 		m.logger.Error("announce approval", "turn", at.turn.ID, "err", err)
 	} else {
 		messageID = note.ID
+		at.mu.Lock()
+		p.messageID = note.ID
+		at.mu.Unlock()
 	}
 
 	a, err := m.store.CreateApproval(ctx, store.NewApproval{
-		ID:              id,
-		TurnID:          at.turn.ID,
-		RoomID:          at.thread.RoomID,
-		ThreadID:        at.thread.ID,
-		AgentInstanceID: at.instance.ID,
-		RequestID:       req.ApprovalID,
-		Tool:            req.Tool,
-		Input:           req.Input,
-		MessageID:       messageID,
+		ID:        id,
+		TurnID:    at.turn.ID,
+		RoomID:    at.thread.RoomID,
+		ThreadID:  at.thread.ID,
+		MemberID:  at.member.ID,
+		RequestID: req.ApprovalID,
+		Tool:      req.Tool,
+		Input:     req.Input,
+		MessageID: messageID,
 	})
 	if err != nil {
 		// Unrecorded means undecidable: deny so the agent can move on.
 		m.logger.Error("record approval", "turn", at.turn.ID, "err", err)
 		if at, p := m.settle(id); at != nil {
-			m.deliver(at, p, engine.Decision{Allow: false, Message: "veyloom could not record the approval request"})
+			m.deliver(at, p, runtime.Decision{Allow: false, Message: "veyloom could not record the approval request"})
 		}
 		return
 	}
@@ -119,7 +130,7 @@ func (m *TurnManager) raise(at *activeTurn, req protocol.ApprovalRequest) {
 // Decide applies a person's decision to a pending approval and forwards it
 // to the turn. The database settles who decided first; a decision that
 // loses that race is store.ErrConflict.
-func (m *TurnManager) Decide(ctx context.Context, approvalID, userID string, d engine.Decision) (store.Approval, error) {
+func (m *TurnManager) Decide(ctx context.Context, approvalID, userID string, d runtime.Decision) (store.Approval, error) {
 	status := store.ApprovalDenied
 	if d.Allow {
 		status = store.ApprovalAllowed
@@ -139,7 +150,7 @@ func (m *TurnManager) Decide(ctx context.Context, approvalID, userID string, d e
 	}
 	m.recordDecision(at, a)
 
-	// Tell the thread before the worker, so the note always precedes
+	// Tell the thread before the machine, so the note always precedes
 	// whatever the agent does with the decision.
 	who := userID
 	if user, err := m.store.GetUser(ctx, userID); err == nil {
@@ -147,9 +158,9 @@ func (m *TurnManager) Decide(ctx context.Context, approvalID, userID string, d e
 	}
 	what := describeToolUse(p.tool, p.input)
 	if d.Allow {
-		m.postSystem(ctx, at.thread, fmt.Sprintf("%s allowed %s to run %s", who, at.instance.DisplayName, what))
+		m.noteDecision(ctx, at, p, fmt.Sprintf("%s allowed %s to run %s", who, at.member.DisplayName, what))
 	} else {
-		m.postSystem(ctx, at.thread, fmt.Sprintf("%s denied %s running %s%s", who, at.instance.DisplayName, what, suffix(d.Message)))
+		m.noteDecision(ctx, at, p, fmt.Sprintf("%s denied %s running %s%s", who, at.member.DisplayName, what, suffix(d.Message)))
 	}
 	m.deliver(at, p, d)
 	return a, nil
@@ -175,13 +186,34 @@ func (m *TurnManager) expire(approvalID string) {
 		return
 	}
 	m.recordDecision(at, a)
-	m.postSystem(ctx, at.thread, fmt.Sprintf("%s's request to run %s expired: %s; denied", at.instance.DisplayName, describeToolUse(p.tool, p.input), reason))
-	m.deliver(at, p, engine.Decision{Allow: false, Message: "approval timed out: " + reason})
+	m.noteDecision(ctx, at, p, fmt.Sprintf("%s's request to run %s expired: %s; denied", at.member.DisplayName, describeToolUse(p.tool, p.input), reason))
+	m.deliver(at, p, runtime.Decision{Allow: false, Message: "approval timed out: " + reason})
+}
+
+// noteDecision records how a request was settled in the note that
+// announced it, so the thread holds one line per request rather than two.
+// The rewritten note is re-sent as a message event. Without a note to
+// rewrite (its post failed) a fresh one is posted.
+func (m *TurnManager) noteDecision(ctx context.Context, at *activeTurn, p *pendingApproval, text string) {
+	at.mu.Lock()
+	messageID := p.messageID
+	at.mu.Unlock()
+	if messageID == "" {
+		m.postSystem(ctx, at.thread, at.turn.ID, text)
+		return
+	}
+	msg, err := m.store.UpdateMessageBody(ctx, messageID, text, at.turn.ID, nil)
+	if err != nil {
+		m.logger.Error("update approval note", "turn", at.turn.ID, "err", err)
+		m.postSystem(ctx, at.thread, at.turn.ID, text)
+		return
+	}
+	m.publish(messageEvent(msg))
 }
 
 // abandonApprovals closes whatever a finishing turn still had pending. The
 // database is updated first so that a decision racing with completion
-// either lands before this and reaches the worker, or fails as a conflict.
+// either lands before this and reaches the machine, or fails as a conflict.
 func (m *TurnManager) abandonApprovals(ctx context.Context, at *activeTurn) {
 	resolved, err := m.store.ResolveTurnApprovals(ctx, at.turn.ID, store.ApprovalCancelled, "the turn ended before a decision")
 	if err != nil {
@@ -233,23 +265,23 @@ func (m *TurnManager) settle(approvalID string) (*activeTurn, *pendingApproval) 
 	return at, p
 }
 
-// deliver sends a decision to the worker running the turn. If the worker is
-// gone the turn is being failed by WorkerGone anyway.
-func (m *TurnManager) deliver(at *activeTurn, p *pendingApproval, d engine.Decision) {
-	conn, ok := m.connFor(at.instance.WorkerID)
+// deliver sends a decision to the machine running the turn. If the machine is
+// gone the turn is being failed by MachineGone anyway.
+func (m *TurnManager) deliver(at *activeTurn, p *pendingApproval, d runtime.Decision) {
+	conn, ok := m.connFor(at.member.MachineID)
 	if !ok {
-		m.logger.Warn("approval decided while its worker is offline", "turn", at.turn.ID)
+		m.logger.Warn("approval decided while its machine is offline", "turn", at.turn.ID)
 		return
 	}
 	m.send(conn, protocol.ApprovalDecision{TurnID: at.turn.ID, ApprovalID: p.requestID, Decision: d})
 }
 
-// send delivers one message to a worker within the store timeout.
+// send delivers one message to a machine within the store timeout.
 func (m *TurnManager) send(conn protocol.Conn, msg protocol.Message) {
 	ctx, cancel := context.WithTimeout(context.Background(), m.storeTimeout)
 	defer cancel()
 	if err := conn.Send(ctx, msg); err != nil {
-		m.logger.Warn("send to worker", "kind", msg.Kind(), "err", err)
+		m.logger.Warn("send to machine", "kind", msg.Kind(), "err", err)
 	}
 }
 

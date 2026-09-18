@@ -3,9 +3,12 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -17,10 +20,17 @@ import (
 type fakeProjects struct {
 	projects map[string]store.Project
 	rooms    map[string]store.Room
+	// created is the last project asked for.
+	created store.NewProject
+	// patched is the last change asked for.
+	patched store.ProjectPatch
+	// busy projects have a turn running; remains is what a delete leaves.
+	busy    map[string]bool
+	remains store.ProjectRemains
 }
 
 func newFakeProjects() *fakeProjects {
-	return &fakeProjects{projects: map[string]store.Project{}, rooms: map[string]store.Room{}}
+	return &fakeProjects{projects: map[string]store.Project{}, rooms: map[string]store.Room{}, busy: map[string]bool{}}
 }
 
 func checkID(id string) error {
@@ -31,7 +41,8 @@ func checkID(id string) error {
 }
 
 func (f *fakeProjects) CreateProject(_ context.Context, p store.NewProject) (store.Project, store.Room, error) {
-	project := store.Project{ID: fmt.Sprintf("p%d", len(f.projects)+1), Name: p.Name, RepoURL: p.RepoURL, DefaultBranch: p.DefaultBranch}
+	f.created = p
+	project := store.Project{ID: fmt.Sprintf("p%d", len(f.projects)+1), Name: p.Name, RepoPath: p.RepoPath, Description: p.Description}
 	f.projects[project.ID] = project
 	room := store.Room{ID: fmt.Sprintf("r%d", len(f.rooms)+1), ProjectID: project.ID, Name: store.MainRoomName, Kind: store.RoomMain}
 	f.rooms[room.ID] = room
@@ -55,6 +66,41 @@ func (f *fakeProjects) ListProjects(context.Context) ([]store.Project, error) {
 		out = append(out, p)
 	}
 	return out, nil
+}
+
+func (f *fakeProjects) UpdateProject(_ context.Context, id string, patch store.ProjectPatch) (store.Project, error) {
+	p, err := f.GetProject(context.Background(), id)
+	if err != nil {
+		return store.Project{}, err
+	}
+	f.patched = patch
+	if patch.Name != nil {
+		p.Name = *patch.Name
+	}
+	if patch.RepoPath != nil {
+		p.RepoPath = *patch.RepoPath
+	}
+	if patch.Description != nil {
+		p.Description = *patch.Description
+	}
+	f.projects[id] = p
+	return p, nil
+}
+
+func (f *fakeProjects) DeleteProject(_ context.Context, id string) (store.ProjectRemains, error) {
+	if _, err := f.GetProject(context.Background(), id); err != nil {
+		return store.ProjectRemains{}, err
+	}
+	if f.busy[id] {
+		return store.ProjectRemains{}, fmt.Errorf("project %s: %w: a turn is still running", id, store.ErrConflict)
+	}
+	delete(f.projects, id)
+	for roomID, room := range f.rooms {
+		if room.ProjectID == id {
+			delete(f.rooms, roomID)
+		}
+	}
+	return f.remains, nil
 }
 
 func (f *fakeProjects) CreateRoom(_ context.Context, projectID, name string) (store.Room, error) {
@@ -113,10 +159,10 @@ func projectsHandler() (http.Handler, *fakeProjects) {
 }
 
 func TestCreateProject(t *testing.T) {
-	handler, _ := projectsHandler()
+	handler, fake := projectsHandler()
 
 	var resp ProjectResponse
-	rec := do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":" veyloom ","repo_url":"git@x:y.git"}`, &resp)
+	rec := do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":" veyloom ","repo_path":" /src/veyloom ","agent_ids":["ag1"," ag2 "]}`, &resp)
 
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body: %s", rec.Code, rec.Body)
@@ -127,6 +173,10 @@ func TestCreateProject(t *testing.T) {
 	if len(resp.Rooms) != 1 || resp.Rooms[0].Kind != store.RoomMain {
 		t.Errorf("response should include the main room, got %+v", resp.Rooms)
 	}
+	// The path and the agents to add go to the store, trimmed.
+	if fake.created.RepoPath != "/src/veyloom" || strings.Join(fake.created.AgentIDs, ",") != "ag1,ag2" || resp.Project.RepoPath != "/src/veyloom" {
+		t.Errorf("unexpected project asked for: %+v, answered %+v", fake.created, resp.Project)
+	}
 }
 
 func TestCreateProject_BadRequests(t *testing.T) {
@@ -134,7 +184,8 @@ func TestCreateProject_BadRequests(t *testing.T) {
 
 	for name, body := range map[string]string{
 		"blank name":     `{"name":"   "}`,
-		"missing name":   `{"repo_url":"x"}`,
+		"missing name":   `{"repo_path":"x"}`,
+		"blank agent id": `{"name":"x","agent_ids":[" "]}`,
 		"malformed json": `{"name":`,
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -235,5 +286,140 @@ func TestGetRoom(t *testing.T) {
 	}
 	if rec := do(t, handler, http.MethodGet, "/api/v1/rooms/r404", "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("unknown room: status = %d, want 404", rec.Code)
+	}
+}
+
+func TestUpdateProject(t *testing.T) {
+	handler, fake := projectsHandler()
+	var created ProjectResponse
+	do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"veyloom","repo_path":"/src/veyloom"}`, &created)
+	path := "/api/v1/projects/" + created.Project.ID
+
+	// Both fields, trimmed; a trailing slash comes off the path.
+	var resp ProjectResponse
+	rec := do(t, handler, http.MethodPatch, path, `{"name":" platform ","repo_path":" /work/platform/ "}`, &resp)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", rec.Code, rec.Body)
+	}
+	if resp.Project.Name != "platform" || resp.Project.RepoPath != "/work/platform" || len(resp.Rooms) != 1 {
+		t.Errorf("answered %+v", resp)
+	}
+
+	// An absent field is left alone; an empty path is a path, cleared.
+	do(t, handler, http.MethodPatch, path, `{"repo_path":""}`, &resp)
+	if fake.patched.Name != nil || fake.patched.RepoPath == nil || *fake.patched.RepoPath != "" || resp.Project.Name != "platform" {
+		t.Errorf("patched %+v, answered %+v", fake.patched, resp.Project)
+	}
+	do(t, handler, http.MethodPatch, path, `{"repo_path":"/"}`, &resp)
+	if resp.Project.RepoPath != "/" {
+		t.Errorf("the root keeps its slash: %q", resp.Project.RepoPath)
+	}
+}
+
+func TestUpdateProject_BadRequests(t *testing.T) {
+	handler, _ := projectsHandler()
+	var created ProjectResponse
+	do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"veyloom"}`, &created)
+
+	for name, body := range map[string]string{
+		"blank name":     `{"name":"  "}`,
+		"malformed json": `{"name":`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if rec := do(t, handler, http.MethodPatch, "/api/v1/projects/"+created.Project.ID, body, nil); rec.Code != http.StatusBadRequest {
+				t.Errorf("status = %d, want 400; body: %s", rec.Code, rec.Body)
+			}
+		})
+	}
+	if rec := do(t, handler, http.MethodPatch, "/api/v1/projects/p404", `{"name":"x"}`, nil); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown project: status = %d, want 404", rec.Code)
+	}
+}
+
+func TestDeleteProject(t *testing.T) {
+	fake := newFakeProjects()
+	attachments, transcripts := t.TempDir(), t.TempDir()
+	handler := NewHandler(Deps{Projects: fake, AttachmentDir: attachments, TranscriptDir: transcripts})
+	var created ProjectResponse
+	do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"veyloom"}`, &created)
+	path := "/api/v1/projects/" + created.Project.ID
+
+	// What the chat kept on disk, and a neighbour that must stay.
+	write := func(name string) string {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Dir(name), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(name, []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return name
+	}
+	upload := write(filepath.Join(attachments, "room1", "a.png"))
+	neighbour := write(filepath.Join(attachments, "room2", "b.png"))
+	transcript := write(filepath.Join(transcripts, "turn1.jsonl"))
+	fake.remains = store.ProjectRemains{AttachmentPaths: []string{"room1/a.png", "../outside.png"}, TurnIDs: []string{"turn1"}}
+	outside := write(filepath.Join(filepath.Dir(attachments), "outside.png"))
+
+	fake.busy[created.Project.ID] = true
+	if rec := do(t, handler, http.MethodDelete, path, "", nil); rec.Code != http.StatusConflict {
+		t.Fatalf("a running turn: status = %d, want 409; body: %s", rec.Code, rec.Body)
+	}
+	fake.busy[created.Project.ID] = false
+
+	if rec := do(t, handler, http.MethodDelete, path, "", nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("status = %d, want 204; body: %s", rec.Code, rec.Body)
+	}
+	for _, gone := range []string{upload, filepath.Dir(upload), transcript} {
+		if _, err := os.Stat(gone); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("%s should be gone: %v", gone, err)
+		}
+	}
+	for _, kept := range []string{neighbour, outside} {
+		if _, err := os.Stat(kept); err != nil {
+			t.Errorf("%s should stay: %v", kept, err)
+		}
+	}
+	if rec := do(t, handler, http.MethodGet, path, "", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("after delete: status = %d, want 404", rec.Code)
+	}
+	if rec := do(t, handler, http.MethodDelete, path, "", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("deleting again: status = %d, want 404", rec.Code)
+	}
+}
+
+func TestProjectDescription(t *testing.T) {
+	handler, fake := projectsHandler()
+
+	// Given when the project is created, trimmed.
+	var created ProjectResponse
+	rec := do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"veyloom","description":"  A chat for coding agents.\nGo and Postgres.  "}`, &created)
+	if rec.Code != http.StatusCreated || created.Project.Description != "A chat for coding agents.\nGo and Postgres." {
+		t.Fatalf("status %d, project %+v", rec.Code, created.Project)
+	}
+	path := "/api/v1/projects/" + created.Project.ID
+
+	// Rewritten later; a patch without it leaves it; an empty one clears it.
+	var resp ProjectResponse
+	do(t, handler, http.MethodPatch, path, `{"description":" Now with memory. "}`, &resp)
+	if resp.Project.Description != "Now with memory." {
+		t.Errorf("after the patch: %q", resp.Project.Description)
+	}
+	do(t, handler, http.MethodPatch, path, `{"name":"renamed"}`, &resp)
+	if fake.patched.Description != nil || resp.Project.Description != "Now with memory." {
+		t.Errorf("a rename touched the description: patched %+v, answered %q", fake.patched, resp.Project.Description)
+	}
+	do(t, handler, http.MethodPatch, path, `{"description":""}`, &resp)
+	if resp.Project.Description != "" {
+		t.Errorf("an empty description clears it, got %q", resp.Project.Description)
+	}
+
+	// It opens every brief, so it is a paragraph and not a document.
+	long := strings.Repeat("x", maxProjectDescription+1)
+	if rec := do(t, handler, http.MethodPatch, path, `{"description":"`+long+`"}`, nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("too long on patch: status %d, want 400", rec.Code)
+	}
+	if rec := do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"big","description":"`+long+`"}`, nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("too long on create: status %d, want 400", rec.Code)
 	}
 }

@@ -7,7 +7,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/J0EY0/veyloom/internal/engine"
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
@@ -34,6 +34,16 @@ func (f fakeApprovals) ListPendingRoomApprovals(_ context.Context, roomID string
 	return out, nil
 }
 
+func (f fakeApprovals) ListPendingApprovals(context.Context) ([]store.PendingApproval, error) {
+	out := []store.PendingApproval{}
+	for _, a := range f {
+		if a.Status == store.ApprovalPending {
+			out = append(out, store.PendingApproval{Approval: a, MemberName: "agent " + a.MemberID, ProjectName: "p"})
+		}
+	}
+	return out, nil
+}
+
 func (f fakeApprovals) ListTurnApprovals(_ context.Context, turnID string) ([]store.Approval, error) {
 	out := []store.Approval{}
 	for _, a := range f {
@@ -46,7 +56,7 @@ func (f fakeApprovals) ListTurnApprovals(_ context.Context, turnID string) ([]st
 
 // DecideApproval mirrors the hub: the first decision wins, later ones
 // conflict, unknown ids are not found.
-func (c *fakeChat) DecideApproval(ctx context.Context, id, userID string, d engine.Decision) (store.Approval, error) {
+func (c *fakeChat) DecideApproval(ctx context.Context, id, userID string, d runtime.Decision) (store.Approval, error) {
 	a, err := c.approvals.GetApproval(ctx, id)
 	if err != nil {
 		return store.Approval{}, err
@@ -131,5 +141,16 @@ func TestApprovals_Decide(t *testing.T) {
 	}
 	if rec := do(t, handler, http.MethodPost, "/api/v1/approvals/a1/decide", `{`, nil); rec.Code != http.StatusBadRequest {
 		t.Errorf("bad json: status = %d, want 400", rec.Code)
+	}
+}
+
+func TestApprovals_ListsWhatWaitsAcrossRooms(t *testing.T) {
+	handler, _, _ := approvalsHandler(t)
+	var res PendingApprovalsResponse
+	if rec := do(t, handler, http.MethodGet, "/api/v1/approvals?status=pending", "", &res); rec.Code != http.StatusOK || len(res.Approvals) != 1 || res.Approvals[0].ID != "a1" || res.Approvals[0].ProjectName != "p" {
+		t.Errorf("pending across rooms: status = %d, approvals = %+v", rec.Code, res.Approvals)
+	}
+	if rec := do(t, handler, http.MethodGet, "/api/v1/approvals", "", nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("without a status: %d, want 400", rec.Code)
 	}
 }

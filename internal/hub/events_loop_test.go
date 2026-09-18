@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/J0EY0/veyloom/internal/engine"
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
@@ -39,7 +39,7 @@ func kinds(events []Event) []EventKind {
 
 func TestLoop_SubscribersSeeTheWholeTurn(t *testing.T) {
 	l := newLoop(t)
-	echo := l.agent("Echo", map[string]any{"tool": true, "reply": "hi"})
+	echo := l.member("Echo", map[string]any{"tool": true, "reply": "hi"})
 	sub := l.h.Subscribe(l.room.ID)
 	defer sub.Close()
 
@@ -49,35 +49,51 @@ func TestLoop_SubscribersSeeTheWholeTurn(t *testing.T) {
 	if events[0].Kind != EventMessage || events[0].Message == nil || events[0].Message.ID != msg.ID {
 		t.Errorf("first event should be the user's message, got %+v", events[0])
 	}
-	if events[1].Kind != EventTurnStarted || events[1].Turn == nil || events[1].Turn.Status != store.TurnRunning || events[1].Turn.AgentInstanceID != echo.ID {
-		t.Errorf("second event should be the turn starting, got %+v", events[1])
+	// The topic root arrives empty, together with the thread it heads.
+	root := events[1]
+	if root.Kind != EventMessage || root.Message == nil || root.Message.SenderKind != store.SenderAgent || root.Message.Body != "" || root.Thread == nil || root.Thread.ID == "" {
+		t.Fatalf("second event should be the empty topic root with its thread, got %+v", root)
 	}
-	var turnEvents []engine.EventKind
-	var reply *store.Message
-	for _, ev := range events[2 : len(events)-1] {
+	if events[2].Kind != EventTurnStarted || events[2].Turn == nil || events[2].Turn.Status != store.TurnRunning || events[2].Turn.MemberID != echo.ID || events[2].Turn.ThreadID != root.Thread.ID {
+		t.Errorf("third event should be the turn starting in that thread, got %+v", events[2])
+	}
+	var turnEvents []runtime.EventKind
+	var filled, closing *store.Message
+	for _, ev := range events[3 : len(events)-1] {
 		switch ev.Kind {
 		case EventTurnEvent:
-			if ev.TurnID != events[1].Turn.ID || ev.TurnEvent == nil {
+			if ev.TurnID != events[2].Turn.ID || ev.TurnEvent == nil {
 				t.Errorf("turn event should name the turn: %+v", ev)
 			}
 			turnEvents = append(turnEvents, ev.TurnEvent.Kind)
 		case EventMessage:
-			if ev.Message.SenderKind == store.SenderAgent {
-				reply = ev.Message
+			switch {
+			case ev.Message.ID == root.Message.ID:
+				filled = ev.Message
+				if ev.Thread == nil || ev.Thread.ID != root.Thread.ID {
+					t.Errorf("the filled-in root should still name its thread: %+v", ev)
+				}
+			case ev.Message.SenderKind == store.SenderAgent && ev.Message.ThreadID == "":
+				closing = ev.Message
+			default:
+				t.Errorf("unexpected message %+v", ev.Message)
 			}
 		default:
 			t.Errorf("unexpected event %+v", ev)
 		}
 	}
-	// The fake engine's status, tool call, tool result and text, in order.
-	if len(turnEvents) < 4 || turnEvents[0] != engine.EventStatus || turnEvents[1] != engine.EventToolCall || turnEvents[2] != engine.EventToolResult || turnEvents[len(turnEvents)-1] != engine.EventText {
+	// The fake runtime's status, tool call, tool result and text, in order.
+	if len(turnEvents) < 4 || turnEvents[0] != runtime.EventStatus || turnEvents[1] != runtime.EventToolCall || turnEvents[2] != runtime.EventToolResult || turnEvents[len(turnEvents)-1] != runtime.EventText {
 		t.Errorf("turn events = %v", turnEvents)
 	}
-	if reply == nil || reply.Body != "hi" {
-		t.Errorf("the agent's reply should be pushed as a message, got %+v", reply)
+	if filled == nil || filled.Body != "hi" || filled.TurnID != events[2].Turn.ID {
+		t.Errorf("the root should be re-sent once the reply text is known, got %+v", filled)
+	}
+	if closing == nil || closing.Body != "@alice hi" || len(closing.Mentions) != 1 || closing.Mentions[0].ID != l.user.ID {
+		t.Errorf("a turn that used a tool closes with a message mentioning the asker, got %+v", closing)
 	}
 	last := events[len(events)-1]
-	if last.Turn == nil || last.Turn.Status != store.TurnDone || last.Turn.ReplyMessageID != reply.ID || last.Turn.EndedAt == nil {
+	if last.Turn == nil || last.Turn.Status != store.TurnDone || last.Turn.ReplyMessageID != root.Message.ID || last.Turn.EndedAt == nil {
 		t.Errorf("turn_finished should carry the final turn, got %+v", last.Turn)
 	}
 	for _, ev := range events {
@@ -89,7 +105,7 @@ func TestLoop_SubscribersSeeTheWholeTurn(t *testing.T) {
 
 func TestLoop_SubscribersSeeApprovals(t *testing.T) {
 	l := newLoop(t)
-	careful := l.agent("Careful", map[string]any{"approval": true, "reply": "built"})
+	careful := l.member("Careful", map[string]any{"approval": true, "reply": "built"})
 	sub := l.h.Subscribe(l.room.ID)
 	defer sub.Close()
 
@@ -105,7 +121,7 @@ func TestLoop_SubscribersSeeApprovals(t *testing.T) {
 		t.Errorf("expected the announcement right before the approval, got %+v", note)
 	}
 
-	if _, err := l.h.DecideApproval(l.ctx, requested.ID, l.user.ID, engine.Decision{Allow: true}); err != nil {
+	if _, err := l.h.DecideApproval(l.ctx, requested.ID, l.user.ID, runtime.Decision{Allow: true}); err != nil {
 		t.Fatal(err)
 	}
 	events = collectUntil(t, sub, EventTurnFinished)
@@ -119,7 +135,7 @@ func TestLoop_SubscribersSeeApprovals(t *testing.T) {
 
 func TestLoop_CancelledTurnResolvesApprovalsLive(t *testing.T) {
 	l := newLoop(t)
-	careful := l.agent("Careful", map[string]any{"approval": true})
+	careful := l.member("Careful", map[string]any{"approval": true})
 	sub := l.h.Subscribe(l.room.ID)
 	defer sub.Close()
 

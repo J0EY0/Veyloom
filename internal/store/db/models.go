@@ -8,98 +8,144 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-type AgentInstance struct {
-	ID               pgtype.UUID
-	RoomID           pgtype.UUID
-	TemplateID       pgtype.UUID
-	WorkerID         pgtype.UUID
-	DisplayName      string
-	RepoPath         string
-	BranchMode       string
-	Model            string
-	PermissionPreset string
-	EngineSessionRef string
-	Enabled          bool
-	CreatedAt        pgtype.Timestamptz
-}
-
-type AgentTemplate struct {
+type Agent struct {
 	ID               pgtype.UUID
 	Name             string
-	Engine           string
+	Avatar           string
+	MachineID        pgtype.UUID
+	Runtime          string
 	Model            string
 	RoleCard         string
 	PermissionPreset string
-	EngineOptions    []byte
-	Builtin          bool
+	RuntimeOptions   []byte
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
 }
 
 type Approval struct {
-	ID              pgtype.UUID
-	TurnID          pgtype.UUID
-	RoomID          pgtype.UUID
-	ThreadID        pgtype.UUID
-	AgentInstanceID pgtype.UUID
-	RequestID       string
-	Kind            string
-	Payload         []byte
-	Status          string
-	Message         string
-	MessageID       pgtype.UUID
-	DecidedBy       pgtype.UUID
-	CreatedAt       pgtype.Timestamptz
-	DecidedAt       pgtype.Timestamptz
+	ID        pgtype.UUID
+	TurnID    pgtype.UUID
+	RoomID    pgtype.UUID
+	ThreadID  pgtype.UUID
+	MemberID  pgtype.UUID
+	RequestID string
+	Kind      string
+	Payload   []byte
+	Status    string
+	Message   string
+	MessageID pgtype.UUID
+	DecidedBy pgtype.UUID
+	CreatedAt pgtype.Timestamptz
+	DecidedAt pgtype.Timestamptz
+}
+
+type Attachment struct {
+	ID        pgtype.UUID
+	RoomID    pgtype.UUID
+	MessageID pgtype.UUID
+	Filename  string
+	MediaType string
+	Size      int64
+	Path      string
+	CreatedAt pgtype.Timestamptz
+}
+
+type Machine struct {
+	ID             pgtype.UUID
+	Name           string
+	Runtimes       []byte
+	ConnectedAt    pgtype.Timestamptz
+	LastSeenAt     pgtype.Timestamptz
+	DisconnectedAt pgtype.Timestamptz
+}
+
+type Member struct {
+	ID               pgtype.UUID
+	RoomID           pgtype.UUID
+	AgentID          pgtype.UUID
+	MachineID        pgtype.UUID
+	DisplayName      string
+	RepoPath         string
+	BranchMode       string
+	Model            string
+	PermissionPreset string
+	Enabled          bool
+	CreatedAt        pgtype.Timestamptz
+	RemovedAt        pgtype.Timestamptz
+}
+
+type MemberSession struct {
+	ID          pgtype.UUID
+	MemberID    pgtype.UUID
+	Runtime     string
+	MachineID   pgtype.UUID
+	WorkDir     string
+	SessionRef  string
+	RoomSeen    int64
+	ThreadSeen  []byte
+	Compactions int32
+	StartedAt   pgtype.Timestamptz
+	EndedAt     pgtype.Timestamptz
+	EndReason   string
 }
 
 type Message struct {
-	ID              pgtype.UUID
-	Seq             int64
-	RoomID          pgtype.UUID
-	ThreadID        pgtype.UUID
-	SenderKind      string
-	UserID          pgtype.UUID
-	AgentInstanceID pgtype.UUID
-	Body            string
-	Mentions        []byte
-	CreatedAt       pgtype.Timestamptz
+	ID         pgtype.UUID
+	Seq        int64
+	RoomID     pgtype.UUID
+	ThreadID   pgtype.UUID
+	SenderKind string
+	UserID     pgtype.UUID
+	MemberID   pgtype.UUID
+	Body       string
+	Mentions   []byte
+	CreatedAt  pgtype.Timestamptz
+	TurnID     pgtype.UUID
 }
 
 type Project struct {
-	ID            pgtype.UUID
-	Name          string
-	RepoUrl       string
-	DefaultBranch string
-	CreatedAt     pgtype.Timestamptz
+	ID          pgtype.UUID
+	Name        string
+	RepoPath    string
+	Description string
+	CreatedAt   pgtype.Timestamptz
 }
 
 type Room struct {
-	ID        pgtype.UUID
-	ProjectID pgtype.UUID
-	Name      string
-	Kind      string
-	CreatedAt pgtype.Timestamptz
+	ID               pgtype.UUID
+	ProjectID        pgtype.UUID
+	Name             string
+	Kind             string
+	LastThreadNumber int32
+	CreatedAt        pgtype.Timestamptz
 }
 
 type Thread struct {
 	ID            pgtype.UUID
 	RoomID        pgtype.UUID
 	RootMessageID pgtype.UUID
+	Number        int32
 	CreatedAt     pgtype.Timestamptz
 }
 
 type Turn struct {
 	ID               pgtype.UUID
-	AgentInstanceID  pgtype.UUID
+	MemberID         pgtype.UUID
 	RoomID           pgtype.UUID
 	ThreadID         pgtype.UUID
 	TriggerMessageID pgtype.UUID
-	WorkerID         pgtype.UUID
+	MachineID        pgtype.UUID
+	SessionID        pgtype.UUID
+	Runtime          string
 	Status           string
 	Error            string
 	ReplyMessageID   pgtype.UUID
 	TranscriptPath   string
+	InputTokens      int64
+	CacheReadTokens  int64
+	CacheWriteTokens int64
+	OutputTokens     int64
+	FilesChanged     []string
 	StartedAt        pgtype.Timestamptz
 	EndedAt          pgtype.Timestamptz
 }
@@ -108,13 +154,4 @@ type User struct {
 	ID        pgtype.UUID
 	Name      string
 	CreatedAt pgtype.Timestamptz
-}
-
-type Worker struct {
-	ID             pgtype.UUID
-	Name           string
-	Engines        []byte
-	ConnectedAt    pgtype.Timestamptz
-	LastSeenAt     pgtype.Timestamptz
-	DisconnectedAt pgtype.Timestamptz
 }

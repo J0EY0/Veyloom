@@ -11,9 +11,10 @@ import (
 // smaller interfaces below name those slices so a fake need not implement
 // the whole thing.
 type Store interface {
-	WorkerStore
+	MachineStore
 	messageStore
 	agentStore
+	sessionStore
 	turnStore
 	approvalStore
 }
@@ -24,22 +25,36 @@ type messageStore interface {
 	GetMessage(ctx context.Context, id string) (store.Message, error)
 	ListThreadMessagesBefore(ctx context.Context, threadID string, before int64, limit int) ([]store.Message, error)
 	ThreadForMessage(ctx context.Context, messageID string) (store.Thread, error)
+	GetThread(ctx context.Context, id string) (store.Thread, error)
+	UpdateMessageBody(ctx context.Context, id, body, turnID string, mentions []store.Mention) (store.Message, error)
 	LastAgentMessageInThread(ctx context.Context, threadID string) (store.Message, error)
 	GetUser(ctx context.Context, id string) (store.User, error)
+	// What the room tools read (see roomStore).
+	ThreadByNumber(ctx context.Context, roomID string, number int) (store.Thread, error)
+	ListRoomTopics(ctx context.Context, roomID string, before int64, limit int) ([]store.TopicListing, error)
+	ListRoomMessagesBefore(ctx context.Context, roomID string, before int64, limit int) ([]store.Message, error)
+	ListThreadTurns(ctx context.Context, threadID string) ([]store.Turn, error)
+	SearchRoomMessages(ctx context.Context, roomID, phrase string, before int64, limit int) ([]store.RoomNewsItem, error)
+	// What a brief is put together from (see briefStore).
+	RoomProject(ctx context.Context, roomID string) (store.Project, error)
+	RoomPosition(ctx context.Context, roomID string) (int64, error)
+	RoomNews(ctx context.Context, q store.NewsQuery) ([]store.RoomNewsItem, int, error)
+	TopicNews(ctx context.Context, q store.NewsQuery, exceptThreadID string) ([]store.TopicNewsItem, int, error)
+	ThreadNews(ctx context.Context, threadID string, q store.NewsQuery) ([]store.Message, int, error)
 }
 
 // agentStore is the agent access the hub uses.
 type agentStore interface {
-	GetAgentInstance(ctx context.Context, id string) (store.AgentInstance, error)
-	ListRoomAgentInstances(ctx context.Context, roomID string) ([]store.AgentInstance, error)
-	GetAgentTemplate(ctx context.Context, id string) (store.AgentTemplate, error)
-	UpdateAgentInstanceSession(ctx context.Context, instanceID, sessionRef string) error
+	GetMember(ctx context.Context, id string) (store.Member, error)
+	ListRoomMembers(ctx context.Context, roomID string) ([]store.Member, error)
+	GetAgent(ctx context.Context, id string) (store.Agent, error)
 }
 
 // turnStore is the turn access the hub uses.
 type turnStore interface {
 	CreateTurn(ctx context.Context, t store.NewTurn) (store.Turn, error)
 	FinishTurn(ctx context.Context, id string, out store.TurnOutcome) (store.Turn, error)
+	SetTurnSession(ctx context.Context, turnID, sessionID string) error
 }
 
 // approvalStore is the approval access the hub uses.

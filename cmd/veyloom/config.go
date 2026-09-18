@@ -25,12 +25,12 @@ func (a *app) addAddrFlag(cmd *cobra.Command) {
 	a.stringFlag(cmd, "addr", config.KeyServerAddr, config.Default().Server.Addr, "address to listen on")
 }
 
-func (a *app) addWorkerNameFlag(cmd *cobra.Command) {
-	a.stringFlag(cmd, "name", config.KeyWorkerName, config.Default().Worker.Name, "label of the local worker")
+func (a *app) addMachineNameFlag(cmd *cobra.Command) {
+	a.stringFlag(cmd, "name", config.KeyMachineName, config.Default().Machine.Name, "label of the local machine")
 }
 
 func (a *app) addDetectTimeoutFlag(cmd *cobra.Command) {
-	a.durationFlag(cmd, "timeout", config.KeyWorkerDetectTimeout, config.Default().Worker.DetectTimeout, "per-engine detection timeout")
+	a.durationFlag(cmd, "timeout", config.KeyMachineDetectTimeout, config.Default().Machine.DetectTimeout, "per-runtime detection timeout")
 }
 
 func (a *app) stringFlag(cmd *cobra.Command, name, key, def, usage string) {

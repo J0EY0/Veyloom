@@ -18,19 +18,31 @@ type MessageStore interface {
 	ListThreadMessages(ctx context.Context, threadID string, after int64, limit int) ([]store.Message, error)
 	ThreadForMessage(ctx context.Context, messageID string) (store.Thread, error)
 	GetThread(ctx context.Context, id string) (store.Thread, error)
+	ThreadSummaries(ctx context.Context, rootMessageIDs []string) (map[string]store.ThreadSummary, error)
+	ListUserMentions(ctx context.Context, userID string, before int64, limit int) ([]store.InboxItem, error)
+}
+
+// InboxResponse is the body of GET /api/v1/users/{id}/inbox: messages that
+// mention the user, newest first.
+type InboxResponse struct {
+	Items []store.InboxItem `json:"items"`
 }
 
 // PostMessageRequest is the body of POST /api/v1/rooms/{id}/messages.
 //
-// There is no authentication yet, so the client names the sending user.
+// The signed-in user is the sender; user_id in the body counts only when
+// the API runs without sign-in (tests).
 // At most one of ThreadID and ReplyTo may be set: ThreadID posts into an
 // existing thread, ReplyTo starts or continues the thread of a message.
 type PostMessageRequest struct {
 	UserID   string          `json:"user_id"`
 	Body     string          `json:"body"`
 	Mentions []store.Mention `json:"mentions"`
-	ThreadID string          `json:"thread_id"`
-	ReplyTo  string          `json:"reply_to"`
+	// AttachmentIDs are uploads (POST /rooms/{id}/attachments) the message
+	// carries. A message may be attachments alone.
+	AttachmentIDs []string `json:"attachment_ids"`
+	ThreadID      string   `json:"thread_id"`
+	ReplyTo       string   `json:"reply_to"`
 }
 
 // MessageResponse is the body of single-message endpoints.
@@ -38,16 +50,31 @@ type MessageResponse struct {
 	Message store.Message `json:"message"`
 }
 
-// MessagesResponse is the body of message listings, oldest first.
+// MessagesResponse is the body of thread message listings, oldest first.
 type MessagesResponse struct {
 	Messages []store.Message `json:"messages"`
 }
 
-// ThreadResponse is the body of GET /api/v1/threads/{id}: the thread and
-// the message it is rooted at. Replies come from the messages sub-resource.
+// RoomMessage is a top-level message as the room timeline lists it: the
+// message plus, when a topic hangs off it, that topic's summary.
+type RoomMessage struct {
+	store.Message
+	Thread *store.ThreadSummary `json:"thread,omitempty"`
+}
+
+// RoomMessagesResponse is the body of GET /api/v1/rooms/{id}/messages,
+// oldest first.
+type RoomMessagesResponse struct {
+	Messages []RoomMessage `json:"messages"`
+}
+
+// ThreadResponse is the body of GET /api/v1/threads/{id}: the thread, the
+// message it is rooted at and its turns, oldest first. Replies come from
+// the messages sub-resource.
 type ThreadResponse struct {
 	Thread store.Thread  `json:"thread"`
 	Root   store.Message `json:"root"`
+	Turns  []store.Turn  `json:"turns"`
 }
 
 func (h *handlers) postMessage(w http.ResponseWriter, r *http.Request) {
@@ -55,6 +82,9 @@ func (h *handlers) postMessage(w http.ResponseWriter, r *http.Request) {
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
+	}
+	if user, ok := userFrom(r.Context()); ok {
+		req.UserID = user.ID
 	}
 	if err := validatePostMessage(req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
@@ -72,11 +102,12 @@ func (h *handlers) postMessage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	msg, err := h.deps.Chat.PostUserMessage(r.Context(), store.NewMessage{
-		RoomID:   r.PathValue("id"),
-		ThreadID: threadID,
-		UserID:   req.UserID,
-		Body:     req.Body,
-		Mentions: req.Mentions,
+		RoomID:        r.PathValue("id"),
+		ThreadID:      threadID,
+		UserID:        req.UserID,
+		Body:          req.Body,
+		Mentions:      req.Mentions,
+		AttachmentIDs: req.AttachmentIDs,
 	})
 	if err != nil {
 		h.writeStoreError(w, r, err)
@@ -91,8 +122,13 @@ func validatePostMessage(req PostMessageRequest) error {
 	if strings.TrimSpace(req.UserID) == "" {
 		return fmt.Errorf("user_id is required")
 	}
-	if strings.TrimSpace(req.Body) == "" {
-		return fmt.Errorf("body is required")
+	if strings.TrimSpace(req.Body) == "" && len(req.AttachmentIDs) == 0 {
+		return fmt.Errorf("body or attachment_ids is required")
+	}
+	for i, id := range req.AttachmentIDs {
+		if strings.TrimSpace(id) == "" {
+			return fmt.Errorf("attachment_ids[%d] is required", i)
+		}
 	}
 	if req.ThreadID != "" && req.ReplyTo != "" {
 		return fmt.Errorf("thread_id and reply_to are mutually exclusive")
@@ -131,7 +167,45 @@ func (h *handlers) listRoomMessages(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, MessagesResponse{Messages: messages})
+	ids := make([]string, len(messages))
+	for i, m := range messages {
+		ids[i] = m.ID
+	}
+	summaries, err := h.deps.Messages.ThreadSummaries(r.Context(), ids)
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	out := make([]RoomMessage, len(messages))
+	for i, m := range messages {
+		out[i] = RoomMessage{Message: m}
+		if summary, ok := summaries[m.ID]; ok {
+			out[i].Thread = &summary
+		}
+	}
+	writeJSON(w, http.StatusOK, RoomMessagesResponse{Messages: out})
+}
+
+// userInbox lists what mentions a user across rooms. Only before= pages
+// it, newest first, since an inbox is read from the top.
+func (h *handlers) userInbox(w http.ResponseWriter, r *http.Request) {
+	userID := r.PathValue("id")
+	if _, err := h.deps.Users.GetUser(r.Context(), userID); err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	page, err := parsePage(r)
+	if err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	items, err := h.deps.Messages.ListUserMentions(r.Context(), userID, page.before, page.limit)
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	h.fillSenderNames(r.Context(), items)
+	writeJSON(w, http.StatusOK, InboxResponse{Items: items})
 }
 
 func (h *handlers) getMessage(w http.ResponseWriter, r *http.Request) {
@@ -154,7 +228,12 @@ func (h *handlers) getThread(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ThreadResponse{Thread: thread, Root: root})
+	turns, err := h.deps.Turns.ListThreadTurns(r.Context(), thread.ID)
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, ThreadResponse{Thread: thread, Root: root, Turns: turns})
 }
 
 func (h *handlers) listThreadMessages(w http.ResponseWriter, r *http.Request) {
@@ -224,4 +303,23 @@ func queryInt(raw string) (value int64, present bool, err error) {
 		return 0, true, fmt.Errorf("must be a non-negative integer, got %q", raw)
 	}
 	return n, true, nil
+}
+
+// fillSenderNames names senders the listing's join could not: the account
+// is not in the users table, so its messages arrive nameless.
+func (h *handlers) fillSenderNames(ctx context.Context, items []store.InboxItem) {
+	names := map[string]string{}
+	for i := range items {
+		if items[i].SenderName != "" || items[i].UserID == "" {
+			continue
+		}
+		name, seen := names[items[i].UserID]
+		if !seen {
+			if u, err := h.deps.Users.GetUser(ctx, items[i].UserID); err == nil {
+				name = u.Name
+			}
+			names[items[i].UserID] = name
+		}
+		items[i].SenderName = name
+	}
 }

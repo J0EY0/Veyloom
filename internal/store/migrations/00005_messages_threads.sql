@@ -16,7 +16,7 @@ CREATE TABLE messages (
     -- Exactly one of these is set, matching sender_kind; system messages
     -- have neither.
     user_id           uuid        REFERENCES users (id),
-    agent_instance_id uuid        REFERENCES agent_instances (id),
+    member_id         uuid        REFERENCES members (id),
     body              text        NOT NULL CHECK (btrim(body) <> ''),
     -- Structured @-mentions supplied by the client:
     -- [{"kind": "user" | "agent", "id": "..."}]. Routing reads these, never
@@ -25,7 +25,7 @@ CREATE TABLE messages (
     created_at        timestamptz NOT NULL DEFAULT now(),
     CONSTRAINT messages_sender_matches_kind CHECK (
         (sender_kind = 'user')  = (user_id IS NOT NULL) AND
-        (sender_kind = 'agent') = (agent_instance_id IS NOT NULL)
+        (sender_kind = 'agent') = (member_id IS NOT NULL)
     )
 );
 
@@ -35,7 +35,11 @@ CREATE TABLE threads (
     id              uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     room_id         uuid        NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,
     root_message_id uuid        NOT NULL UNIQUE REFERENCES messages (id) ON DELETE CASCADE,
-    created_at      timestamptz NOT NULL DEFAULT now()
+    -- The topic's number in its room, written #12: what people and agents
+    -- call it by. Rising and unique per room; a gap is harmless.
+    number          integer     NOT NULL,
+    created_at      timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT threads_number_per_room UNIQUE (room_id, number)
 );
 
 ALTER TABLE messages

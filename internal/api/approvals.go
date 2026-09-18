@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/J0EY0/veyloom/internal/engine"
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
@@ -14,11 +14,19 @@ import (
 type ApprovalStore interface {
 	GetApproval(ctx context.Context, id string) (store.Approval, error)
 	ListPendingRoomApprovals(ctx context.Context, roomID string) ([]store.Approval, error)
+	ListPendingApprovals(ctx context.Context) ([]store.PendingApproval, error)
 	ListTurnApprovals(ctx context.Context, turnID string) ([]store.Approval, error)
 }
 
+// PendingApprovalsResponse is the body of GET /api/v1/approvals?status=pending:
+// what waits for a person, across every project.
+type PendingApprovalsResponse struct {
+	Approvals []store.PendingApproval `json:"approvals"`
+}
+
 // DecideApprovalRequest is the body of POST /api/v1/approvals/{id}/decide.
-// There is no authentication yet, so the client names the deciding user.
+// The signed-in user decides; user_id in the body counts only when the
+// API runs without sign-in (tests).
 type DecideApprovalRequest struct {
 	UserID string `json:"user_id"`
 	Allow  bool   `json:"allow"`
@@ -53,16 +61,34 @@ func (h *handlers) decideApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
+	if user, ok := userFrom(r.Context()); ok {
+		req.UserID = user.ID
+	}
 	if strings.TrimSpace(req.UserID) == "" {
 		writeError(w, http.StatusBadRequest, "user_id is required")
 		return
 	}
-	a, err := h.deps.Chat.DecideApproval(r.Context(), r.PathValue("id"), req.UserID, engine.Decision{Allow: req.Allow, Message: strings.TrimSpace(req.Message)})
+	a, err := h.deps.Chat.DecideApproval(r.Context(), r.PathValue("id"), req.UserID, runtime.Decision{Allow: req.Allow, Message: strings.TrimSpace(req.Message)})
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, ApprovalResponse{Approval: a})
+}
+
+// listApprovals answers GET /api/v1/approvals. Only status=pending exists:
+// the "for me" page's list, across every project.
+func (h *handlers) listApprovals(w http.ResponseWriter, r *http.Request) {
+	if status := r.URL.Query().Get("status"); status != string(store.ApprovalPending) {
+		writeError(w, http.StatusBadRequest, "status must be pending")
+		return
+	}
+	approvals, err := h.deps.Approvals.ListPendingApprovals(r.Context())
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, PendingApprovalsResponse{Approvals: approvals})
 }
 
 // listRoomApprovals returns what is waiting for a decision in a room.

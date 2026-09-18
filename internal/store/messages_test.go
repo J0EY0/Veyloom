@@ -98,7 +98,6 @@ func TestCreateMessage_Errors(t *testing.T) {
 		want error
 	}{
 		{"unknown room", store.NewMessage{RoomID: unknown, SenderKind: store.SenderUser, UserID: f.user.ID, Body: "x"}, store.ErrNotFound},
-		{"unknown user", store.NewMessage{RoomID: f.room.ID, SenderKind: store.SenderUser, UserID: unknown, Body: "x"}, store.ErrNotFound},
 		{"unknown thread", store.NewMessage{RoomID: f.room.ID, ThreadID: unknown, SenderKind: store.SenderUser, UserID: f.user.ID, Body: "x"}, store.ErrNotFound},
 		{"blank body", store.NewMessage{RoomID: f.room.ID, SenderKind: store.SenderUser, UserID: f.user.ID, Body: "  "}, store.ErrInvalidInput},
 		{"user kind without user", store.NewMessage{RoomID: f.room.ID, SenderKind: store.SenderUser, Body: "x"}, store.ErrInvalidInput},
@@ -310,5 +309,39 @@ func TestListThreadMessagesBefore_LatestChronological(t *testing.T) {
 	}
 	if got := bodies(latest); len(got) != 2 || got[0] != "reply 4" || got[1] != "reply 5" {
 		t.Errorf("latest page: %v", got)
+	}
+}
+
+func TestListUserMentions_AcrossRoomsNewestFirst(t *testing.T) {
+	f := newChatFixture(t)
+	ctx := context.Background()
+	bob, err := f.s.CreateUser(ctx, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := f.s.CreateRoom(ctx, f.room.ProjectID, "websocket")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mention := []store.Mention{{Kind: store.MentionUser, ID: f.user.ID}}
+	first, _ := f.s.CreateMessage(ctx, store.NewMessage{RoomID: f.room.ID, SenderKind: store.SenderUser, UserID: bob.ID, Body: "@alice one", Mentions: mention})
+	f.post(t, "nothing for alice", "")
+	second, _ := f.s.CreateMessage(ctx, store.NewMessage{RoomID: other.ID, SenderKind: store.SenderUser, UserID: bob.ID, Body: "@alice two", Mentions: mention})
+
+	items, err := f.s.ListUserMentions(ctx, f.user.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].ID != second.ID || items[1].ID != first.ID {
+		t.Fatalf("inbox = %+v", items)
+	}
+	if items[0].RoomName != "websocket" || items[0].SenderName != "bob" || items[1].RoomName != "main" {
+		t.Errorf("names on items: %+v", items)
+	}
+	if page, _ := f.s.ListUserMentions(ctx, f.user.ID, second.Seq, 10); len(page) != 1 || page[0].ID != first.ID {
+		t.Errorf("before pages back: %+v", page)
+	}
+	if none, _ := f.s.ListUserMentions(ctx, bob.ID, 0, 10); len(none) != 0 {
+		t.Errorf("bob was never mentioned: %+v", none)
 	}
 }

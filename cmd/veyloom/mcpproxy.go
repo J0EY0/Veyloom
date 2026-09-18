@@ -8,14 +8,14 @@ import (
 )
 
 // newMCPProxyCmd builds `veyloom mcp-proxy`, the stdio MCP server an agent
-// CLI spawns to reach the worker that started it. It is hidden because
-// people never run it by hand: the worker writes the command line into
+// CLI spawns to reach the machine that started it. It is hidden because
+// people never run it by hand: the machine writes the command line into
 // the CLI's MCP configuration.
 func newMCPProxyCmd() *cobra.Command {
 	var endpoint string
 	cmd := &cobra.Command{
 		Use:    "mcp-proxy",
-		Short:  "Serve MCP on stdio by forwarding to a worker's HTTP endpoint",
+		Short:  "Serve MCP on stdio by forwarding to a machine's HTTP endpoint",
 		Hidden: true,
 		Args:   cobra.NoArgs,
 		// No configuration is needed, and stdout belongs to the protocol,

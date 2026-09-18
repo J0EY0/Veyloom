@@ -56,6 +56,22 @@ func (s *Store) ListUsers(ctx context.Context) ([]User, error) {
 	return out, nil
 }
 
+// RenameUser changes a user's name, or returns ErrNotFound.
+func (s *Store) RenameUser(ctx context.Context, id, name string) (User, error) {
+	uid, err := parseUUID(id)
+	if err != nil {
+		return User{}, err
+	}
+	row, err := s.q.RenameUser(ctx, db.RenameUserParams{ID: uid, Name: name})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return User{}, fmt.Errorf("user %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return User{}, mapPGError(fmt.Sprintf("rename user %s", id), err)
+	}
+	return toUser(row), nil
+}
+
 func toUser(row db.User) User {
 	return User{ID: uuidString(row.ID), Name: row.Name, CreatedAt: row.CreatedAt.Time}
 }

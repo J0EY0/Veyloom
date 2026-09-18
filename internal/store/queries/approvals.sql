@@ -1,7 +1,7 @@
 -- name: CreateApproval :one
 -- The caller may supply the id so it can announce the approval before the
 -- row exists; a null id lets the database assign one.
-INSERT INTO approvals (id, turn_id, room_id, thread_id, agent_instance_id, request_id, kind, payload, message_id)
+INSERT INTO approvals (id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, message_id)
 VALUES (COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
@@ -35,3 +35,14 @@ SELECT * FROM approvals WHERE room_id = $1 AND status = 'pending' ORDER BY creat
 
 -- name: ListTurnApprovals :many
 SELECT * FROM approvals WHERE turn_id = $1 ORDER BY created_at;
+
+-- name: ListPendingApprovals :many
+-- Every request waiting for a person, across every room, oldest first,
+-- with the names the "for me" page shows so it needs no second lookup.
+SELECT sqlc.embed(ap), mb.display_name AS member_name, p.name AS project_name
+FROM approvals ap
+JOIN members mb ON mb.id = ap.member_id
+JOIN rooms r ON r.id = ap.room_id
+JOIN projects p ON p.id = r.project_id
+WHERE ap.status = 'pending'
+ORDER BY ap.created_at;

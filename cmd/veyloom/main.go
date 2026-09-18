@@ -1,8 +1,8 @@
-// Command veyloom is the entry point for both the hub and the worker.
+// Command veyloom is the entry point for both the hub and the machine.
 //
-// At this stage it only offers engine discovery on the local machine:
+// At this stage it only offers runtime discovery on the local machine:
 //
-//	veyloom discover          print the engines found on this machine
+//	veyloom discover          print the runtimes found on this machine
 //	veyloom serve             expose the same information over HTTP
 package main
 
@@ -11,6 +11,10 @@ import (
 	"os"
 	"os/signal"
 	"syscall"
+
+	// The time zone database, built in: the machines page asks for days in
+	// the browser's zone, and a slim host may have none installed.
+	_ "time/tzdata"
 )
 
 func main() {

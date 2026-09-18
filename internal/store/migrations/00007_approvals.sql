@@ -1,8 +1,8 @@
 -- +goose Up
 
--- An approval is a permission request raised by an engine during a turn:
+-- An approval is a permission request raised by a runtime during a turn:
 -- "may I run this command?". The row is the durable to-do item; the hub
--- forwards the decision to the worker that is waiting for it.
+-- forwards the decision to the machine that is waiting for it.
 CREATE TABLE approvals (
     id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
     turn_id           uuid        NOT NULL REFERENCES turns (id) ON DELETE CASCADE,
@@ -10,8 +10,8 @@ CREATE TABLE approvals (
     -- to the thread need no join.
     room_id           uuid        NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,
     thread_id         uuid        NOT NULL REFERENCES threads (id) ON DELETE CASCADE,
-    agent_instance_id uuid        NOT NULL REFERENCES agent_instances (id),
-    -- The engine's own id for the request, unique within a turn; the
+    member_id         uuid        NOT NULL REFERENCES members (id),
+    -- The runtime's own id for the request, unique within a turn; the
     -- decision is routed back with it.
     request_id        text        NOT NULL,
     kind              text        NOT NULL DEFAULT 'tool_use' CHECK (kind IN ('tool_use')),

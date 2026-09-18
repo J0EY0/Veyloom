@@ -3,7 +3,7 @@
 //
 // Agent CLIs spawn MCP servers as subprocesses and talk to them over
 // stdin/stdout, while the tools Veyloom offers an agent live inside the
-// worker process. The proxy is the subprocess: it connects to the worker's
+// machine process. The proxy is the subprocess: it connects to the machine's
 // HTTP endpoint, mirrors the tools it finds there and forwards every call.
 // Going through stdio also sidesteps the per-request timeouts some CLIs
 // put on HTTP servers, which matters for a tool that waits for a person.
@@ -20,7 +20,7 @@ import (
 // endpoint. It returns when the local client disconnects or ctx ends.
 func Run(ctx context.Context, endpoint string, local mcp.Transport) error {
 	client := mcp.NewClient(&mcp.Implementation{Name: "veyloom-mcp-proxy", Version: "dev"}, nil)
-	// The worker never pushes notifications, so the standalone SSE stream
+	// The machine never pushes notifications, so the standalone SSE stream
 	// would only be an idle connection.
 	remote, err := client.Connect(ctx, &mcp.StreamableClientTransport{Endpoint: endpoint, DisableStandaloneSSE: true}, nil)
 	if err != nil {

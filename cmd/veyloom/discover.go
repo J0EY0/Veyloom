@@ -9,11 +9,11 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/J0EY0/veyloom/internal/api"
-	"github.com/J0EY0/veyloom/internal/engine"
-	"github.com/J0EY0/veyloom/internal/worker"
+	"github.com/J0EY0/veyloom/internal/machine"
+	"github.com/J0EY0/veyloom/internal/runtime"
 )
 
-// newDiscoverCmd builds `veyloom discover`, which detects engines once and
+// newDiscoverCmd builds `veyloom discover`, which detects runtimes once and
 // prints them as a table or as JSON.
 func newDiscoverCmd(a *app) *cobra.Command {
 	var asJSON bool
@@ -23,11 +23,11 @@ func newDiscoverCmd(a *app) *cobra.Command {
 		Short: "Detect agent CLIs installed on this machine",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			infos := worker.NewDiscovery(engine.Builtin(), a.cfg.Worker.DetectTimeout).Run(cmd.Context())
+			infos := machine.NewDiscovery(runtime.Builtin(), a.cfg.Machine.DetectTimeout).Run(cmd.Context())
 			if asJSON {
-				return printEnginesJSON(cmd.OutOrStdout(), infos)
+				return printRuntimesJSON(cmd.OutOrStdout(), infos)
 			}
-			return printEnginesTable(cmd.OutOrStdout(), infos)
+			return printRuntimesTable(cmd.OutOrStdout(), infos)
 		},
 	}
 
@@ -36,18 +36,18 @@ func newDiscoverCmd(a *app) *cobra.Command {
 	return cmd
 }
 
-// printEnginesJSON writes the same document the HTTP API returns, so scripts
+// printRuntimesJSON writes the same document the HTTP API returns, so scripts
 // can consume either source identically.
-func printEnginesJSON(w io.Writer, infos []engine.Info) error {
+func printRuntimesJSON(w io.Writer, infos []runtime.Info) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
-	return enc.Encode(api.EnginesResponse{Engines: infos})
+	return enc.Encode(api.RuntimesResponse{Runtimes: infos})
 }
 
-// printEnginesTable writes a human-readable summary, one engine per line.
-func printEnginesTable(w io.Writer, infos []engine.Info) error {
+// printRuntimesTable writes a human-readable summary, one runtime per line.
+func printRuntimesTable(w io.Writer, infos []runtime.Info) error {
 	tw := tabwriter.NewWriter(w, 0, 4, 2, ' ', 0)
-	fmt.Fprintln(tw, "ENGINE\tVERSION\tSTATUS\tPATH\tDETAIL")
+	fmt.Fprintln(tw, "RUNTIME\tVERSION\tSTATUS\tPATH\tDETAIL")
 	for _, info := range infos {
 		fmt.Fprintf(tw, "%s\t%s\t%s\t%s\t%s\n", info.Name, info.Version, info.Status, info.Path, info.Detail)
 	}

@@ -12,66 +12,119 @@ import (
 )
 
 const createProject = `-- name: CreateProject :one
-INSERT INTO projects (name, repo_url, default_branch)
+INSERT INTO projects (name, repo_path, description)
 VALUES ($1, $2, $3)
-RETURNING id, name, repo_url, default_branch, created_at
+RETURNING id, name, repo_path, description, created_at
 `
 
 type CreateProjectParams struct {
-	Name          string
-	RepoUrl       string
-	DefaultBranch string
+	Name        string
+	RepoPath    string
+	Description string
 }
 
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
-	row := q.db.QueryRow(ctx, createProject, arg.Name, arg.RepoUrl, arg.DefaultBranch)
+	row := q.db.QueryRow(ctx, createProject, arg.Name, arg.RepoPath, arg.Description)
 	var i Project
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
-		&i.RepoUrl,
-		&i.DefaultBranch,
+		&i.RepoPath,
+		&i.Description,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
-const getProject = `-- name: GetProject :one
-SELECT id, name, repo_url, default_branch, created_at FROM projects WHERE id = $1
+const deleteProject = `-- name: DeleteProject :execrows
+DELETE FROM projects AS p
+WHERE p.id = $1
+  AND NOT EXISTS (
+      SELECT 1 FROM turns t JOIN rooms r ON r.id = t.room_id
+      WHERE r.project_id = p.id AND t.status = 'running'
+  )
 `
 
-func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (Project, error) {
+// Deletes a project and, through its rooms, the whole chat, unless one of
+// its turns is still running.
+func (q *Queries) DeleteProject(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteProject, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const getProject = `-- name: GetProject :one
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.created_at,
+       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
+FROM projects WHERE projects.id = $1
+`
+
+type GetProjectRow struct {
+	Project    Project
+	MainRoomID pgtype.UUID
+}
+
+func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (GetProjectRow, error) {
 	row := q.db.QueryRow(ctx, getProject, id)
+	var i GetProjectRow
+	err := row.Scan(
+		&i.Project.ID,
+		&i.Project.Name,
+		&i.Project.RepoPath,
+		&i.Project.Description,
+		&i.Project.CreatedAt,
+		&i.MainRoomID,
+	)
+	return i, err
+}
+
+const getRoomProject = `-- name: GetRoomProject :one
+SELECT p.id, p.name, p.repo_path, p.description, p.created_at FROM projects p JOIN rooms r ON r.project_id = p.id WHERE r.id = $1
+`
+
+// The project a room belongs to.
+func (q *Queries) GetRoomProject(ctx context.Context, id pgtype.UUID) (Project, error) {
+	row := q.db.QueryRow(ctx, getRoomProject, id)
 	var i Project
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
-		&i.RepoUrl,
-		&i.DefaultBranch,
+		&i.RepoPath,
+		&i.Description,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT id, name, repo_url, default_branch, created_at FROM projects ORDER BY created_at, name
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.created_at,
+       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
+FROM projects ORDER BY projects.created_at, projects.name
 `
 
-func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
+type ListProjectsRow struct {
+	Project    Project
+	MainRoomID pgtype.UUID
+}
+
+func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 	rows, err := q.db.Query(ctx, listProjects)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []Project
+	var items []ListProjectsRow
 	for rows.Next() {
-		var i Project
+		var i ListProjectsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.RepoUrl,
-			&i.DefaultBranch,
-			&i.CreatedAt,
+			&i.Project.ID,
+			&i.Project.Name,
+			&i.Project.RepoPath,
+			&i.Project.Description,
+			&i.Project.CreatedAt,
+			&i.MainRoomID,
 		); err != nil {
 			return nil, err
 		}
@@ -81,4 +134,133 @@ func (q *Queries) ListProjects(ctx context.Context) ([]Project, error) {
 		return nil, err
 	}
 	return items, nil
+}
+
+const moveProjectMembers = `-- name: MoveProjectMembers :exec
+UPDATE members
+SET repo_path = CASE
+        WHEN $1::text = '' THEN ''
+        WHEN $2::text <> '' AND starts_with(members.repo_path, $2::text || '/')
+            THEN $1::text || substr(members.repo_path, length($2::text) + 1)
+        ELSE $1::text
+    END
+FROM rooms
+WHERE members.room_id = rooms.id
+  AND rooms.project_id = $3
+  AND members.removed_at IS NULL
+`
+
+type MoveProjectMembersParams struct {
+	NewPath   string
+	OldPath   string
+	ProjectID pgtype.UUID
+}
+
+// Members work under their project's checkout, so when it moves the
+// project's current members move with it: a path below the old checkout
+// keeps its place below the new one, any other path becomes the new
+// checkout, and no checkout leaves them all to wherever their machine
+// runs. Members taken out of the project keep the path they last had.
+func (q *Queries) MoveProjectMembers(ctx context.Context, arg MoveProjectMembersParams) error {
+	_, err := q.db.Exec(ctx, moveProjectMembers, arg.NewPath, arg.OldPath, arg.ProjectID)
+	return err
+}
+
+const projectAttachmentPaths = `-- name: ProjectAttachmentPaths :many
+SELECT a.path FROM attachments a JOIN rooms r ON r.id = a.room_id WHERE r.project_id = $1
+`
+
+// Where the project's uploads lie in the attachment directory.
+func (q *Queries) ProjectAttachmentPaths(ctx context.Context, projectID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, projectAttachmentPaths, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		items = append(items, path)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const projectTurnIDs = `-- name: ProjectTurnIDs :many
+SELECT t.id FROM turns t JOIN rooms r ON r.id = t.room_id WHERE r.project_id = $1
+`
+
+// The project's turns, whose transcripts are named after them.
+func (q *Queries) ProjectTurnIDs(ctx context.Context, projectID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, projectTurnIDs, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var id pgtype.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const updateProject = `-- name: UpdateProject :one
+WITH before AS (
+    SELECT repo_path FROM projects WHERE id = $4 FOR UPDATE
+)
+UPDATE projects
+SET name        = coalesce($1, projects.name),
+    repo_path   = coalesce($2, projects.repo_path),
+    description = coalesce($3, projects.description)
+FROM before
+WHERE projects.id = $4
+RETURNING projects.id, projects.name, projects.repo_path, projects.created_at, before.repo_path AS old_repo_path
+`
+
+type UpdateProjectParams struct {
+	Name        pgtype.Text
+	RepoPath    pgtype.Text
+	Description pgtype.Text
+	ID          pgtype.UUID
+}
+
+type UpdateProjectRow struct {
+	ID          pgtype.UUID
+	Name        string
+	RepoPath    string
+	CreatedAt   pgtype.Timestamptz
+	OldRepoPath string
+}
+
+// Renames a project, moves its checkout or rewrites its description; a
+// NULL argument keeps the current value. The checkout it had comes back beside it, for moving the
+// members with it.
+func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (UpdateProjectRow, error) {
+	row := q.db.QueryRow(ctx, updateProject,
+		arg.Name,
+		arg.RepoPath,
+		arg.Description,
+		arg.ID,
+	)
+	var i UpdateProjectRow
+	err := row.Scan(
+		&i.ID,
+		&i.Name,
+		&i.RepoPath,
+		&i.CreatedAt,
+		&i.OldRepoPath,
+	)
+	return i, err
 }

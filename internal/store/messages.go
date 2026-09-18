@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -52,11 +53,17 @@ type Message struct {
 	SenderKind SenderKind `json:"sender_kind"`
 	// UserID is set when SenderKind is SenderUser.
 	UserID string `json:"user_id,omitempty"`
-	// AgentInstanceID is set when SenderKind is SenderAgent.
-	AgentInstanceID string    `json:"agent_instance_id,omitempty"`
-	Body            string    `json:"body"`
-	Mentions        []Mention `json:"mentions"`
-	CreatedAt       time.Time `json:"created_at"`
+	// MemberID is set when SenderKind is SenderAgent.
+	MemberID string    `json:"member_id,omitempty"`
+	Body     string    `json:"body"`
+	Mentions []Mention `json:"mentions"`
+	// Attachments are the files a person posted with the message; empty
+	// on hub-written messages.
+	Attachments []Attachment `json:"attachments"`
+	// TurnID is set on messages the hub writes for a turn: a topic root once
+	// its text is known, the agent's later replies, and system notes.
+	TurnID    string    `json:"turn_id,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // NewMessage is the input to CreateMessage.
@@ -68,17 +75,57 @@ type NewMessage struct {
 	SenderKind SenderKind
 	// UserID is required for SenderUser and must be empty otherwise.
 	UserID string
-	// AgentInstanceID is required for SenderAgent and must be empty
+	// MemberID is required for SenderAgent and must be empty
 	// otherwise.
-	AgentInstanceID string
-	Body            string
-	Mentions        []Mention
+	MemberID string
+	Body     string
+	Mentions []Mention
+	// AttachmentIDs are uploads of the room to carry with the message; they
+	// must be unclaimed. A person may post attachments without words.
+	AttachmentIDs []string
+	// TurnID links a hub-written message to its turn; empty for people.
+	TurnID string
+}
+
+// InboxItem is a message that mentions a user, with the names the inbox
+// shows next to it.
+type InboxItem struct {
+	Message
+	RoomName    string `json:"room_name"`
+	ProjectName string `json:"project_name"`
+	SenderName  string `json:"sender_name"`
+}
+
+// ThreadSummary is what a room timeline shows under a topic root without
+// opening it: how much was said and how the latest turn is doing.
+type ThreadSummary struct {
+	ID string `json:"id"`
+	// Number is what the topic is called in its room, written #12. Zero
+	// where a summary is made without asking the store (a topic announced
+	// the moment it opens).
+	Number      int          `json:"number,omitempty"`
+	ReplyCount  int          `json:"reply_count"`
+	LastReplyAt *time.Time   `json:"last_reply_at,omitempty"`
+	Turns       int          `json:"turns"`
+	LastTurn    *TurnSummary `json:"last_turn,omitempty"`
+}
+
+// TurnSummary is the slice of a Turn a timeline needs.
+type TurnSummary struct {
+	ID        string     `json:"id"`
+	Status    TurnStatus `json:"status"`
+	Error     string     `json:"error,omitempty"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
 // Thread groups the replies to one top-level message.
 type Thread struct {
-	ID            string    `json:"id"`
-	RoomID        string    `json:"room_id"`
+	ID     string `json:"id"`
+	RoomID string `json:"room_id"`
+	// Number is what the topic is called in its room, written #12. It rises
+	// with every new topic; gaps are possible and mean nothing.
+	Number        int       `json:"number"`
 	RootMessageID string    `json:"root_message_id"`
 	CreatedAt     time.Time `json:"created_at"`
 }
@@ -90,11 +137,16 @@ const (
 )
 
 // CreateMessage posts a message. An unknown room, thread or user is
-// ErrNotFound; a thread from another room is ErrInvalidInput.
+// ErrNotFound; a thread from another room, a person's message with neither
+// words nor attachments, or an attachment that cannot be claimed is
+// ErrInvalidInput.
 func (s *Store) CreateMessage(ctx context.Context, m NewMessage) (Message, error) {
 	roomID, err := parseUUID(m.RoomID)
 	if err != nil {
 		return Message{}, err
+	}
+	if m.SenderKind == SenderUser && strings.TrimSpace(m.Body) == "" && len(m.AttachmentIDs) == 0 {
+		return Message{}, fmt.Errorf("%w: a message needs words or attachments", ErrInvalidInput)
 	}
 	var threadID pgtype.UUID
 	if m.ThreadID != "" {
@@ -109,14 +161,14 @@ func (s *Store) CreateMessage(ctx context.Context, m NewMessage) (Message, error
 			return Message{}, err
 		}
 	}
-	var userID, agentID pgtype.UUID
+	var userID, memberID pgtype.UUID
 	if m.UserID != "" {
 		if userID, err = parseUUID(m.UserID); err != nil {
 			return Message{}, err
 		}
 	}
-	if m.AgentInstanceID != "" {
-		if agentID, err = parseUUID(m.AgentInstanceID); err != nil {
+	if m.MemberID != "" {
+		if memberID, err = parseUUID(m.MemberID); err != nil {
 			return Message{}, err
 		}
 	}
@@ -124,20 +176,48 @@ func (s *Store) CreateMessage(ctx context.Context, m NewMessage) (Message, error
 	if err != nil {
 		return Message{}, err
 	}
+	var turnID pgtype.UUID
+	if m.TurnID != "" {
+		if turnID, err = parseUUID(m.TurnID); err != nil {
+			return Message{}, err
+		}
+	}
 
-	row, err := s.q.CreateMessage(ctx, db.CreateMessageParams{
-		RoomID:          roomID,
-		ThreadID:        threadID,
-		SenderKind:      string(m.SenderKind),
-		UserID:          userID,
-		AgentInstanceID: agentID,
-		Body:            m.Body,
-		Mentions:        mentions,
+	// The message and the claim of its attachments land together or not
+	// at all.
+	tx, err := s.pool.Begin(ctx)
+	if err != nil {
+		return Message{}, fmt.Errorf("create message: %w", err)
+	}
+	defer tx.Rollback(ctx) //nolint:errcheck // a no-op after Commit
+	q := s.q.WithTx(tx)
+
+	row, err := q.CreateMessage(ctx, db.CreateMessageParams{
+		RoomID:     roomID,
+		ThreadID:   threadID,
+		SenderKind: string(m.SenderKind),
+		UserID:     userID,
+		MemberID:   memberID,
+		Body:       m.Body,
+		Mentions:   mentions,
+		TurnID:     turnID,
 	})
 	if err != nil {
 		return Message{}, mapMessageError(err)
 	}
-	return toMessage(row)
+	msg, err := toMessage(row)
+	if err != nil {
+		return Message{}, err
+	}
+	if len(m.AttachmentIDs) > 0 {
+		if msg.Attachments, err = claimAttachments(ctx, q, row.ID, roomID, m.AttachmentIDs); err != nil {
+			return Message{}, err
+		}
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Message{}, fmt.Errorf("create message: %w", err)
+	}
+	return msg, nil
 }
 
 // mapMessageError turns constraint failures on messages into the sentinel
@@ -156,13 +236,128 @@ func mapMessageError(err error) error {
 			return fmt.Errorf("user: %w", ErrNotFound)
 		case "messages_thread_id_fkey":
 			return fmt.Errorf("thread: %w", ErrNotFound)
-		case "messages_agent_instance_id_fkey":
-			return fmt.Errorf("agent instance: %w", ErrNotFound)
+		case "messages_member_id_fkey":
+			return fmt.Errorf("member: %w", ErrNotFound)
+		case "messages_turn_id_fkey":
+			return fmt.Errorf("turn: %w", ErrNotFound)
 		}
 	case "23514": // check_violation, e.g. blank body or sender/user mismatch
 		return fmt.Errorf("%w: %s", ErrInvalidInput, pgErr.ConstraintName)
 	}
 	return fmt.Errorf("create message: %w", err)
+}
+
+// ListUserMentions returns the messages that mention userID across every
+// room, newest first, with seq less than before (0 means the latest).
+func (s *Store) ListUserMentions(ctx context.Context, userID string, before int64, limit int) ([]InboxItem, error) {
+	if _, err := parseUUID(userID); err != nil {
+		return nil, err
+	}
+	needle, err := json.Marshal([]Mention{{Kind: MentionUser, ID: userID}})
+	if err != nil {
+		return nil, fmt.Errorf("inbox of %s: %w", userID, err)
+	}
+	if before <= 0 {
+		before = math.MaxInt64
+	}
+	rows, err := s.q.ListUserMentions(ctx, db.ListUserMentionsParams{Column1: needle, Seq: before, Limit: clampLimit(limit)})
+	if err != nil {
+		return nil, fmt.Errorf("inbox of %s: %w", userID, err)
+	}
+	msgs := make([]Message, 0, len(rows))
+	for _, row := range rows {
+		msg, err := toMessage(db.Message{
+			ID: row.ID, Seq: row.Seq, RoomID: row.RoomID, ThreadID: row.ThreadID, SenderKind: row.SenderKind,
+			UserID: row.UserID, MemberID: row.MemberID, Body: row.Body, Mentions: row.Mentions,
+			CreatedAt: row.CreatedAt, TurnID: row.TurnID,
+		})
+		if err != nil {
+			return nil, err
+		}
+		msgs = append(msgs, msg)
+	}
+	if msgs, err = s.withAttachments(ctx, msgs); err != nil {
+		return nil, err
+	}
+	out := make([]InboxItem, 0, len(rows))
+	for i, row := range rows {
+		out = append(out, InboxItem{Message: msgs[i], RoomName: row.RoomName, ProjectName: row.ProjectName, SenderName: row.SenderName})
+	}
+	return out, nil
+}
+
+// UpdateMessageBody sets a message's text, its mentions and the turn it
+// belongs to. The hub uses it to fill in a topic root once the agent has
+// said something; the row is otherwise unchanged. An unknown message is
+// ErrNotFound.
+func (s *Store) UpdateMessageBody(ctx context.Context, id, body, turnID string, mentions []Mention) (Message, error) {
+	uid, err := parseUUID(id)
+	if err != nil {
+		return Message{}, err
+	}
+	var tid pgtype.UUID
+	if turnID != "" {
+		if tid, err = parseUUID(turnID); err != nil {
+			return Message{}, err
+		}
+	}
+	encoded, err := marshalMentions(mentions)
+	if err != nil {
+		return Message{}, err
+	}
+	row, err := s.q.UpdateMessageBody(ctx, db.UpdateMessageBodyParams{ID: uid, Body: body, TurnID: tid, Mentions: encoded})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Message{}, fmt.Errorf("message %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return Message{}, mapMessageError(err)
+	}
+	return toMessage(row)
+}
+
+// ThreadSummaries returns the topic summary for each of the given
+// top-level messages that has one, keyed by message id. Messages without
+// a thread are simply absent from the result.
+func (s *Store) ThreadSummaries(ctx context.Context, rootMessageIDs []string) (map[string]ThreadSummary, error) {
+	ids := make([]pgtype.UUID, 0, len(rootMessageIDs))
+	for _, id := range rootMessageIDs {
+		uid, err := parseUUID(id)
+		if err != nil {
+			return nil, err
+		}
+		ids = append(ids, uid)
+	}
+	rows, err := s.q.ThreadSummaries(ctx, ids)
+	if err != nil {
+		return nil, fmt.Errorf("thread summaries: %w", err)
+	}
+	out := make(map[string]ThreadSummary, len(rows))
+	for _, row := range rows {
+		summary := ThreadSummary{
+			ID:         uuidString(row.ThreadID),
+			Number:     int(row.ThreadNumber),
+			ReplyCount: int(row.ReplyCount),
+			Turns:      int(row.TurnCount),
+		}
+		if row.LastReplyAt.Valid {
+			t := row.LastReplyAt.Time
+			summary.LastReplyAt = &t
+		}
+		if row.LastTurnID != "" {
+			summary.LastTurn = &TurnSummary{
+				ID:        row.LastTurnID,
+				Status:    TurnStatus(row.LastTurnStatus),
+				Error:     row.LastTurnError,
+				StartedAt: row.LastTurnStartedAt.Time,
+			}
+			if row.LastTurnEndedAt.Valid {
+				t := row.LastTurnEndedAt.Time
+				summary.LastTurn.EndedAt = &t
+			}
+		}
+		out[uuidString(row.RootMessageID)] = summary
+	}
+	return out, nil
 }
 
 // GetMessage returns one message, or ErrNotFound.
@@ -178,7 +373,15 @@ func (s *Store) GetMessage(ctx context.Context, id string) (Message, error) {
 	if err != nil {
 		return Message{}, fmt.Errorf("get message %s: %w", id, err)
 	}
-	return toMessage(row)
+	msg, err := toMessage(row)
+	if err != nil {
+		return Message{}, err
+	}
+	msgs, err := s.withAttachments(ctx, []Message{msg})
+	if err != nil {
+		return Message{}, err
+	}
+	return msgs[0], nil
 }
 
 // ListRoomMessages returns a room's top-level messages with seq greater
@@ -193,7 +396,7 @@ func (s *Store) ListRoomMessages(ctx context.Context, roomID string, after int64
 	if err != nil {
 		return nil, fmt.Errorf("list messages of room %s: %w", roomID, err)
 	}
-	return toMessages(rows)
+	return s.listWithAttachments(ctx, rows)
 }
 
 // ListRoomMessagesBefore returns a room's top-level messages with seq less
@@ -215,7 +418,7 @@ func (s *Store) ListRoomMessagesBefore(ctx context.Context, roomID string, befor
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
 		rows[i], rows[j] = rows[j], rows[i]
 	}
-	return toMessages(rows)
+	return s.listWithAttachments(ctx, rows)
 }
 
 // ListThreadMessages returns a thread's replies with seq greater than
@@ -229,7 +432,7 @@ func (s *Store) ListThreadMessages(ctx context.Context, threadID string, after i
 	if err != nil {
 		return nil, fmt.Errorf("list messages of thread %s: %w", threadID, err)
 	}
-	return toMessages(rows)
+	return s.listWithAttachments(ctx, rows)
 }
 
 // ThreadForMessage returns the thread a message belongs to, creating it if
@@ -246,9 +449,14 @@ func (s *Store) ThreadForMessage(ctx context.Context, messageID string) (Thread,
 
 	roomID, _ := parseUUID(msg.Room)
 	rootID, _ := parseUUID(msg.ID)
-	row, err := s.q.UpsertThread(ctx, db.UpsertThreadParams{RoomID: roomID, RootMessageID: rootID})
+	// Looked up before it is created: creating takes the room's next topic
+	// number, and asking again for a thread that exists must not burn one.
+	row, err := s.q.GetThreadByRoot(ctx, rootID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		row, err = s.q.UpsertThread(ctx, db.UpsertThreadParams{RoomID: roomID, RootMessageID: rootID})
+	}
 	if err != nil {
-		return Thread{}, fmt.Errorf("create thread for message %s: %w", messageID, err)
+		return Thread{}, fmt.Errorf("thread for message %s: %w", messageID, err)
 	}
 	return toThread(row), nil
 }
@@ -298,17 +506,28 @@ func toMessage(row db.Message) (Message, error) {
 		return Message{}, fmt.Errorf("decode mentions of message %s: %w", uuidString(row.ID), err)
 	}
 	return Message{
-		ID:              uuidString(row.ID),
-		Seq:             row.Seq,
-		Room:            uuidString(row.RoomID),
-		ThreadID:        uuidString(row.ThreadID),
-		SenderKind:      SenderKind(row.SenderKind),
-		UserID:          uuidString(row.UserID),
-		AgentInstanceID: uuidString(row.AgentInstanceID),
-		Body:            row.Body,
-		Mentions:        mentions,
-		CreatedAt:       row.CreatedAt.Time,
+		ID:          uuidString(row.ID),
+		Seq:         row.Seq,
+		Room:        uuidString(row.RoomID),
+		ThreadID:    uuidString(row.ThreadID),
+		SenderKind:  SenderKind(row.SenderKind),
+		UserID:      uuidString(row.UserID),
+		MemberID:    uuidString(row.MemberID),
+		Body:        row.Body,
+		Mentions:    mentions,
+		Attachments: []Attachment{},
+		TurnID:      uuidString(row.TurnID),
+		CreatedAt:   row.CreatedAt.Time,
 	}, nil
+}
+
+// listWithAttachments converts rows and fills in their attachments.
+func (s *Store) listWithAttachments(ctx context.Context, rows []db.Message) ([]Message, error) {
+	msgs, err := toMessages(rows)
+	if err != nil {
+		return nil, err
+	}
+	return s.withAttachments(ctx, msgs)
 }
 
 func toMessages(rows []db.Message) ([]Message, error) {
@@ -327,6 +546,7 @@ func toThread(row db.Thread) Thread {
 	return Thread{
 		ID:            uuidString(row.ID),
 		RoomID:        uuidString(row.RoomID),
+		Number:        int(row.Number),
 		RootMessageID: uuidString(row.RootMessageID),
 		CreatedAt:     row.CreatedAt.Time,
 	}
@@ -350,5 +570,5 @@ func (s *Store) ListThreadMessagesBefore(ctx context.Context, threadID string, b
 	for i, j := 0, len(rows)-1; i < j; i, j = i+1, j-1 {
 		rows[i], rows[j] = rows[j], rows[i]
 	}
-	return toMessages(rows)
+	return s.listWithAttachments(ctx, rows)
 }

@@ -14,11 +14,11 @@ import (
 // reachable through the config file and environment; only these also have
 // flags.
 const (
-	KeyDatabaseURL         = "database.url"
-	KeyStateDir            = "state.dir"
-	KeyServerAddr          = "server.addr"
-	KeyWorkerName          = "worker.name"
-	KeyWorkerDetectTimeout = "worker.detect_timeout"
+	KeyDatabaseURL          = "database.url"
+	KeyStateDir             = "state.dir"
+	KeyServerAddr           = "server.addr"
+	KeyMachineName          = "machine.name"
+	KeyMachineDetectTimeout = "machine.detect_timeout"
 )
 
 const (
@@ -99,6 +99,28 @@ func (l *Loader) Load(path string) (Config, error) {
 	} else {
 		cfg.Hub.TranscriptDir = expandHome(cfg.Hub.TranscriptDir)
 	}
+	// Attachments and avatars too.
+	if cfg.Hub.AttachmentDir == "" {
+		cfg.Hub.AttachmentDir = filepath.Join(cfg.State.Dir, "attachments")
+	} else {
+		cfg.Hub.AttachmentDir = expandHome(cfg.Hub.AttachmentDir)
+	}
+	if cfg.Hub.AvatarDir == "" {
+		cfg.Hub.AvatarDir = filepath.Join(cfg.State.Dir, "avatars")
+	} else {
+		cfg.Hub.AvatarDir = expandHome(cfg.Hub.AvatarDir)
+	}
+	// The machine's session files as well.
+	if cfg.Machine.SessionDir == "" {
+		cfg.Machine.SessionDir = filepath.Join(cfg.State.Dir, "sessions")
+	} else {
+		cfg.Machine.SessionDir = expandHome(cfg.Machine.SessionDir)
+	}
+	if cfg.Machine.ToolDir == "" {
+		cfg.Machine.ToolDir = filepath.Join(cfg.State.Dir, "tools")
+	} else {
+		cfg.Machine.ToolDir = expandHome(cfg.Machine.ToolDir)
+	}
 	return cfg, nil
 }
 
@@ -122,13 +144,20 @@ func setDefaults(v *viper.Viper, def Config) {
 	v.SetDefault("hub.handshake_timeout", def.Hub.HandshakeTimeout)
 	v.SetDefault("hub.store_timeout", def.Hub.StoreTimeout)
 	v.SetDefault("hub.transcript_dir", def.Hub.TranscriptDir)
+	v.SetDefault("hub.attachment_dir", def.Hub.AttachmentDir)
+	v.SetDefault("hub.avatar_dir", def.Hub.AvatarDir)
 	v.SetDefault("hub.brief_messages", def.Hub.BriefMessages)
+	v.SetDefault("hub.brief_room_messages", def.Hub.BriefRoomMessages)
+	v.SetDefault("hub.brief_topics", def.Hub.BriefTopics)
 	v.SetDefault("hub.approval_timeout", def.Hub.ApprovalTimeout)
-	v.SetDefault(KeyWorkerName, def.Worker.Name)
-	v.SetDefault(KeyWorkerDetectTimeout, def.Worker.DetectTimeout)
-	v.SetDefault("worker.handshake_timeout", def.Worker.HandshakeTimeout)
-	v.SetDefault("worker.heartbeat_interval", def.Worker.HeartbeatInterval)
-	v.SetDefault("worker.event_flush_interval", def.Worker.EventFlushInterval)
+	v.SetDefault("hub.relay_budget", def.Hub.RelayBudget)
+	v.SetDefault(KeyMachineName, def.Machine.Name)
+	v.SetDefault(KeyMachineDetectTimeout, def.Machine.DetectTimeout)
+	v.SetDefault("machine.handshake_timeout", def.Machine.HandshakeTimeout)
+	v.SetDefault("machine.heartbeat_interval", def.Machine.HeartbeatInterval)
+	v.SetDefault("machine.event_flush_interval", def.Machine.EventFlushInterval)
+	v.SetDefault("machine.session_dir", def.Machine.SessionDir)
+	v.SetDefault("machine.tool_dir", def.Machine.ToolDir)
 }
 
 // expandHome replaces a leading "~/" with the home directory, which YAML

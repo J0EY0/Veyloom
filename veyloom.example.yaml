@@ -16,7 +16,7 @@ database:
 
 state:
   # Directory for what must persist on this machine between runs, starting
-  # with the local worker's identity. "~/" expands to the home directory.
+  # with the local machine's identity. "~/" expands to the home directory.
   dir: ~/.veyloom
 
 server:
@@ -35,9 +35,9 @@ server:
   # allowed_origins: ["localhost:5173"]
 
 hub:
-  # How often workers must report in.
+  # How often machines must report in.
   heartbeat_interval: 15s
-  # How long a new worker connection may take to introduce itself.
+  # How long a new machine connection may take to introduce itself.
   handshake_timeout: 10s
   # How long each database operation outside a request may take: recording
   # disconnects, finishing turns, posting agent replies.
@@ -45,22 +45,34 @@ hub:
   # Where turn transcripts go, one JSONL file per turn. Empty means the
   # "turns" directory under state.dir.
   transcript_dir: ""
-  # How many thread messages an agent's brief includes, most recent first.
+  # A brief tells an agent's session only what it has not read yet, so these
+  # caps matter for a new session and after a long absence; what a cap
+  # leaves out is counted in the brief. Messages of the topic the turn is in:
   brief_messages: 40
+  # New top-level messages of the room:
+  brief_room_messages: 30
+  # Other topics listed as having news:
+  brief_topics: 10
   # How long an agent's permission request waits for someone to decide
   # before it is denied. Negative waits forever.
   approval_timeout: 15m
 
-worker:
+machine:
   # Label shown for this machine. Defaults to the hostname; it is not the
-  # worker's identity, which the hub assigns and the state dir remembers.
+  # machine's identity, which the hub assigns and the state dir remembers.
   # name: my-laptop
   # How long each agent CLI may take to answer version and login probes.
   detect_timeout: 15s
-  # How long the hub may take to answer the worker's hello.
+  # How long the hub may take to answer the machine's hello.
   handshake_timeout: 10s
   # Heartbeat interval used only if the hub does not specify one.
   heartbeat_interval: 15s
   # How long streamed reply text is buffered before it is sent to the hub
   # as one event. Negative sends every chunk as it arrives.
   event_flush_interval: 50ms
+  # Where runtimes that keep session files of their own (Pi) put them, one
+  # file per member session. Empty means <state.dir>/sessions.
+  session_dir: ""
+  # Where runtimes write the files that give their CLI the room tools (Pi's
+  # extension). Empty means <state.dir>/tools.
+  tool_dir: ""

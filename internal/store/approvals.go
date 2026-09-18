@@ -37,13 +37,13 @@ const ApprovalToolUse ApprovalKind = "tool_use"
 
 // Approval is one permission request raised during a turn.
 type Approval struct {
-	ID              string       `json:"id"`
-	TurnID          string       `json:"turn_id"`
-	RoomID          string       `json:"room_id"`
-	ThreadID        string       `json:"thread_id"`
-	AgentInstanceID string       `json:"agent_instance_id"`
-	RequestID       string       `json:"request_id"`
-	Kind            ApprovalKind `json:"kind"`
+	ID        string       `json:"id"`
+	TurnID    string       `json:"turn_id"`
+	RoomID    string       `json:"room_id"`
+	ThreadID  string       `json:"thread_id"`
+	MemberID  string       `json:"member_id"`
+	RequestID string       `json:"request_id"`
+	Kind      ApprovalKind `json:"kind"`
 	// Tool and Input are the payload of a tool_use approval. Input is the
 	// tool's complete input as JSON.
 	Tool   string          `json:"tool"`
@@ -64,13 +64,13 @@ type Approval struct {
 type NewApproval struct {
 	// ID is optional. The hub sets it so the approval can be announced and
 	// tracked before the row exists; empty lets the database choose.
-	ID              string
-	TurnID          string
-	RoomID          string
-	ThreadID        string
-	AgentInstanceID string
-	RequestID       string
-	Tool            string
+	ID        string
+	TurnID    string
+	RoomID    string
+	ThreadID  string
+	MemberID  string
+	RequestID string
+	Tool      string
 	// Input is the tool input, normally JSON. Anything that is not valid
 	// JSON is stored as a JSON string so the payload stays well-formed.
 	Input     string
@@ -114,7 +114,7 @@ func (s *Store) CreateApproval(ctx context.Context, a NewApproval) (Approval, er
 	if err != nil {
 		return Approval{}, err
 	}
-	instanceID, err := parseUUID(a.AgentInstanceID)
+	memberID, err := parseUUID(a.MemberID)
 	if err != nil {
 		return Approval{}, err
 	}
@@ -133,18 +133,18 @@ func (s *Store) CreateApproval(ctx context.Context, a NewApproval) (Approval, er
 	}
 
 	row, err := s.q.CreateApproval(ctx, db.CreateApprovalParams{
-		ID:              id,
-		TurnID:          turnID,
-		RoomID:          roomID,
-		ThreadID:        threadID,
-		AgentInstanceID: instanceID,
-		RequestID:       a.RequestID,
-		Kind:            string(ApprovalToolUse),
-		Payload:         payload,
-		MessageID:       messageID,
+		ID:        id,
+		TurnID:    turnID,
+		RoomID:    roomID,
+		ThreadID:  threadID,
+		MemberID:  memberID,
+		RequestID: a.RequestID,
+		Kind:      string(ApprovalToolUse),
+		Payload:   payload,
+		MessageID: messageID,
 	})
 	if err != nil {
-		return Approval{}, mapAgentError("create approval", err)
+		return Approval{}, mapPGError("create approval", err)
 	}
 	return toApproval(row)
 }
@@ -197,7 +197,7 @@ func (s *Store) DecideApproval(ctx context.Context, id string, out ApprovalOutco
 		return Approval{}, fmt.Errorf("approval %s: %w: already %s", id, ErrConflict, current.Status)
 	}
 	if err != nil {
-		return Approval{}, mapAgentError("decide approval", err)
+		return Approval{}, mapPGError("decide approval", err)
 	}
 	return toApproval(row)
 }
@@ -214,7 +214,7 @@ func (s *Store) ResolveTurnApprovals(ctx context.Context, turnID string, status 
 	}
 	rows, err := s.q.ResolveTurnApprovals(ctx, db.ResolveTurnApprovalsParams{TurnID: tid, Status: string(status), Message: message})
 	if err != nil {
-		return nil, mapAgentError("resolve approvals of turn "+turnID, err)
+		return nil, mapPGError("resolve approvals of turn "+turnID, err)
 	}
 	return toApprovals(rows)
 }
@@ -231,6 +231,32 @@ func (s *Store) ListPendingRoomApprovals(ctx context.Context, roomID string) ([]
 		return nil, fmt.Errorf("list pending approvals of room %s: %w", roomID, err)
 	}
 	return toApprovals(rows)
+}
+
+// PendingApproval is a request waiting for a person, with the names the
+// "for me" page shows next to it.
+type PendingApproval struct {
+	Approval
+	MemberName  string `json:"member_name"`
+	ProjectName string `json:"project_name"`
+}
+
+// ListPendingApprovals returns every pending approval across every room,
+// oldest first.
+func (s *Store) ListPendingApprovals(ctx context.Context) ([]PendingApproval, error) {
+	rows, err := s.q.ListPendingApprovals(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list pending approvals: %w", err)
+	}
+	out := make([]PendingApproval, 0, len(rows))
+	for _, row := range rows {
+		a, err := toApproval(row.Approval)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, PendingApproval{Approval: a, MemberName: row.MemberName, ProjectName: row.ProjectName})
+	}
+	return out, nil
 }
 
 // ListTurnApprovals returns every approval of a turn, oldest first.
@@ -280,20 +306,20 @@ func toApproval(row db.Approval) (Approval, error) {
 		payload.Input = compact.Bytes()
 	}
 	a := Approval{
-		ID:              uuidString(row.ID),
-		TurnID:          uuidString(row.TurnID),
-		RoomID:          uuidString(row.RoomID),
-		ThreadID:        uuidString(row.ThreadID),
-		AgentInstanceID: uuidString(row.AgentInstanceID),
-		RequestID:       row.RequestID,
-		Kind:            ApprovalKind(row.Kind),
-		Tool:            payload.Tool,
-		Input:           payload.Input,
-		Status:          ApprovalStatus(row.Status),
-		Message:         row.Message,
-		MessageID:       uuidString(row.MessageID),
-		DecidedBy:       uuidString(row.DecidedBy),
-		CreatedAt:       row.CreatedAt.Time,
+		ID:        uuidString(row.ID),
+		TurnID:    uuidString(row.TurnID),
+		RoomID:    uuidString(row.RoomID),
+		ThreadID:  uuidString(row.ThreadID),
+		MemberID:  uuidString(row.MemberID),
+		RequestID: row.RequestID,
+		Kind:      ApprovalKind(row.Kind),
+		Tool:      payload.Tool,
+		Input:     payload.Input,
+		Status:    ApprovalStatus(row.Status),
+		Message:   row.Message,
+		MessageID: uuidString(row.MessageID),
+		DecidedBy: uuidString(row.DecidedBy),
+		CreatedAt: row.CreatedAt.Time,
 	}
 	if row.DecidedAt.Valid {
 		decided := row.DecidedAt.Time

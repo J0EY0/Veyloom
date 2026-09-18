@@ -9,6 +9,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store/db"
 )
 
@@ -22,30 +23,44 @@ const (
 	TurnCancelled TurnStatus = "cancelled"
 )
 
-// Turn is one run of an agent instance's engine.
+// Turn is one run of a member's runtime.
 type Turn struct {
-	ID               string     `json:"id"`
-	AgentInstanceID  string     `json:"agent_instance_id"`
-	RoomID           string     `json:"room_id"`
-	ThreadID         string     `json:"thread_id"`
-	TriggerMessageID string     `json:"trigger_message_id,omitempty"`
-	WorkerID         string     `json:"worker_id"`
-	Status           TurnStatus `json:"status"`
-	Error            string     `json:"error,omitempty"`
-	ReplyMessageID   string     `json:"reply_message_id,omitempty"`
-	TranscriptPath   string     `json:"transcript_path,omitempty"`
-	StartedAt        time.Time  `json:"started_at"`
-	EndedAt          *time.Time `json:"ended_at,omitempty"`
+	ID               string `json:"id"`
+	MemberID         string `json:"member_id"`
+	RoomID           string `json:"room_id"`
+	ThreadID         string `json:"thread_id"`
+	TriggerMessageID string `json:"trigger_message_id,omitempty"`
+	MachineID        string `json:"machine_id"`
+	// SessionID is the member's session the turn ran in; empty for a turn
+	// that failed before it had one.
+	SessionID string `json:"session_id,omitempty"`
+	// Runtime is the runtime that ran the turn.
+	Runtime        string     `json:"runtime"`
+	Status         TurnStatus `json:"status"`
+	Error          string     `json:"error,omitempty"`
+	ReplyMessageID string     `json:"reply_message_id,omitempty"`
+	TranscriptPath string     `json:"transcript_path,omitempty"`
+	// Usage is the tokens the turn spent; zero until it ends.
+	Usage runtime.Usage `json:"usage"`
+	// FilesChanged are the files the turn wrote, each once, in the order
+	// first touched; known once it ends.
+	FilesChanged []string   `json:"files_changed,omitempty"`
+	StartedAt    time.Time  `json:"started_at"`
+	EndedAt      *time.Time `json:"ended_at,omitempty"`
 }
 
 // NewTurn is the input to CreateTurn.
 type NewTurn struct {
-	AgentInstanceID  string
+	MemberID         string
 	RoomID           string
 	ThreadID         string
 	TriggerMessageID string
-	WorkerID         string
-	TranscriptPath   string
+	MachineID        string
+	// Runtime is the runtime the turn runs on, as the agent names it.
+	Runtime        string
+	TranscriptPath string
+	// SessionID is the member's session the turn runs in, when it has one.
+	SessionID string
 }
 
 // TurnOutcome is the input to FinishTurn.
@@ -56,11 +71,15 @@ type TurnOutcome struct {
 	// TranscriptPath is where the event stream was written; recorded at
 	// the end because the file is named after the turn's id.
 	TranscriptPath string
+	// Usage is the tokens the turn spent, however it ended.
+	Usage runtime.Usage
+	// FilesChanged are the files the turn wrote.
+	FilesChanged []string
 }
 
 // CreateTurn records a turn that is starting, in status running.
 func (s *Store) CreateTurn(ctx context.Context, t NewTurn) (Turn, error) {
-	instanceID, err := parseUUID(t.AgentInstanceID)
+	memberID, err := parseUUID(t.MemberID)
 	if err != nil {
 		return Turn{}, err
 	}
@@ -72,7 +91,7 @@ func (s *Store) CreateTurn(ctx context.Context, t NewTurn) (Turn, error) {
 	if err != nil {
 		return Turn{}, err
 	}
-	workerID, err := parseUUID(t.WorkerID)
+	machineID, err := parseUUID(t.MachineID)
 	if err != nil {
 		return Turn{}, err
 	}
@@ -83,16 +102,25 @@ func (s *Store) CreateTurn(ctx context.Context, t NewTurn) (Turn, error) {
 		}
 	}
 
+	var sessionID pgtype.UUID
+	if t.SessionID != "" {
+		if sessionID, err = parseUUID(t.SessionID); err != nil {
+			return Turn{}, err
+		}
+	}
+
 	row, err := s.q.CreateTurn(ctx, db.CreateTurnParams{
-		AgentInstanceID:  instanceID,
+		MemberID:         memberID,
 		RoomID:           roomID,
 		ThreadID:         threadID,
 		TriggerMessageID: triggerID,
-		WorkerID:         workerID,
+		MachineID:        machineID,
+		Runtime:          t.Runtime,
 		TranscriptPath:   t.TranscriptPath,
+		SessionID:        sessionID,
 	})
 	if err != nil {
-		return Turn{}, mapAgentError("create turn", err)
+		return Turn{}, mapPGError("create turn", err)
 	}
 	return toTurn(row), nil
 }
@@ -110,19 +138,45 @@ func (s *Store) FinishTurn(ctx context.Context, id string, out TurnOutcome) (Tur
 		}
 	}
 	row, err := s.q.FinishTurn(ctx, db.FinishTurnParams{
-		ID:             uid,
-		Status:         string(out.Status),
-		Error:          out.Error,
-		ReplyMessageID: replyID,
-		TranscriptPath: out.TranscriptPath,
+		ID:               uid,
+		Status:           string(out.Status),
+		Error:            out.Error,
+		ReplyMessageID:   replyID,
+		TranscriptPath:   out.TranscriptPath,
+		InputTokens:      out.Usage.InputTokens,
+		CacheReadTokens:  out.Usage.CacheReadTokens,
+		CacheWriteTokens: out.Usage.CacheWriteTokens,
+		OutputTokens:     out.Usage.OutputTokens,
+		FilesChanged:     nonNil(out.FilesChanged),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Turn{}, fmt.Errorf("turn %s: %w", id, ErrNotFound)
 	}
 	if err != nil {
-		return Turn{}, mapAgentError("finish turn", err)
+		return Turn{}, mapPGError("finish turn", err)
 	}
 	return toTurn(row), nil
+}
+
+// SetTurnSession records that a turn ended up running in another session
+// than the one it started in.
+func (s *Store) SetTurnSession(ctx context.Context, turnID, sessionID string) error {
+	tid, err := parseUUID(turnID)
+	if err != nil {
+		return err
+	}
+	sid, err := parseUUID(sessionID)
+	if err != nil {
+		return err
+	}
+	n, err := s.q.SetTurnSession(ctx, db.SetTurnSessionParams{ID: tid, SessionID: sid})
+	if err != nil {
+		return mapPGError("set session of turn", err)
+	}
+	if n == 0 {
+		return fmt.Errorf("turn %s: %w", turnID, ErrNotFound)
+	}
+	return nil
 }
 
 // GetTurn returns one turn, or ErrNotFound.
@@ -158,18 +212,6 @@ func (s *Store) ListRoomTurns(ctx context.Context, roomID string, limit int) ([]
 	return out, nil
 }
 
-// UpdateAgentInstanceSession stores the engine session to resume next turn.
-func (s *Store) UpdateAgentInstanceSession(ctx context.Context, instanceID, sessionRef string) error {
-	uid, err := parseUUID(instanceID)
-	if err != nil {
-		return err
-	}
-	if err := s.q.UpdateAgentInstanceSession(ctx, db.UpdateAgentInstanceSessionParams{ID: uid, EngineSessionRef: sessionRef}); err != nil {
-		return fmt.Errorf("update session of agent instance %s: %w", instanceID, err)
-	}
-	return nil
-}
-
 // LastAgentMessageInThread returns the most recent agent reply in a thread,
 // or ErrNotFound when no agent has spoken there.
 func (s *Store) LastAgentMessageInThread(ctx context.Context, threadID string) (Message, error) {
@@ -187,18 +229,113 @@ func (s *Store) LastAgentMessageInThread(ctx context.Context, threadID string) (
 	return toMessage(row)
 }
 
+// ListRoomTurnsByStatus returns a room's most recent turns in one status,
+// newest first.
+func (s *Store) ListRoomTurnsByStatus(ctx context.Context, roomID string, status TurnStatus, limit int) ([]Turn, error) {
+	rid, err := parseUUID(roomID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.q.ListRoomTurnsByStatus(ctx, db.ListRoomTurnsByStatusParams{RoomID: rid, Status: string(status), Limit: clampLimit(limit)})
+	if err != nil {
+		return nil, fmt.Errorf("list %s turns of room %s: %w", status, roomID, err)
+	}
+	out := make([]Turn, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toTurn(row))
+	}
+	return out, nil
+}
+
+// FailRunningTurns marks every running turn failed with reason and cancels
+// the approvals still waiting on them. The hub calls it when it starts:
+// a turn left running by its last stop will never finish on its own.
+func (s *Store) FailRunningTurns(ctx context.Context, reason string) ([]Turn, error) {
+	rows, err := s.q.FailRunningTurns(ctx, reason)
+	if err != nil {
+		return nil, fmt.Errorf("fail running turns: %w", err)
+	}
+	out := make([]Turn, 0, len(rows))
+	for _, row := range rows {
+		turn := toTurn(row)
+		if _, err := s.ResolveTurnApprovals(ctx, turn.ID, ApprovalCancelled, reason); err != nil {
+			return nil, err
+		}
+		out = append(out, turn)
+	}
+	return out, nil
+}
+
+// RunningTopic is a topic with a turn in flight: what the sidebar lists
+// under a project while its members work there.
+type RunningTopic struct {
+	ThreadID      string `json:"thread_id"`
+	RoomID        string `json:"room_id"`
+	RootMessageID string `json:"root_message_id"`
+	RootBody      string `json:"root_body"`
+	// Members names the members working in it.
+	Members   []string  `json:"members"`
+	StartedAt time.Time `json:"started_at"`
+}
+
+// ListRunningTopics returns the topics with a running turn, across every
+// room, oldest first.
+func (s *Store) ListRunningTopics(ctx context.Context) ([]RunningTopic, error) {
+	rows, err := s.q.ListRunningTopics(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("list running topics: %w", err)
+	}
+	out := make([]RunningTopic, 0, len(rows))
+	for _, row := range rows {
+		members := row.Members
+		if members == nil {
+			members = []string{}
+		}
+		out = append(out, RunningTopic{
+			ThreadID:      uuidString(row.ThreadID),
+			RoomID:        uuidString(row.RoomID),
+			RootMessageID: uuidString(row.RootMessageID),
+			RootBody:      row.RootBody,
+			Members:       members,
+			StartedAt:     row.StartedAt.Time,
+		})
+	}
+	return out, nil
+}
+
+// ListThreadTurns returns every turn of a topic, oldest first.
+func (s *Store) ListThreadTurns(ctx context.Context, threadID string) ([]Turn, error) {
+	tid, err := parseUUID(threadID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.q.ListThreadTurns(ctx, tid)
+	if err != nil {
+		return nil, fmt.Errorf("list turns of thread %s: %w", threadID, err)
+	}
+	out := make([]Turn, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toTurn(row))
+	}
+	return out, nil
+}
+
 func toTurn(row db.Turn) Turn {
 	t := Turn{
 		ID:               uuidString(row.ID),
-		AgentInstanceID:  uuidString(row.AgentInstanceID),
+		MemberID:         uuidString(row.MemberID),
 		RoomID:           uuidString(row.RoomID),
 		ThreadID:         uuidString(row.ThreadID),
 		TriggerMessageID: uuidString(row.TriggerMessageID),
-		WorkerID:         uuidString(row.WorkerID),
+		MachineID:        uuidString(row.MachineID),
+		SessionID:        uuidString(row.SessionID),
+		Runtime:          row.Runtime,
 		Status:           TurnStatus(row.Status),
 		Error:            row.Error,
 		ReplyMessageID:   uuidString(row.ReplyMessageID),
 		TranscriptPath:   row.TranscriptPath,
+		Usage:            usageOf(row.InputTokens, row.CacheReadTokens, row.CacheWriteTokens, row.OutputTokens),
+		FilesChanged:     row.FilesChanged,
 		StartedAt:        row.StartedAt.Time,
 	}
 	if row.EndedAt.Valid {
@@ -206,4 +343,17 @@ func toTurn(row db.Turn) Turn {
 		t.EndedAt = &ended
 	}
 	return t
+}
+
+// nonNil is s, or an empty slice for the NOT NULL array column.
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
+}
+
+// usageOf is a turn's token columns as one Usage.
+func usageOf(input, cacheRead, cacheWrite, output int64) runtime.Usage {
+	return runtime.Usage{InputTokens: input, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite, OutputTokens: output}
 }

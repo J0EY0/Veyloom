@@ -14,7 +14,7 @@ func TestPipe_DeliversBothDirections(t *testing.T) {
 	if err := a.Send(ctx, Hello{Name: "from-a"}); err != nil {
 		t.Fatal(err)
 	}
-	if err := b.Send(ctx, Welcome{WorkerID: "from-b"}); err != nil {
+	if err := b.Send(ctx, Welcome{MachineID: "from-b"}); err != nil {
 		t.Fatal(err)
 	}
 
@@ -30,7 +30,7 @@ func TestPipe_DeliversBothDirections(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if welcome, ok := got.(Welcome); !ok || welcome.WorkerID != "from-b" {
+	if welcome, ok := got.(Welcome); !ok || welcome.MachineID != "from-b" {
 		t.Errorf("a received %#v, want Welcome from b", got)
 	}
 }

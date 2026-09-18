@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/J0EY0/veyloom/internal/engine"
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
@@ -16,7 +16,7 @@ const (
 	EventMessage EventKind = "message"
 	// EventTurnStarted carries a turn that was just dispatched.
 	EventTurnStarted EventKind = "turn_started"
-	// EventTurnEvent carries one engine event of a running turn.
+	// EventTurnEvent carries one runtime event of a running turn.
 	EventTurnEvent EventKind = "turn_event"
 	// EventTurnFinished carries a turn that reached a final status.
 	EventTurnFinished EventKind = "turn_finished"
@@ -33,11 +33,14 @@ type Event struct {
 	RoomID string    `json:"room_id"`
 	At     time.Time `json:"at"`
 
-	Message   *store.Message  `json:"message,omitempty"`
-	Turn      *store.Turn     `json:"turn,omitempty"`
-	TurnID    string          `json:"turn_id,omitempty"`
-	TurnEvent *engine.Event   `json:"turn_event,omitempty"`
-	Approval  *store.Approval `json:"approval,omitempty"`
+	Message *store.Message `json:"message,omitempty"`
+	// Thread accompanies the message event of a topic root: the thread
+	// the root heads, so replies and turns can be filed under it.
+	Thread    *store.ThreadSummary `json:"thread,omitempty"`
+	Turn      *store.Turn          `json:"turn,omitempty"`
+	TurnID    string               `json:"turn_id,omitempty"`
+	TurnEvent *runtime.Event       `json:"turn_event,omitempty"`
+	Approval  *store.Approval      `json:"approval,omitempty"`
 }
 
 // Subscription delivers a room's events to one consumer.
@@ -54,7 +57,7 @@ type Subscription interface {
 
 // subscriptionBuffer is how many events a subscriber may fall behind
 // before it is dropped. Publishing never blocks: the hub's connection
-// loops call it, and a slow WebSocket client must not stall a worker.
+// loops call it, and a slow WebSocket client must not stall a machine.
 const subscriptionBuffer = 256
 
 // broker fans events out to per-room subscribers.

@@ -11,191 +11,255 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const createAgentInstance = `-- name: CreateAgentInstance :one
-INSERT INTO agent_instances (room_id, template_id, worker_id, display_name, repo_path, branch_mode, model, permission_preset)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, room_id, template_id, worker_id, display_name, repo_path, branch_mode, model, permission_preset, engine_session_ref, enabled, created_at
+const countAgentsWithAvatar = `-- name: CountAgentsWithAvatar :one
+SELECT count(*) FROM agents WHERE avatar = $1
 `
 
-type CreateAgentInstanceParams struct {
+// How many agents show an avatar file, asked before the file is removed.
+func (q *Queries) CountAgentsWithAvatar(ctx context.Context, avatar string) (int64, error) {
+	row := q.db.QueryRow(ctx, countAgentsWithAvatar, avatar)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const createAgent = `-- name: CreateAgent :one
+INSERT INTO agents (name, avatar, machine_id, runtime, model, role_card, permission_preset, runtime_options)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+RETURNING id
+`
+
+type CreateAgentParams struct {
+	Name             string
+	Avatar           string
+	MachineID        pgtype.UUID
+	Runtime          string
+	Model            string
+	RoleCard         string
+	PermissionPreset string
+	RuntimeOptions   []byte
+}
+
+func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, createAgent,
+		arg.Name,
+		arg.Avatar,
+		arg.MachineID,
+		arg.Runtime,
+		arg.Model,
+		arg.RoleCard,
+		arg.PermissionPreset,
+		arg.RuntimeOptions,
+	)
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const createMember = `-- name: CreateMember :one
+INSERT INTO members (room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, created_at)
+SELECT $1, ag.id, ag.machine_id, coalesce(nullif($2::text, ''), ag.name), $3, $4, $5, $6, clock_timestamp()
+FROM agents AS ag
+WHERE ag.id = $7
+RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, enabled, created_at, removed_at
+`
+
+type CreateMemberParams struct {
 	RoomID           pgtype.UUID
-	TemplateID       pgtype.UUID
-	WorkerID         pgtype.UUID
 	DisplayName      string
 	RepoPath         string
 	BranchMode       string
 	Model            string
 	PermissionPreset string
+	AgentID          pgtype.UUID
 }
 
-func (q *Queries) CreateAgentInstance(ctx context.Context, arg CreateAgentInstanceParams) (AgentInstance, error) {
-	row := q.db.QueryRow(ctx, createAgentInstance,
+// A member runs on the machine its agent is set up on and, unless given
+// one, goes by the agent's name. created_at is the clock, not the
+// transaction's start: members a project starts with join together, and
+// the list keeps the order they joined in even after their rows change.
+func (q *Queries) CreateMember(ctx context.Context, arg CreateMemberParams) (Member, error) {
+	row := q.db.QueryRow(ctx, createMember,
 		arg.RoomID,
-		arg.TemplateID,
-		arg.WorkerID,
 		arg.DisplayName,
 		arg.RepoPath,
 		arg.BranchMode,
 		arg.Model,
 		arg.PermissionPreset,
+		arg.AgentID,
 	)
-	var i AgentInstance
+	var i Member
 	err := row.Scan(
 		&i.ID,
 		&i.RoomID,
-		&i.TemplateID,
-		&i.WorkerID,
+		&i.AgentID,
+		&i.MachineID,
 		&i.DisplayName,
 		&i.RepoPath,
 		&i.BranchMode,
 		&i.Model,
 		&i.PermissionPreset,
-		&i.EngineSessionRef,
 		&i.Enabled,
 		&i.CreatedAt,
+		&i.RemovedAt,
 	)
 	return i, err
 }
 
-const createAgentTemplate = `-- name: CreateAgentTemplate :one
-INSERT INTO agent_templates (name, engine, model, role_card, permission_preset, engine_options, builtin)
-VALUES ($1, $2, $3, $4, $5, $6, false)
-RETURNING id, name, engine, model, role_card, permission_preset, engine_options, builtin, created_at, updated_at
+const deleteAgent = `-- name: DeleteAgent :execrows
+DELETE FROM agents WHERE id = $1
 `
 
-type CreateAgentTemplateParams struct {
-	Name             string
-	Engine           string
-	Model            string
-	RoleCard         string
-	PermissionPreset string
-	EngineOptions    []byte
+// Members already taken out of their projects lose the link; a current
+// member makes members_current_have_agent refuse the delete.
+func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAgent, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
-func (q *Queries) CreateAgentTemplate(ctx context.Context, arg CreateAgentTemplateParams) (AgentTemplate, error) {
-	row := q.db.QueryRow(ctx, createAgentTemplate,
-		arg.Name,
-		arg.Engine,
-		arg.Model,
-		arg.RoleCard,
-		arg.PermissionPreset,
-		arg.EngineOptions,
-	)
-	var i AgentTemplate
+const getAgent = `-- name: GetAgent :one
+SELECT ag.id, ag.name, ag.avatar, ag.machine_id, ag.runtime, ag.model, ag.role_card, ag.permission_preset, ag.runtime_options, ag.created_at, ag.updated_at, m.name AS machine_name,
+       coalesce(array_agg(DISTINCT p.name ORDER BY p.name) FILTER (WHERE p.name IS NOT NULL), '{}')::text[] AS projects
+FROM agents ag
+JOIN machines m ON m.id = ag.machine_id
+LEFT JOIN members mb ON mb.agent_id = ag.id AND mb.removed_at IS NULL
+LEFT JOIN rooms r ON r.id = mb.room_id
+LEFT JOIN projects p ON p.id = r.project_id
+WHERE ag.id = $1
+GROUP BY ag.id, m.name
+`
+
+type GetAgentRow struct {
+	Agent       Agent
+	MachineName string
+	Projects    []string
+}
+
+// An agent with the name of its machine and the projects it is a current
+// member of.
+func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (GetAgentRow, error) {
+	row := q.db.QueryRow(ctx, getAgent, id)
+	var i GetAgentRow
 	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Engine,
-		&i.Model,
-		&i.RoleCard,
-		&i.PermissionPreset,
-		&i.EngineOptions,
-		&i.Builtin,
-		&i.CreatedAt,
-		&i.UpdatedAt,
+		&i.Agent.ID,
+		&i.Agent.Name,
+		&i.Agent.Avatar,
+		&i.Agent.MachineID,
+		&i.Agent.Runtime,
+		&i.Agent.Model,
+		&i.Agent.RoleCard,
+		&i.Agent.PermissionPreset,
+		&i.Agent.RuntimeOptions,
+		&i.Agent.CreatedAt,
+		&i.Agent.UpdatedAt,
+		&i.MachineName,
+		&i.Projects,
 	)
 	return i, err
 }
 
-const ensureBuiltinAgentTemplate = `-- name: EnsureBuiltinAgentTemplate :exec
-INSERT INTO agent_templates (name, engine, model, role_card, permission_preset, engine_options, builtin)
-VALUES ($1, $2, $3, $4, $5, $6, true)
-ON CONFLICT (name) DO NOTHING
+const getMember = `-- name: GetMember :one
+SELECT id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, enabled, created_at, removed_at FROM members WHERE id = $1
 `
 
-type EnsureBuiltinAgentTemplateParams struct {
-	Name             string
-	Engine           string
-	Model            string
-	RoleCard         string
-	PermissionPreset string
-	EngineOptions    []byte
-}
-
-// Seeds a shipped template unless one with that name already exists, so
-// user edits to builtins survive restarts.
-func (q *Queries) EnsureBuiltinAgentTemplate(ctx context.Context, arg EnsureBuiltinAgentTemplateParams) error {
-	_, err := q.db.Exec(ctx, ensureBuiltinAgentTemplate,
-		arg.Name,
-		arg.Engine,
-		arg.Model,
-		arg.RoleCard,
-		arg.PermissionPreset,
-		arg.EngineOptions,
-	)
-	return err
-}
-
-const getAgentInstance = `-- name: GetAgentInstance :one
-SELECT id, room_id, template_id, worker_id, display_name, repo_path, branch_mode, model, permission_preset, engine_session_ref, enabled, created_at FROM agent_instances WHERE id = $1
-`
-
-func (q *Queries) GetAgentInstance(ctx context.Context, id pgtype.UUID) (AgentInstance, error) {
-	row := q.db.QueryRow(ctx, getAgentInstance, id)
-	var i AgentInstance
+func (q *Queries) GetMember(ctx context.Context, id pgtype.UUID) (Member, error) {
+	row := q.db.QueryRow(ctx, getMember, id)
+	var i Member
 	err := row.Scan(
 		&i.ID,
 		&i.RoomID,
-		&i.TemplateID,
-		&i.WorkerID,
+		&i.AgentID,
+		&i.MachineID,
 		&i.DisplayName,
 		&i.RepoPath,
 		&i.BranchMode,
 		&i.Model,
 		&i.PermissionPreset,
-		&i.EngineSessionRef,
 		&i.Enabled,
 		&i.CreatedAt,
+		&i.RemovedAt,
 	)
 	return i, err
 }
 
-const getAgentTemplate = `-- name: GetAgentTemplate :one
-SELECT id, name, engine, model, role_card, permission_preset, engine_options, builtin, created_at, updated_at FROM agent_templates WHERE id = $1
+const listAgentProjects = `-- name: ListAgentProjects :many
+SELECT DISTINCT p.name
+FROM members mb
+JOIN rooms r ON r.id = mb.room_id
+JOIN projects p ON p.id = r.project_id
+WHERE mb.agent_id = $1 AND mb.removed_at IS NULL
+ORDER BY p.name
 `
 
-func (q *Queries) GetAgentTemplate(ctx context.Context, id pgtype.UUID) (AgentTemplate, error) {
-	row := q.db.QueryRow(ctx, getAgentTemplate, id)
-	var i AgentTemplate
-	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.Engine,
-		&i.Model,
-		&i.RoleCard,
-		&i.PermissionPreset,
-		&i.EngineOptions,
-		&i.Builtin,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-	)
-	return i, err
-}
-
-const listAgentTemplates = `-- name: ListAgentTemplates :many
-SELECT id, name, engine, model, role_card, permission_preset, engine_options, builtin, created_at, updated_at FROM agent_templates ORDER BY builtin DESC, name
-`
-
-func (q *Queries) ListAgentTemplates(ctx context.Context) ([]AgentTemplate, error) {
-	rows, err := q.db.Query(ctx, listAgentTemplates)
+// The projects where the agent is still a current member, for telling
+// someone where to take it out before deleting it.
+func (q *Queries) ListAgentProjects(ctx context.Context, agentID pgtype.UUID) ([]string, error) {
+	rows, err := q.db.Query(ctx, listAgentProjects, agentID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []AgentTemplate
+	var items []string
 	for rows.Next() {
-		var i AgentTemplate
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, err
+		}
+		items = append(items, name)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listAgents = `-- name: ListAgents :many
+SELECT ag.id, ag.name, ag.avatar, ag.machine_id, ag.runtime, ag.model, ag.role_card, ag.permission_preset, ag.runtime_options, ag.created_at, ag.updated_at, m.name AS machine_name,
+       coalesce(array_agg(DISTINCT p.name ORDER BY p.name) FILTER (WHERE p.name IS NOT NULL), '{}')::text[] AS projects
+FROM agents ag
+JOIN machines m ON m.id = ag.machine_id
+LEFT JOIN members mb ON mb.agent_id = ag.id AND mb.removed_at IS NULL
+LEFT JOIN rooms r ON r.id = mb.room_id
+LEFT JOIN projects p ON p.id = r.project_id
+GROUP BY ag.id, m.name
+ORDER BY ag.created_at, ag.name
+`
+
+type ListAgentsRow struct {
+	Agent       Agent
+	MachineName string
+	Projects    []string
+}
+
+// Oldest first: the web UI's default sort is "as added", and the page
+// lets you reorder by name or by last edit. Each with its machine's name
+// and the projects it is a current member of.
+func (q *Queries) ListAgents(ctx context.Context) ([]ListAgentsRow, error) {
+	rows, err := q.db.Query(ctx, listAgents)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListAgentsRow
+	for rows.Next() {
+		var i ListAgentsRow
 		if err := rows.Scan(
-			&i.ID,
-			&i.Name,
-			&i.Engine,
-			&i.Model,
-			&i.RoleCard,
-			&i.PermissionPreset,
-			&i.EngineOptions,
-			&i.Builtin,
-			&i.CreatedAt,
-			&i.UpdatedAt,
+			&i.Agent.ID,
+			&i.Agent.Name,
+			&i.Agent.Avatar,
+			&i.Agent.MachineID,
+			&i.Agent.Runtime,
+			&i.Agent.Model,
+			&i.Agent.RoleCard,
+			&i.Agent.PermissionPreset,
+			&i.Agent.RuntimeOptions,
+			&i.Agent.CreatedAt,
+			&i.Agent.UpdatedAt,
+			&i.MachineName,
+			&i.Projects,
 		); err != nil {
 			return nil, err
 		}
@@ -207,32 +271,119 @@ func (q *Queries) ListAgentTemplates(ctx context.Context) ([]AgentTemplate, erro
 	return items, nil
 }
 
-const listRoomAgentInstances = `-- name: ListRoomAgentInstances :many
-SELECT id, room_id, template_id, worker_id, display_name, repo_path, branch_mode, model, permission_preset, engine_session_ref, enabled, created_at FROM agent_instances WHERE room_id = $1 ORDER BY created_at
+const listMachineMembers = `-- name: ListMachineMembers :many
+SELECT mb.id, mb.room_id, mb.agent_id, mb.machine_id, mb.display_name, mb.repo_path, mb.branch_mode, mb.model, mb.permission_preset, mb.enabled, mb.created_at, mb.removed_at,
+       p.id AS project_id,
+       p.name AS project_name,
+       running.id AS turn_id,
+       running.thread_id AS turn_thread_id,
+       running.started_at AS turn_started_at,
+       pending.id AS approval_id,
+       pending.payload AS approval_payload
+FROM members mb
+JOIN rooms r ON r.id = mb.room_id
+JOIN projects p ON p.id = r.project_id
+LEFT JOIN LATERAL (
+    SELECT t.id, t.thread_id, t.started_at
+    FROM turns t
+    WHERE t.member_id = mb.id AND t.status = 'running'
+    ORDER BY t.started_at DESC
+    LIMIT 1
+) running ON true
+LEFT JOIN LATERAL (
+    SELECT ap.id, ap.payload
+    FROM approvals ap
+    WHERE ap.member_id = mb.id AND ap.status = 'pending'
+    ORDER BY ap.created_at
+    LIMIT 1
+) pending ON true
+WHERE mb.machine_id = $1 AND mb.removed_at IS NULL
+ORDER BY p.name, mb.created_at
 `
 
-func (q *Queries) ListRoomAgentInstances(ctx context.Context, roomID pgtype.UUID) ([]AgentInstance, error) {
-	rows, err := q.db.Query(ctx, listRoomAgentInstances, roomID)
+type ListMachineMembersRow struct {
+	Member          Member
+	ProjectID       pgtype.UUID
+	ProjectName     string
+	TurnID          pgtype.UUID
+	TurnThreadID    pgtype.UUID
+	TurnStartedAt   pgtype.Timestamptz
+	ApprovalID      pgtype.UUID
+	ApprovalPayload []byte
+}
+
+// The current members a machine runs, across every project: the project
+// each is in, its turn in flight if it has one, and the oldest request of
+// its that waits for a person.
+func (q *Queries) ListMachineMembers(ctx context.Context, machineID pgtype.UUID) ([]ListMachineMembersRow, error) {
+	rows, err := q.db.Query(ctx, listMachineMembers, machineID)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []AgentInstance
+	var items []ListMachineMembersRow
 	for rows.Next() {
-		var i AgentInstance
+		var i ListMachineMembersRow
+		if err := rows.Scan(
+			&i.Member.ID,
+			&i.Member.RoomID,
+			&i.Member.AgentID,
+			&i.Member.MachineID,
+			&i.Member.DisplayName,
+			&i.Member.RepoPath,
+			&i.Member.BranchMode,
+			&i.Member.Model,
+			&i.Member.PermissionPreset,
+			&i.Member.Enabled,
+			&i.Member.CreatedAt,
+			&i.Member.RemovedAt,
+			&i.ProjectID,
+			&i.ProjectName,
+			&i.TurnID,
+			&i.TurnThreadID,
+			&i.TurnStartedAt,
+			&i.ApprovalID,
+			&i.ApprovalPayload,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoomMembers = `-- name: ListRoomMembers :many
+SELECT id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, enabled, created_at, removed_at FROM members WHERE room_id = $1 ORDER BY created_at
+`
+
+// Every member the room has had, including those taken out of the project:
+// their messages and turns still need their names. Whoever wants only the
+// current members skips the rows with removed_at set.
+func (q *Queries) ListRoomMembers(ctx context.Context, roomID pgtype.UUID) ([]Member, error) {
+	rows, err := q.db.Query(ctx, listRoomMembers, roomID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Member
+	for rows.Next() {
+		var i Member
 		if err := rows.Scan(
 			&i.ID,
 			&i.RoomID,
-			&i.TemplateID,
-			&i.WorkerID,
+			&i.AgentID,
+			&i.MachineID,
 			&i.DisplayName,
 			&i.RepoPath,
 			&i.BranchMode,
 			&i.Model,
 			&i.PermissionPreset,
-			&i.EngineSessionRef,
 			&i.Enabled,
 			&i.CreatedAt,
+			&i.RemovedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -244,65 +395,132 @@ func (q *Queries) ListRoomAgentInstances(ctx context.Context, roomID pgtype.UUID
 	return items, nil
 }
 
-const updateAgentInstanceSession = `-- name: UpdateAgentInstanceSession :exec
-UPDATE agent_instances SET engine_session_ref = $2 WHERE id = $1
+const removeMember = `-- name: RemoveMember :one
+UPDATE members AS mb
+SET removed_at = now()
+WHERE mb.id = $1
+  AND mb.removed_at IS NULL
+  AND NOT EXISTS (SELECT 1 FROM turns AS t WHERE t.member_id = mb.id AND t.status = 'running')
+RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, enabled, created_at, removed_at
 `
 
-type UpdateAgentInstanceSessionParams struct {
-	ID               pgtype.UUID
-	EngineSessionRef string
+// Takes a member out of its project unless one of its turns is still
+// running. The row stays for the history that points at it.
+func (q *Queries) RemoveMember(ctx context.Context, id pgtype.UUID) (Member, error) {
+	row := q.db.QueryRow(ctx, removeMember, id)
+	var i Member
+	err := row.Scan(
+		&i.ID,
+		&i.RoomID,
+		&i.AgentID,
+		&i.MachineID,
+		&i.DisplayName,
+		&i.RepoPath,
+		&i.BranchMode,
+		&i.Model,
+		&i.PermissionPreset,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.RemovedAt,
+	)
+	return i, err
 }
 
-func (q *Queries) UpdateAgentInstanceSession(ctx context.Context, arg UpdateAgentInstanceSessionParams) error {
-	_, err := q.db.Exec(ctx, updateAgentInstanceSession, arg.ID, arg.EngineSessionRef)
-	return err
-}
-
-const updateAgentTemplate = `-- name: UpdateAgentTemplate :one
-UPDATE agent_templates SET
-    name              = $2,
-    engine            = $3,
-    model             = $4,
-    role_card         = $5,
-    permission_preset = $6,
-    engine_options    = $7,
+const updateAgent = `-- name: UpdateAgent :one
+UPDATE agents AS ag SET
+    name              = $1,
+    avatar            = $2,
+    machine_id        = $3,
+    runtime           = $4,
+    model             = $5,
+    role_card         = $6,
+    permission_preset = $7,
+    runtime_options   = $8,
     updated_at        = now()
-WHERE id = $1
-RETURNING id, name, engine, model, role_card, permission_preset, engine_options, builtin, created_at, updated_at
+WHERE ag.id = $9
+  AND (ag.machine_id = $3
+       OR NOT EXISTS (SELECT 1 FROM members AS mb WHERE mb.agent_id = ag.id AND mb.removed_at IS NULL))
+RETURNING ag.id
 `
 
-type UpdateAgentTemplateParams struct {
-	ID               pgtype.UUID
+type UpdateAgentParams struct {
 	Name             string
-	Engine           string
+	Avatar           string
+	MachineID        pgtype.UUID
+	Runtime          string
 	Model            string
 	RoleCard         string
 	PermissionPreset string
-	EngineOptions    []byte
+	RuntimeOptions   []byte
+	ID               pgtype.UUID
 }
 
-func (q *Queries) UpdateAgentTemplate(ctx context.Context, arg UpdateAgentTemplateParams) (AgentTemplate, error) {
-	row := q.db.QueryRow(ctx, updateAgentTemplate,
-		arg.ID,
+// Replaces every editable field. The machine changes only while the agent
+// is a member of no project, since its members run there; no row back is
+// an unknown agent or a move refused.
+func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (pgtype.UUID, error) {
+	row := q.db.QueryRow(ctx, updateAgent,
 		arg.Name,
-		arg.Engine,
+		arg.Avatar,
+		arg.MachineID,
+		arg.Runtime,
 		arg.Model,
 		arg.RoleCard,
 		arg.PermissionPreset,
-		arg.EngineOptions,
+		arg.RuntimeOptions,
+		arg.ID,
 	)
-	var i AgentTemplate
+	var id pgtype.UUID
+	err := row.Scan(&id)
+	return id, err
+}
+
+const updateMember = `-- name: UpdateMember :one
+UPDATE members
+SET display_name      = coalesce($2, display_name),
+    model             = coalesce($3, model),
+    permission_preset = coalesce($4, permission_preset),
+    repo_path         = coalesce($5, repo_path),
+    enabled           = coalesce($6, enabled)
+WHERE id = $1 AND removed_at IS NULL
+RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, enabled, created_at, removed_at
+`
+
+type UpdateMemberParams struct {
+	ID               pgtype.UUID
+	DisplayName      pgtype.Text
+	Model            pgtype.Text
+	PermissionPreset pgtype.Text
+	RepoPath         pgtype.Text
+	Enabled          pgtype.Bool
+}
+
+// Changes the fields a person may edit after adding a member; a NULL
+// argument keeps the current value. A member taken out of its project is
+// not edited any more.
+func (q *Queries) UpdateMember(ctx context.Context, arg UpdateMemberParams) (Member, error) {
+	row := q.db.QueryRow(ctx, updateMember,
+		arg.ID,
+		arg.DisplayName,
+		arg.Model,
+		arg.PermissionPreset,
+		arg.RepoPath,
+		arg.Enabled,
+	)
+	var i Member
 	err := row.Scan(
 		&i.ID,
-		&i.Name,
-		&i.Engine,
+		&i.RoomID,
+		&i.AgentID,
+		&i.MachineID,
+		&i.DisplayName,
+		&i.RepoPath,
+		&i.BranchMode,
 		&i.Model,
-		&i.RoleCard,
 		&i.PermissionPreset,
-		&i.EngineOptions,
-		&i.Builtin,
+		&i.Enabled,
 		&i.CreatedAt,
-		&i.UpdatedAt,
+		&i.RemovedAt,
 	)
 	return i, err
 }

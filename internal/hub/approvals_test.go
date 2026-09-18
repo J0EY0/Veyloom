@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/J0EY0/veyloom/internal/engine"
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
@@ -37,12 +37,12 @@ func (l *loop) approval(id string) store.Approval {
 
 func TestLoop_ApprovalAllowedRunsTheCommand(t *testing.T) {
 	l := newLoop(t)
-	careful := l.agent("Careful", map[string]any{"approval": true, "reply": "built"})
+	careful := l.member("Careful", map[string]any{"approval": true, "reply": "built"})
 	msg := l.say("@Careful build it", "", careful)
-	thread, _ := l.s.ThreadForMessage(l.ctx, msg.ID)
+	thread := l.topic(msg)
 
 	a := l.waitApproval()
-	if a.Tool != "Bash" || string(a.Input) != `{"command":"make test"}` || a.AgentInstanceID != careful.ID || a.ThreadID != thread.ID {
+	if a.Tool != "Bash" || string(a.Input) != `{"command":"make test"}` || a.MemberID != careful.ID || a.ThreadID != thread.ID {
 		t.Fatalf("unexpected approval: %+v", a)
 	}
 	// The request is announced in the thread and the post is linked.
@@ -57,7 +57,7 @@ func TestLoop_ApprovalAllowedRunsTheCommand(t *testing.T) {
 		t.Error("the turn waits while the approval is pending")
 	}
 
-	decided, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, engine.Decision{Allow: true})
+	decided, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -66,12 +66,13 @@ func TestLoop_ApprovalAllowedRunsTheCommand(t *testing.T) {
 	}
 
 	turns := l.waitTurns(1, store.TurnDone, "the turn to finish after approval")
-	if replies := l.replies(thread.ID, store.SenderAgent); len(replies) != 1 || replies[0].Body != "built" {
-		t.Errorf("expected the reply after the allowed command, got %+v", replies)
+	if root := l.root(thread); root.Body != "built" {
+		t.Errorf("expected the reply after the allowed command in the root, got %+v", root)
 	}
+	// The decision rewrites the request note: one line per request.
 	notes = l.replies(thread.ID, store.SenderSystem)
-	if len(notes) != 2 || !strings.Contains(notes[1].Body, "alice allowed Careful to run `make test`") {
-		t.Errorf("expected a note about the decision, got %+v", notes)
+	if len(notes) != 1 || notes[0].ID != a.MessageID || !strings.Contains(notes[0].Body, "alice allowed Careful to run `make test`") {
+		t.Errorf("expected the request note rewritten with the decision, got %+v", notes)
 	}
 	data, _ := os.ReadFile(turns[0].TranscriptPath)
 	if !strings.Contains(string(data), `"kind":"approval_request"`) || !strings.Contains(string(data), `"kind":"approval_decision"`) || !strings.Contains(string(data), `"status":"allowed"`) {
@@ -84,31 +85,36 @@ func TestLoop_ApprovalAllowedRunsTheCommand(t *testing.T) {
 
 func TestLoop_ApprovalDeniedReachesTheAgent(t *testing.T) {
 	l := newLoop(t)
-	careful := l.agent("Careful", map[string]any{"approval": true})
+	careful := l.member("Careful", map[string]any{"approval": true})
 	msg := l.say("@Careful build it", "", careful)
-	thread, _ := l.s.ThreadForMessage(l.ctx, msg.ID)
+	thread := l.topic(msg)
 	a := l.waitApproval()
 
-	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, engine.Decision{Allow: false, Message: "not on main"}); err != nil {
+	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: false, Message: "not on main"}); err != nil {
 		t.Fatal(err)
 	}
 
 	l.waitTurns(1, store.TurnDone, "the turn to finish after denial")
-	replies := l.replies(thread.ID, store.SenderAgent)
-	if len(replies) != 1 || replies[0].Body != "Denied: not on main" {
-		t.Errorf("the agent should see the denial message, got %+v", replies)
+	if root := l.root(thread); root.Body != "Denied: not on main" {
+		t.Errorf("the agent should see the denial message, got %+v", root)
 	}
 	notes := l.replies(thread.ID, store.SenderSystem)
-	if len(notes) != 2 || !strings.Contains(notes[1].Body, "alice denied Careful running `make test`: not on main") {
-		t.Errorf("expected a note about the denial, got %+v", notes)
+	if len(notes) != 1 || !strings.Contains(notes[0].Body, "alice denied Careful running `make test`: not on main") {
+		t.Errorf("expected the request note rewritten with the denial, got %+v", notes)
 	}
 	// The note is posted before the decision reaches the agent, so it
-	// always reads in order: request, decision, reply.
-	if len(notes) == 2 && len(replies) == 1 && notes[1].Seq > replies[0].Seq {
-		t.Error("the decision note should precede the agent's reply")
+	// always reads in order: request, decision, then the closing message
+	// the agent posts once it has answered.
+	top := l.topLevel()
+	closing := top[len(top)-1]
+	if closing.SenderKind != store.SenderAgent || closing.Body != "@alice Denied: not on main" {
+		t.Errorf("expected a closing message with the denial, got %+v", closing)
+	}
+	if len(notes) == 1 && notes[0].Seq > closing.Seq {
+		t.Error("the decision note should precede the agent's closing message")
 	}
 	// Only the first decision counts.
-	_, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, engine.Decision{Allow: true})
+	_, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true})
 	if !errors.Is(err, store.ErrConflict) {
 		t.Errorf("second decision: got %v, want ErrConflict", err)
 	}
@@ -119,29 +125,29 @@ func TestLoop_ApprovalDeniedReachesTheAgent(t *testing.T) {
 
 func TestLoop_ApprovalExpiresIntoDenial(t *testing.T) {
 	l := newLoopWith(t, Config{ApprovalTimeout: 100 * time.Millisecond})
-	careful := l.agent("Careful", map[string]any{"approval": true})
+	careful := l.member("Careful", map[string]any{"approval": true})
 	msg := l.say("@Careful build it", "", careful)
-	thread, _ := l.s.ThreadForMessage(l.ctx, msg.ID)
+	thread := l.topic(msg)
 	a := l.waitApproval()
 
 	l.waitTurns(1, store.TurnDone, "the turn to finish after the approval expired")
 	if got := l.approval(a.ID); got.Status != store.ApprovalExpired || got.DecidedBy != "" || got.DecidedAt == nil {
 		t.Errorf("approval = %+v", got)
 	}
-	if replies := l.replies(thread.ID, store.SenderAgent); len(replies) != 1 || !strings.Contains(replies[0].Body, "Denied: approval timed out") {
-		t.Errorf("the agent should see the timeout as a denial, got %+v", replies)
+	if root := l.root(thread); !strings.Contains(root.Body, "Denied: approval timed out") {
+		t.Errorf("the agent should see the timeout as a denial, got %+v", root)
 	}
-	if notes := l.replies(thread.ID, store.SenderSystem); len(notes) != 2 || !strings.Contains(notes[1].Body, "expired") {
-		t.Errorf("expected a note about the expiry, got %+v", notes)
+	if notes := l.replies(thread.ID, store.SenderSystem); len(notes) != 1 || !strings.Contains(notes[0].Body, "expired") {
+		t.Errorf("expected the request note rewritten with the expiry, got %+v", notes)
 	}
-	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, engine.Decision{Allow: true}); !errors.Is(err, store.ErrConflict) {
+	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true}); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("deciding an expired approval: got %v, want ErrConflict", err)
 	}
 }
 
 func TestLoop_CancelWhileApprovalPending(t *testing.T) {
 	l := newLoop(t)
-	careful := l.agent("Careful", map[string]any{"approval": true})
+	careful := l.member("Careful", map[string]any{"approval": true})
 	l.say("@Careful build it", "", careful)
 	a := l.waitApproval()
 
@@ -153,7 +159,7 @@ func TestLoop_CancelWhileApprovalPending(t *testing.T) {
 	if got := l.approval(a.ID); got.Status != store.ApprovalCancelled {
 		t.Errorf("approval = %+v, want cancelled", got)
 	}
-	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, engine.Decision{Allow: true}); !errors.Is(err, store.ErrConflict) {
+	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true}); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("deciding a cancelled approval: got %v, want ErrConflict", err)
 	}
 	data, _ := os.ReadFile(turns[0].TranscriptPath)
@@ -164,11 +170,11 @@ func TestLoop_CancelWhileApprovalPending(t *testing.T) {
 
 func TestLoop_DecideUnknownApproval(t *testing.T) {
 	l := newLoop(t)
-	_, err := l.h.DecideApproval(l.ctx, store.NewID(), l.user.ID, engine.Decision{Allow: true})
+	_, err := l.h.DecideApproval(l.ctx, store.NewID(), l.user.ID, runtime.Decision{Allow: true})
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("got %v, want ErrNotFound", err)
 	}
-	_, err = l.h.DecideApproval(l.ctx, "nope", l.user.ID, engine.Decision{Allow: true})
+	_, err = l.h.DecideApproval(l.ctx, "nope", l.user.ID, runtime.Decision{Allow: true})
 	if !errors.Is(err, store.ErrInvalidID) {
 		t.Errorf("got %v, want ErrInvalidID", err)
 	}

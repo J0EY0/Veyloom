@@ -12,7 +12,7 @@ import (
 )
 
 const getThread = `-- name: GetThread :one
-SELECT id, room_id, root_message_id, created_at FROM threads WHERE id = $1
+SELECT id, room_id, root_message_id, number, created_at FROM threads WHERE id = $1
 `
 
 func (q *Queries) GetThread(ctx context.Context, id pgtype.UUID) (Thread, error) {
@@ -22,16 +22,39 @@ func (q *Queries) GetThread(ctx context.Context, id pgtype.UUID) (Thread, error)
 		&i.ID,
 		&i.RoomID,
 		&i.RootMessageID,
+		&i.Number,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getThreadByRoot = `-- name: GetThreadByRoot :one
+SELECT id, room_id, root_message_id, number, created_at FROM threads WHERE root_message_id = $1
+`
+
+func (q *Queries) GetThreadByRoot(ctx context.Context, rootMessageID pgtype.UUID) (Thread, error) {
+	row := q.db.QueryRow(ctx, getThreadByRoot, rootMessageID)
+	var i Thread
+	err := row.Scan(
+		&i.ID,
+		&i.RoomID,
+		&i.RootMessageID,
+		&i.Number,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const upsertThread = `-- name: UpsertThread :one
-INSERT INTO threads (room_id, root_message_id)
-VALUES ($1, $2)
+WITH next AS (
+    UPDATE rooms SET last_thread_number = last_thread_number + 1
+    WHERE rooms.id = $1
+    RETURNING last_thread_number
+)
+INSERT INTO threads (room_id, root_message_id, number)
+SELECT $1, $2, next.last_thread_number FROM next
 ON CONFLICT (root_message_id) DO UPDATE SET root_message_id = EXCLUDED.root_message_id
-RETURNING id, room_id, root_message_id, created_at
+RETURNING id, room_id, root_message_id, number, created_at
 `
 
 type UpsertThreadParams struct {
@@ -39,8 +62,11 @@ type UpsertThreadParams struct {
 	RootMessageID pgtype.UUID
 }
 
-// Creates the thread rooted at a message, or returns the existing one. The
-// no-op update makes RETURNING yield the row in both cases.
+// Creates the thread rooted at a message, numbered after the room's last,
+// or returns the existing one: the no-op update makes RETURNING yield the
+// row in both cases. When the thread was already there the number taken
+// here goes unused, so callers look the thread up first and come here only
+// to create it; losing a race to another creator costs a gap, no more.
 func (q *Queries) UpsertThread(ctx context.Context, arg UpsertThreadParams) (Thread, error) {
 	row := q.db.QueryRow(ctx, upsertThread, arg.RoomID, arg.RootMessageID)
 	var i Thread
@@ -48,6 +74,7 @@ func (q *Queries) UpsertThread(ctx context.Context, arg UpsertThreadParams) (Thr
 		&i.ID,
 		&i.RoomID,
 		&i.RootMessageID,
+		&i.Number,
 		&i.CreatedAt,
 	)
 	return i, err

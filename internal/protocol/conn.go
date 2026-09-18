@@ -11,7 +11,7 @@ import (
 var ErrClosed = errors.New("protocol: connection closed")
 
 // Conn is a bidirectional, message-oriented connection between a hub and a
-// worker. Implementations must allow Send and Recv to run concurrently, and
+// machine. Implementations must allow Send and Recv to run concurrently, and
 // multiple goroutines to call Send at the same time.
 type Conn interface {
 	// Send delivers m to the peer, blocking until it is accepted, ctx ends
@@ -32,7 +32,7 @@ const pipeBuffer = 32
 // Pipe returns two connected in-memory Conns. Messages sent on one end are
 // received on the other, in order. Closing either end closes both.
 //
-// It is how the hub and worker talk when they share a process, and it lets
+// It is how the hub and machine talk when they share a process, and it lets
 // tests exercise both sides without a network.
 func Pipe() (Conn, Conn) {
 	shared := &pipeState{done: make(chan struct{})}

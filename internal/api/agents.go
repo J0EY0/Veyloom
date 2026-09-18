@@ -2,51 +2,95 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"slices"
 	"strings"
 
-	"github.com/J0EY0/veyloom/internal/engine"
+	"github.com/J0EY0/veyloom/internal/hub"
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
-// AgentStore persists agent templates and instances.
+// AgentStore persists agents and their members.
 type AgentStore interface {
-	CreateAgentTemplate(ctx context.Context, t store.NewAgentTemplate) (store.AgentTemplate, error)
-	UpdateAgentTemplate(ctx context.Context, id string, t store.NewAgentTemplate) (store.AgentTemplate, error)
-	GetAgentTemplate(ctx context.Context, id string) (store.AgentTemplate, error)
-	ListAgentTemplates(ctx context.Context) ([]store.AgentTemplate, error)
-	CreateAgentInstance(ctx context.Context, in store.NewAgentInstance) (store.AgentInstance, error)
-	GetAgentInstance(ctx context.Context, id string) (store.AgentInstance, error)
-	ListRoomAgentInstances(ctx context.Context, roomID string) ([]store.AgentInstance, error)
+	CreateAgent(ctx context.Context, t store.NewAgent) (store.Agent, error)
+	UpdateAgent(ctx context.Context, id string, t store.NewAgent) (store.Agent, error)
+	GetAgent(ctx context.Context, id string) (store.Agent, error)
+	ListAgents(ctx context.Context) ([]store.Agent, error)
+	DeleteAgent(ctx context.Context, id string) error
+	AgentsWithAvatar(ctx context.Context, avatar string) (int64, error)
+	CreateMember(ctx context.Context, in store.NewMember) (store.Member, error)
+	GetMember(ctx context.Context, id string) (store.Member, error)
+	ListRoomMembers(ctx context.Context, roomID string) ([]store.Member, error)
+	UpdateMember(ctx context.Context, id string, patch store.MemberPatch) (store.Member, error)
+	RemoveMember(ctx context.Context, id string) (store.Member, error)
+	ListMachineMembers(ctx context.Context, machineID string) ([]store.MachineMember, error)
+	GetOpenSession(ctx context.Context, memberID string) (store.MemberSession, error)
+	SessionTurns(ctx context.Context, sessionID string) (int, error)
+	ResetSession(ctx context.Context, memberID string) error
 }
 
-// AgentTemplateRequest is the body of POST and PUT on agent templates.
-type AgentTemplateRequest struct {
-	Name             string                 `json:"name"`
-	Engine           string                 `json:"engine"`
+// MemberSessionResponse is the body of GET /api/v1/members/{id}/session:
+// the member's conversation with its runtime, as far as a person cares.
+// Session is absent when the member has none open: before its first turn,
+// or after someone asked for a new one.
+type MemberSessionResponse struct {
+	Session *store.MemberSession `json:"session,omitempty"`
+	// Turns is how many turns have run in it.
+	Turns int `json:"turns"`
+}
+
+// UpdateMemberRequest is the body of PATCH /api/v1/members/{id}. Every field
+// is optional; an absent one is left as it is.
+type UpdateMemberRequest struct {
+	DisplayName      *string                 `json:"display_name"`
+	Model            *string                 `json:"model"`
+	PermissionPreset *store.PermissionPreset `json:"permission_preset"`
+	RepoPath         *string                 `json:"repo_path"`
+	Enabled          *bool                   `json:"enabled"`
+}
+
+// AgentRequest is the body of POST and PUT on agents.
+// MachineID is the machine the agent is set up on; while that machine is
+// connected, Runtime must be one it found installed.
+type AgentRequest struct {
+	Name string `json:"name"`
+	// Avatar is a name POST /api/v1/avatars answered with; empty shows the
+	// runtime's mark.
+	Avatar           string                 `json:"avatar"`
+	MachineID        string                 `json:"machine_id"`
+	Runtime          string                 `json:"runtime"`
 	Model            string                 `json:"model"`
 	RoleCard         string                 `json:"role_card"`
 	PermissionPreset store.PermissionPreset `json:"permission_preset"`
-	EngineOptions    map[string]any         `json:"engine_options"`
+	RuntimeOptions   map[string]any         `json:"runtime_options"`
 }
 
-// AgentTemplateResponse is the body of single-template endpoints.
-type AgentTemplateResponse struct {
-	Template store.AgentTemplate `json:"template"`
+// AgentResponse is the body of single-agent endpoints.
+type AgentResponse struct {
+	Agent store.Agent `json:"agent"`
 }
 
-// AgentTemplatesResponse is the body of GET /api/v1/agent-templates.
-type AgentTemplatesResponse struct {
-	Templates []store.AgentTemplate `json:"templates"`
+// AgentInUseResponse is the 409 from DELETE /api/v1/agents/{id},
+// and from PUT when it would move the agent to another machine, while the
+// agent is still a member of some project: Projects names where to take
+// it out first.
+type AgentInUseResponse struct {
+	Error    string   `json:"error"`
+	Projects []string `json:"projects"`
 }
 
-// CreateAgentRequest is the body of POST /api/v1/rooms/{id}/agents. Only
-// template_id and worker_id are required.
-type CreateAgentRequest struct {
-	TemplateID       string                 `json:"template_id"`
-	WorkerID         string                 `json:"worker_id"`
+// AgentsResponse is the body of GET /api/v1/agents.
+type AgentsResponse struct {
+	Agents []store.Agent `json:"agents"`
+}
+
+// CreateMemberRequest is the body of POST /api/v1/rooms/{id}/members. Only
+// agent_id is required; the member runs on its agent's machine.
+type CreateMemberRequest struct {
+	AgentID          string                 `json:"agent_id"`
 	DisplayName      string                 `json:"display_name"`
 	RepoPath         string                 `json:"repo_path"`
 	BranchMode       store.BranchMode       `json:"branch_mode"`
@@ -54,99 +98,145 @@ type CreateAgentRequest struct {
 	PermissionPreset store.PermissionPreset `json:"permission_preset"`
 }
 
-// AgentResponse is the body of single-agent endpoints.
-type AgentResponse struct {
-	Agent store.AgentInstance `json:"agent"`
+// MemberResponse is the body of single-member endpoints.
+type MemberResponse struct {
+	Member store.Member `json:"member"`
 }
 
-// AgentsResponse is the body of GET /api/v1/rooms/{id}/agents.
-type AgentsResponse struct {
-	Agents []store.AgentInstance `json:"agents"`
+// MembersResponse is the body of GET /api/v1/rooms/{id}/members.
+type MembersResponse struct {
+	Members []store.Member `json:"members"`
 }
 
-func (h *handlers) createAgentTemplate(w http.ResponseWriter, r *http.Request) {
-	in, ok := h.decodeTemplate(w, r)
+func (h *handlers) createAgent(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.decodeAgent(w, r)
 	if !ok {
 		return
 	}
-	template, err := h.deps.Agents.CreateAgentTemplate(r.Context(), in)
+	agent, err := h.deps.Agents.CreateAgent(r.Context(), in)
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, AgentTemplateResponse{Template: template})
+	writeJSON(w, http.StatusCreated, AgentResponse{Agent: agent})
 }
 
-func (h *handlers) updateAgentTemplate(w http.ResponseWriter, r *http.Request) {
-	in, ok := h.decodeTemplate(w, r)
+func (h *handlers) updateAgent(w http.ResponseWriter, r *http.Request) {
+	in, ok := h.decodeAgent(w, r)
 	if !ok {
 		return
 	}
-	template, err := h.deps.Agents.UpdateAgentTemplate(r.Context(), r.PathValue("id"), in)
+	// The avatar it had goes once nothing shows it any more.
+	before, _ := h.deps.Agents.GetAgent(r.Context(), r.PathValue("id"))
+	agent, err := h.deps.Agents.UpdateAgent(r.Context(), r.PathValue("id"), in)
+	var inUse *store.AgentInUseError
+	if errors.As(err, &inUse) {
+		writeJSON(w, http.StatusConflict, AgentInUseResponse{Error: err.Error(), Projects: inUse.Projects})
+		return
+	}
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, AgentTemplateResponse{Template: template})
+	if before.Avatar != agent.Avatar {
+		h.dropAvatar(r.Context(), before.Avatar)
+	}
+	writeJSON(w, http.StatusOK, AgentResponse{Agent: agent})
 }
 
-// decodeTemplate reads and validates a template request, writing the 400
+// decodeAgent reads and validates an agent request, writing the 400
 // itself when something is wrong.
-func (h *handlers) decodeTemplate(w http.ResponseWriter, r *http.Request) (store.NewAgentTemplate, bool) {
-	var req AgentTemplateRequest
+func (h *handlers) decodeAgent(w http.ResponseWriter, r *http.Request) (store.NewAgent, bool) {
+	var req AgentRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return store.NewAgentTemplate{}, false
+		return store.NewAgent{}, false
 	}
 	name, err := requireName("name", req.Name)
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return store.NewAgentTemplate{}, false
+		return store.NewAgent{}, false
 	}
-	if !slices.Contains(engine.Names(), req.Engine) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("engine must be one of %s", strings.Join(engine.Names(), ", ")))
-		return store.NewAgentTemplate{}, false
+	if !slices.Contains(runtime.Names(), req.Runtime) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("runtime must be one of %s", strings.Join(runtime.Names(), ", ")))
+		return store.NewAgent{}, false
+	}
+	machineID := strings.TrimSpace(req.MachineID)
+	if machineID == "" {
+		writeError(w, http.StatusBadRequest, "machine_id is required")
+		return store.NewAgent{}, false
+	}
+	// A connected machine says what it has; one that is not connected
+	// cannot be asked, so any known runtime is let through for it.
+	if info, ok := h.connectedMachine(machineID); ok && !installed(info, req.Runtime) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("runtime %s is not installed on %s", req.Runtime, info.Name))
+		return store.NewAgent{}, false
 	}
 	if err := validatePreset(req.PermissionPreset, false); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
-		return store.NewAgentTemplate{}, false
+		return store.NewAgent{}, false
 	}
-	return store.NewAgentTemplate{
+	avatar := strings.TrimSpace(req.Avatar)
+	if avatar != "" && !h.avatarExists(avatar) {
+		writeError(w, http.StatusBadRequest, fmt.Sprintf("avatar %q was not uploaded", avatar))
+		return store.NewAgent{}, false
+	}
+	return store.NewAgent{
 		Name:             name,
-		Engine:           req.Engine,
+		Avatar:           avatar,
+		MachineID:        machineID,
+		Runtime:          req.Runtime,
 		Model:            req.Model,
 		RoleCard:         req.RoleCard,
 		PermissionPreset: req.PermissionPreset,
-		EngineOptions:    req.EngineOptions,
+		RuntimeOptions:   req.RuntimeOptions,
 	}, true
 }
 
-func (h *handlers) getAgentTemplate(w http.ResponseWriter, r *http.Request) {
-	template, err := h.deps.Agents.GetAgentTemplate(r.Context(), r.PathValue("id"))
+func (h *handlers) getAgent(w http.ResponseWriter, r *http.Request) {
+	agent, err := h.deps.Agents.GetAgent(r.Context(), r.PathValue("id"))
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, AgentTemplateResponse{Template: template})
+	writeJSON(w, http.StatusOK, AgentResponse{Agent: agent})
 }
 
-func (h *handlers) listAgentTemplates(w http.ResponseWriter, r *http.Request) {
-	templates, err := h.deps.Agents.ListAgentTemplates(r.Context())
+func (h *handlers) listAgents(w http.ResponseWriter, r *http.Request) {
+	agents, err := h.deps.Agents.ListAgents(r.Context())
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, AgentTemplatesResponse{Templates: templates})
+	writeJSON(w, http.StatusOK, AgentsResponse{Agents: agents})
 }
 
-func (h *handlers) createAgent(w http.ResponseWriter, r *http.Request) {
-	var req CreateAgentRequest
+// deleteAgent answers 204, or 409 naming the projects the agent
+// is still a member of.
+func (h *handlers) deleteAgent(w http.ResponseWriter, r *http.Request) {
+	before, _ := h.deps.Agents.GetAgent(r.Context(), r.PathValue("id"))
+	err := h.deps.Agents.DeleteAgent(r.Context(), r.PathValue("id"))
+	var inUse *store.AgentInUseError
+	if errors.As(err, &inUse) {
+		writeJSON(w, http.StatusConflict, AgentInUseResponse{Error: err.Error(), Projects: inUse.Projects})
+		return
+	}
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	h.dropAvatar(r.Context(), before.Avatar)
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handlers) createMember(w http.ResponseWriter, r *http.Request) {
+	var req CreateMemberRequest
 	if err := decodeJSON(r, &req); err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if strings.TrimSpace(req.TemplateID) == "" || strings.TrimSpace(req.WorkerID) == "" {
-		writeError(w, http.StatusBadRequest, "template_id and worker_id are required")
+	if strings.TrimSpace(req.AgentID) == "" {
+		writeError(w, http.StatusBadRequest, "agent_id is required")
 		return
 	}
 	if req.BranchMode != "" && req.BranchMode != store.BranchWorktree && req.BranchMode != store.BranchShared {
@@ -158,12 +248,11 @@ func (h *handlers) createAgent(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	agent, err := h.deps.Agents.CreateAgentInstance(r.Context(), store.NewAgentInstance{
+	member, err := h.deps.Agents.CreateMember(r.Context(), store.NewMember{
 		RoomID:           r.PathValue("id"),
-		TemplateID:       req.TemplateID,
-		WorkerID:         req.WorkerID,
+		AgentID:          req.AgentID,
 		DisplayName:      strings.TrimSpace(req.DisplayName),
-		RepoPath:         req.RepoPath,
+		RepoPath:         cleanRepoPath(req.RepoPath),
 		BranchMode:       req.BranchMode,
 		Model:            req.Model,
 		PermissionPreset: req.PermissionPreset,
@@ -172,34 +261,119 @@ func (h *handlers) createAgent(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusCreated, AgentResponse{Agent: agent})
+	writeJSON(w, http.StatusCreated, MemberResponse{Member: member})
 }
 
-func (h *handlers) listRoomAgents(w http.ResponseWriter, r *http.Request) {
+func (h *handlers) listRoomMembers(w http.ResponseWriter, r *http.Request) {
 	roomID := r.PathValue("id")
 	if _, err := h.deps.Projects.GetRoom(r.Context(), roomID); err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	agents, err := h.deps.Agents.ListRoomAgentInstances(r.Context(), roomID)
+	members, err := h.deps.Agents.ListRoomMembers(r.Context(), roomID)
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, AgentsResponse{Agents: agents})
+	writeJSON(w, http.StatusOK, MembersResponse{Members: members})
 }
 
-func (h *handlers) getAgent(w http.ResponseWriter, r *http.Request) {
-	agent, err := h.deps.Agents.GetAgentInstance(r.Context(), r.PathValue("id"))
+func (h *handlers) updateMember(w http.ResponseWriter, r *http.Request) {
+	var req UpdateMemberRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+	patch := store.MemberPatch{Model: req.Model, Enabled: req.Enabled}
+	if req.RepoPath != nil {
+		path := cleanRepoPath(*req.RepoPath)
+		patch.RepoPath = &path
+	}
+	if req.DisplayName != nil {
+		name, err := requireName("display_name", *req.DisplayName)
+		if err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		patch.DisplayName = &name
+	}
+	if req.PermissionPreset != nil {
+		if err := validatePreset(*req.PermissionPreset, true); err != nil {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		patch.PermissionPreset = req.PermissionPreset
+	}
+	member, err := h.deps.Agents.UpdateMember(r.Context(), r.PathValue("id"), patch)
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, AgentResponse{Agent: agent})
+	writeJSON(w, http.StatusOK, MemberResponse{Member: member})
 }
 
-// validatePreset checks a permission preset; allowEmpty is for instance
-// overrides, where empty means "inherit from the template".
+// removeMember takes a member out of its project: 204, 404 when it is
+// unknown or already out, 409 while one of its turns is running.
+func (h *handlers) removeMember(w http.ResponseWriter, r *http.Request) {
+	if _, err := h.deps.Agents.RemoveMember(r.Context(), r.PathValue("id")); err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// getMemberSession tells what session the member's next turn continues.
+func (h *handlers) getMemberSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := h.deps.Agents.GetMember(r.Context(), id); err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	session, err := h.deps.Agents.GetOpenSession(r.Context(), id)
+	if errors.Is(err, store.ErrNotFound) {
+		writeJSON(w, http.StatusOK, MemberSessionResponse{})
+		return
+	}
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	turns, err := h.deps.Agents.SessionTurns(r.Context(), session.ID)
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, MemberSessionResponse{Session: &session, Turns: turns})
+}
+
+// resetMemberSession ends the member's session at a person's request, so
+// its next turn starts a new one: 204, 404 for an unknown member, 409 while
+// one of its turns is running. Sessions renew themselves when they have to;
+// this is the way out for when one has gone wrong all the same.
+func (h *handlers) resetMemberSession(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if _, err := h.deps.Agents.GetMember(r.Context(), id); err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	if err := h.deps.Agents.ResetSession(r.Context(), id); err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *handlers) getMember(w http.ResponseWriter, r *http.Request) {
+	member, err := h.deps.Agents.GetMember(r.Context(), r.PathValue("id"))
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, MemberResponse{Member: member})
+}
+
+// validatePreset checks a permission preset; allowEmpty is for member
+// overrides, where empty means "inherit from the agent".
 func validatePreset(p store.PermissionPreset, allowEmpty bool) error {
 	if p == "" && allowEmpty {
 		return nil
@@ -212,4 +386,24 @@ func validatePreset(p store.PermissionPreset, allowEmpty bool) error {
 		names[i] = string(preset)
 	}
 	return fmt.Errorf("permission_preset must be one of %s", strings.Join(names, ", "))
+}
+
+// connectedMachine finds a machine among those connected to the hub.
+func (h *handlers) connectedMachine(id string) (hub.MachineInfo, bool) {
+	if h.deps.Machines == nil {
+		return hub.MachineInfo{}, false
+	}
+	for _, info := range h.deps.Machines.Machines() {
+		if info.ID == id {
+			return info, true
+		}
+	}
+	return hub.MachineInfo{}, false
+}
+
+// installed reports whether a machine found a runtime installed.
+func installed(info hub.MachineInfo, name string) bool {
+	return slices.ContainsFunc(info.Runtimes, func(e runtime.Info) bool {
+		return e.Name == name && e.Status != runtime.StatusNotInstalled
+	})
 }

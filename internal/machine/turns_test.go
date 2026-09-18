@@ -1,0 +1,411 @@
+package machine
+
+import (
+	"context"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/J0EY0/veyloom/internal/protocol"
+	"github.com/J0EY0/veyloom/internal/runtime"
+)
+
+// connectedMachine starts a machine with the fake runtime and completes the
+// handshake, returning the hub's end of the pipe.
+func connectedMachine(t *testing.T, cfg Config) (protocol.Conn, context.CancelFunc) {
+	t.Helper()
+	cfg.Name = "laptop"
+	w := New(cfg, NewDiscovery(nil, time.Second), &MemoryIdentity{}, runtime.BuiltinRunners())
+	hubEnd, _, cancel := startMachine(t, w)
+	recvKind[protocol.Hello](t, hubEnd)
+	welcome := protocol.Welcome{MachineID: "w1", HeartbeatInterval: protocol.Duration(time.Hour)}
+	if err := hubEnd.Send(context.Background(), welcome); err != nil {
+		t.Fatal(err)
+	}
+	return hubEnd, cancel
+}
+
+// collectTurn reads events for turnID until its TurnDone arrives.
+func collectTurn(t *testing.T, hubEnd protocol.Conn, turnID string) ([]runtime.Event, protocol.TurnDone) {
+	t.Helper()
+	var events []runtime.Event
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		m, err := hubEnd.Recv(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		switch m := m.(type) {
+		case protocol.TurnEvent:
+			if m.TurnID == turnID {
+				events = append(events, m.Event)
+			}
+		case protocol.TurnDone:
+			if m.TurnID == turnID {
+				return events, m
+			}
+		}
+	}
+	t.Fatalf("turn %s did not finish", turnID)
+	return nil, protocol.TurnDone{}
+}
+
+func startFakeTurn(t *testing.T, hubEnd protocol.Conn, turnID string, options map[string]any) {
+	t.Helper()
+	req := protocol.StartTurn{TurnID: turnID, Runtime: "fake", Spec: runtime.TurnSpec{Prompt: "hello", Options: options}}
+	if err := hubEnd.Send(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTurn_StreamsEventsAndFinishes(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"reply": "hi there", "tool": true})
+	events, done := collectTurn(t, hubEnd, "t1")
+
+	if done.Error != "" || done.Result.Output != "hi there" || done.Result.SessionRef == "" {
+		t.Errorf("unexpected TurnDone: %+v", done)
+	}
+	var kinds []runtime.EventKind
+	var text strings.Builder
+	for _, ev := range events {
+		kinds = append(kinds, ev.Kind)
+		if ev.Kind == runtime.EventText {
+			text.WriteString(ev.Text)
+		}
+	}
+	// session, status, tool_call, tool_result, then the two text chunks
+	// coalesced into one event by the 50ms default window.
+	if len(kinds) != 5 || kinds[0] != runtime.EventSession || kinds[1] != runtime.EventStatus || kinds[4] != runtime.EventText {
+		t.Errorf("unexpected event kinds: %v", kinds)
+	}
+	if text.String() != "hi there" {
+		t.Errorf("text = %q", text.String())
+	}
+}
+
+func TestTurn_NoCoalescingWhenDisabled(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{EventFlushInterval: -1})
+
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"reply": "ab"})
+	events, _ := collectTurn(t, hubEnd, "t1")
+
+	textEvents := 0
+	for _, ev := range events {
+		if ev.Kind == runtime.EventText {
+			textEvents++
+		}
+	}
+	if textEvents != 2 {
+		t.Errorf("got %d text events, want the fake runtime's 2 chunks unmerged", textEvents)
+	}
+}
+
+func TestTurn_UnknownRuntimeReportsFailure(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	req := protocol.StartTurn{TurnID: "t1", Runtime: "codex", Spec: runtime.TurnSpec{Prompt: "x"}}
+	if err := hubEnd.Send(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	_, done := collectTurn(t, hubEnd, "t1")
+
+	if done.Error == "" || !strings.Contains(done.Error, "codex") {
+		t.Errorf("expected an error naming the runtime, got %+v", done)
+	}
+}
+
+func TestTurn_DuplicateIDIsRefused(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"delay_ms": float64(300)})
+	startFakeTurn(t, hubEnd, "t1", nil)
+
+	_, first := collectTurn(t, hubEnd, "t1")
+	if first.Error == "" || !strings.Contains(first.Error, "already running") {
+		t.Errorf("second start should be refused, got %+v", first)
+	}
+	_, second := collectTurn(t, hubEnd, "t1")
+	if second.Error != "" {
+		t.Errorf("original turn should still finish normally, got %+v", second)
+	}
+}
+
+func TestTurn_Cancel(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"delay_ms": float64(10000)})
+	// Give the turn a moment to start before cancelling it.
+	time.Sleep(20 * time.Millisecond)
+	if err := hubEnd.Send(context.Background(), protocol.CancelTurn{TurnID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	_, done := collectTurn(t, hubEnd, "t1")
+	if !done.Cancelled || done.Error == "" {
+		t.Errorf("expected a cancelled TurnDone, got %+v", done)
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Error("cancel took too long; the 10s delay should have been cut short")
+	}
+	// Cancelling again, or an unknown turn, is harmless.
+	if err := hubEnd.Send(context.Background(), protocol.CancelTurn{TurnID: "t404"}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTurn_RunConcurrently(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	// Each turn takes 200ms; run three. Sequential execution would need
+	// 600ms, concurrent well under that.
+	for _, id := range []string{"a", "b", "c"} {
+		startFakeTurn(t, hubEnd, id, map[string]any{"delay_ms": float64(200), "reply": id})
+	}
+	start := time.Now()
+	got := map[string]string{}
+	for len(got) < 3 {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		m, err := hubEnd.Recv(ctx)
+		cancel()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if done, ok := m.(protocol.TurnDone); ok {
+			got[done.TurnID] = done.Result.Output
+		}
+	}
+	if elapsed := time.Since(start); elapsed > 500*time.Millisecond {
+		t.Errorf("three 200ms turns took %v; they should overlap", elapsed)
+	}
+	for _, id := range []string{"a", "b", "c"} {
+		if got[id] != id {
+			t.Errorf("turn %s replied %q", id, got[id])
+		}
+	}
+}
+
+func TestTurn_ShutdownCancelsRunningTurns(t *testing.T) {
+	hubEnd, cancel := connectedMachine(t, Config{})
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"delay_ms": float64(10000)})
+	time.Sleep(20 * time.Millisecond)
+
+	start := time.Now()
+	cancel()
+
+	// Run must return promptly rather than wait out the 10s turn. The
+	// machine closes its end of the pipe on the way out, which we observe
+	// as ErrClosed on the hub's end.
+	ctx, stop := context.WithTimeout(context.Background(), 2*time.Second)
+	defer stop()
+	for {
+		if _, err := hubEnd.Recv(ctx); err != nil {
+			break
+		}
+	}
+	if time.Since(start) > 2*time.Second {
+		t.Error("shutdown waited for the running turn instead of cancelling it")
+	}
+}
+
+// awaitApprovalRequest reads messages until the turn asks for approval.
+func awaitApprovalRequest(t *testing.T, hubEnd protocol.Conn, turnID string) protocol.ApprovalRequest {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		m, err := hubEnd.Recv(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		switch m := m.(type) {
+		case protocol.ApprovalRequest:
+			if m.TurnID == turnID {
+				return m
+			}
+		case protocol.TurnDone:
+			if m.TurnID == turnID {
+				t.Fatalf("turn finished without asking for approval: %+v", m)
+			}
+		}
+	}
+	t.Fatal("no approval request arrived")
+	return protocol.ApprovalRequest{}
+}
+
+func TestTurn_ApprovalRoundTrip(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"approval": true, "reply": "built"})
+	req := awaitApprovalRequest(t, hubEnd, "t1")
+	if req.ApprovalID == "" || req.Tool != "Bash" || req.Input != `{"command":"make test"}` || req.At.IsZero() {
+		t.Fatalf("unexpected request: %+v", req)
+	}
+
+	decision := protocol.ApprovalDecision{TurnID: "t1", ApprovalID: req.ApprovalID, Decision: runtime.Decision{Allow: true}}
+	if err := hubEnd.Send(context.Background(), decision); err != nil {
+		t.Fatal(err)
+	}
+	events, done := collectTurn(t, hubEnd, "t1")
+	if done.Error != "" || done.Result.Output != "built" {
+		t.Errorf("unexpected TurnDone: %+v", done)
+	}
+	ran := false
+	for _, ev := range events {
+		if ev.Kind == runtime.EventToolCall && ev.Tool == "Bash" {
+			ran = true
+		}
+		if ev.Kind == runtime.EventApprovalRequest {
+			t.Error("approval requests must not also be forwarded as TurnEvents")
+		}
+	}
+	if !ran {
+		t.Error("the allowed command should have run")
+	}
+}
+
+func TestTurn_ApprovalDenied(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"approval": true})
+	req := awaitApprovalRequest(t, hubEnd, "t1")
+	decision := protocol.ApprovalDecision{TurnID: "t1", ApprovalID: req.ApprovalID, Decision: runtime.Decision{Allow: false, Message: "no"}}
+	if err := hubEnd.Send(context.Background(), decision); err != nil {
+		t.Fatal(err)
+	}
+
+	_, done := collectTurn(t, hubEnd, "t1")
+	if done.Result.Output != "Denied: no" {
+		t.Errorf("unexpected TurnDone: %+v", done)
+	}
+}
+
+func TestTurn_StrayDecisionsAreHarmless(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	// Unknown turn, then a running turn with an unknown approval id.
+	stray := protocol.ApprovalDecision{TurnID: "t404", ApprovalID: "a", Decision: runtime.Decision{Allow: true}}
+	if err := hubEnd.Send(context.Background(), stray); err != nil {
+		t.Fatal(err)
+	}
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"approval": true})
+	req := awaitApprovalRequest(t, hubEnd, "t1")
+	wrong := protocol.ApprovalDecision{TurnID: "t1", ApprovalID: "not-" + req.ApprovalID, Decision: runtime.Decision{Allow: true}}
+	if err := hubEnd.Send(context.Background(), wrong); err != nil {
+		t.Fatal(err)
+	}
+	// The real request is still pending; cancelling ends the turn.
+	if err := hubEnd.Send(context.Background(), protocol.CancelTurn{TurnID: "t1"}); err != nil {
+		t.Fatal(err)
+	}
+	_, done := collectTurn(t, hubEnd, "t1")
+	if !done.Cancelled {
+		t.Errorf("expected the turn to end by cancellation, got %+v", done)
+	}
+}
+
+func TestTextBuffer_CoalescesUntilFlush(t *testing.T) {
+	buf := newTextBuffer(time.Hour)
+	at := time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)
+
+	if out := buf.add(runtime.Event{Kind: runtime.EventText, Text: "ab", At: at}); out != nil {
+		t.Errorf("first chunk should be buffered, got %v", out)
+	}
+	if out := buf.add(runtime.Event{Kind: runtime.EventText, Text: "cd", At: at.Add(time.Second)}); out != nil {
+		t.Errorf("second chunk should be buffered, got %v", out)
+	}
+
+	// A non-text event flushes the text ahead of itself.
+	out := buf.add(runtime.Event{Kind: runtime.EventStatus, Text: "done"})
+	if len(out) != 2 || out[0].Kind != runtime.EventText || out[0].Text != "abcd" || !out[0].At.Equal(at) || out[1].Kind != runtime.EventStatus {
+		t.Errorf("unexpected flush: %+v", out)
+	}
+	if _, ok := buf.take(); ok {
+		t.Error("buffer should be empty after a flush")
+	}
+	if buf.deadline() != nil {
+		t.Error("no deadline should be armed while the buffer is empty")
+	}
+}
+
+// The hub answers some failures by running the turn again under the same
+// id, the moment it hears the first attempt is over. The id must be free
+// by then, every time.
+func TestTurn_SameIDRunsAgainRightAfterItEnds(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	for attempt := range 20 {
+		options := map[string]any{"fail": attempt%2 == 0, "reply": "again"}
+		startFakeTurn(t, hubEnd, "t1", options)
+		_, done := collectTurn(t, hubEnd, "t1")
+		if strings.Contains(done.Error, "already running") {
+			t.Fatalf("attempt %d: the id was still taken when the turn was reported over: %s", attempt, done.Error)
+		}
+		if failed := done.Error != ""; failed != (attempt%2 == 0) {
+			t.Fatalf("attempt %d: TurnDone = %+v", attempt, done)
+		}
+	}
+}
+
+// recvRoomQuery reads until the machine asks the hub about the room.
+func recvRoomQuery(t *testing.T, hubEnd protocol.Conn) protocol.RoomQuery {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		ctx, cancel := context.WithDeadline(context.Background(), deadline)
+		m, err := hubEnd.Recv(ctx)
+		cancel()
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		if q, ok := m.(protocol.RoomQuery); ok {
+			return q
+		}
+	}
+	t.Fatal("the machine never asked about the room")
+	return protocol.RoomQuery{}
+}
+
+func TestTurn_RoomToolAsksTheHubAndGetsItsAnswer(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"room_tool": runtime.RoomToolReadTopic, "room_topic": 12})
+	q := recvRoomQuery(t, hubEnd)
+	if q.TurnID != "t1" || q.QueryID == "" || q.Query.Tool != runtime.RoomToolReadTopic || q.Query.Topic != 12 {
+		t.Fatalf("query = %+v", q)
+	}
+	// An answer nobody waits for is dropped without harm; the real one lands.
+	for _, res := range []protocol.RoomResult{
+		{TurnID: "t1", QueryID: "no-such-query", Text: "stray"},
+		{TurnID: "t9", QueryID: q.QueryID, Text: "another turn's"},
+		{TurnID: "t1", QueryID: q.QueryID, Text: "Topic #12, oldest first: ..."},
+	} {
+		if err := hubEnd.Send(context.Background(), res); err != nil {
+			t.Fatal(err)
+		}
+	}
+	_, done := collectTurn(t, hubEnd, "t1")
+	if done.Error != "" || done.Result.Output != "Topic #12, oldest first: ..." {
+		t.Errorf("TurnDone = %+v, want the hub's answer as the reply", done)
+	}
+}
+
+func TestTurn_RoomToolHearsWhyTheHubHasNoAnswer(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"room_tool": runtime.RoomToolReadTopic, "room_topic": 99})
+	q := recvRoomQuery(t, hubEnd)
+	if err := hubEnd.Send(context.Background(), protocol.RoomResult{TurnID: "t1", QueryID: q.QueryID, Error: "this chat has no topic #99"}); err != nil {
+		t.Fatal(err)
+	}
+	_, done := collectTurn(t, hubEnd, "t1")
+	// The agent reads the reason and goes on; its turn does not fail.
+	if done.Error != "" || done.Result.Output != "error: this chat has no topic #99" {
+		t.Errorf("TurnDone = %+v", done)
+	}
+}

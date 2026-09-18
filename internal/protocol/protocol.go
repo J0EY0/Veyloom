@@ -1,5 +1,5 @@
 // Package protocol defines the messages exchanged between the hub and its
-// workers, and the Conn abstraction they travel over.
+// machines, and the Conn abstraction they travel over.
 //
 // The same message types are used whether the two sides share a process
 // (see Pipe) or talk over the network (a WebSocket transport, later). Byte
@@ -12,23 +12,23 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/J0EY0/veyloom/internal/engine"
+	"github.com/J0EY0/veyloom/internal/runtime"
 )
 
 // Kind identifies a message type on the wire.
 type Kind string
 
-// Messages sent by a worker to the hub.
+// Messages sent by a machine to the hub.
 const (
-	// KindHello opens a connection. It must be the first message a worker
-	// sends and carries its identity plus the result of its initial engine
+	// KindHello opens a connection. It must be the first message a machine
+	// sends and carries its identity plus the result of its initial runtime
 	// discovery.
 	KindHello Kind = "hello"
-	// KindHeartbeat tells the hub the worker is still alive.
+	// KindHeartbeat tells the hub the machine is still alive.
 	KindHeartbeat Kind = "heartbeat"
-	// KindEnginesReport carries fresh discovery results, normally in answer
+	// KindRuntimesReport carries fresh discovery results, normally in answer
 	// to a Probe.
-	KindEnginesReport Kind = "engines_report"
+	KindRuntimesReport Kind = "runtimes_report"
 	// KindTurnEvent streams one event of a running turn.
 	KindTurnEvent Kind = "turn_event"
 	// KindTurnDone reports that a turn finished, with its result or error.
@@ -36,20 +36,26 @@ const (
 	// KindApprovalRequest asks, on behalf of a running turn, for permission
 	// to use a tool. The turn waits for an ApprovalDecision.
 	KindApprovalRequest Kind = "approval_request"
+	// KindRoomQuery asks, on behalf of a running turn, to read something of
+	// the turn's room: a call of one of the agent's room tools. The call
+	// waits for a RoomResult.
+	KindRoomQuery Kind = "room_query"
 )
 
-// Messages sent by the hub to a worker.
+// Messages sent by the hub to a machine.
 const (
-	// KindWelcome acknowledges a Hello and assigns the worker its ID.
+	// KindWelcome acknowledges a Hello and assigns the machine its ID.
 	KindWelcome Kind = "welcome"
-	// KindProbe asks the worker to re-run engine discovery.
+	// KindProbe asks the machine to re-run runtime discovery.
 	KindProbe Kind = "probe"
-	// KindStartTurn asks the worker to run a turn on one of its engines.
+	// KindStartTurn asks the machine to run a turn on one of its runtimes.
 	KindStartTurn Kind = "start_turn"
-	// KindCancelTurn asks the worker to stop a running turn.
+	// KindCancelTurn asks the machine to stop a running turn.
 	KindCancelTurn Kind = "cancel_turn"
 	// KindApprovalDecision answers an ApprovalRequest.
 	KindApprovalDecision Kind = "approval_decision"
+	// KindRoomResult answers a RoomQuery.
+	KindRoomResult Kind = "room_result"
 )
 
 // Message is implemented by every payload type.
@@ -57,18 +63,18 @@ type Message interface {
 	Kind() Kind
 }
 
-// Hello is the first message on a connection, worker to hub.
+// Hello is the first message on a connection, machine to hub.
 type Hello struct {
-	// WorkerID is the ID the hub assigned in an earlier Welcome, or empty on
-	// a worker's very first connection. The hub uses it to recognise a
-	// returning worker; the name below is only a label.
-	WorkerID string `json:"worker_id,omitempty"`
+	// MachineID is the ID the hub assigned in an earlier Welcome, or empty on
+	// a machine's very first connection. The hub uses it to recognise a
+	// returning machine; the name below is only a label.
+	MachineID string `json:"machine_id,omitempty"`
 	// Name is a human-readable label for the machine, typically its hostname.
 	Name string `json:"name"`
-	// Token authenticates remote workers. In-process workers leave it empty.
+	// Token authenticates remote machines. In-process machines leave it empty.
 	Token string `json:"token,omitempty"`
-	// Engines is the result of the worker's initial discovery.
-	Engines []engine.Info `json:"engines"`
+	// Runtimes is the result of the machine's initial discovery.
+	Runtimes []runtime.Info `json:"runtimes"`
 }
 
 // Kind implements Message.
@@ -76,8 +82,8 @@ func (Hello) Kind() Kind { return KindHello }
 
 // Welcome is the hub's reply to Hello.
 type Welcome struct {
-	// WorkerID is the identifier the hub will use for this worker.
-	WorkerID string `json:"worker_id"`
+	// MachineID is the identifier the hub will use for this machine.
+	MachineID string `json:"machine_id"`
 	// HeartbeatInterval is how often the hub expects a Heartbeat.
 	HeartbeatInterval Duration `json:"heartbeat_interval"`
 }
@@ -85,39 +91,39 @@ type Welcome struct {
 // Kind implements Message.
 func (Welcome) Kind() Kind { return KindWelcome }
 
-// Heartbeat is a periodic liveness signal, worker to hub.
+// Heartbeat is a periodic liveness signal, machine to hub.
 type Heartbeat struct{}
 
 // Kind implements Message.
 func (Heartbeat) Kind() Kind { return KindHeartbeat }
 
-// EnginesReport carries fresh engine discovery results, worker to hub.
-type EnginesReport struct {
-	Engines []engine.Info `json:"engines"`
+// RuntimesReport carries fresh runtime discovery results, machine to hub.
+type RuntimesReport struct {
+	Runtimes []runtime.Info `json:"runtimes"`
 }
 
 // Kind implements Message.
-func (EnginesReport) Kind() Kind { return KindEnginesReport }
+func (RuntimesReport) Kind() Kind { return KindRuntimesReport }
 
-// Probe asks a worker to re-run discovery and answer with an EnginesReport.
+// Probe asks a machine to re-run discovery and answer with a RuntimesReport.
 type Probe struct{}
 
 // Kind implements Message.
 func (Probe) Kind() Kind { return KindProbe }
 
-// StartTurn asks a worker to run a turn, hub to worker.
+// StartTurn asks a machine to run a turn, hub to machine.
 type StartTurn struct {
 	// TurnID is assigned by the hub and echoed in every event.
 	TurnID string `json:"turn_id"`
-	// Engine names the runner to use, e.g. "claude" or "fake".
-	Engine string          `json:"engine"`
-	Spec   engine.TurnSpec `json:"spec"`
+	// Runtime names the runner to use, e.g. "claude" or "fake".
+	Runtime string           `json:"runtime"`
+	Spec    runtime.TurnSpec `json:"spec"`
 }
 
 // Kind implements Message.
 func (StartTurn) Kind() Kind { return KindStartTurn }
 
-// CancelTurn asks a worker to stop a turn, hub to worker. Cancelling an
+// CancelTurn asks a machine to stop a turn, hub to machine. Cancelling an
 // unknown or finished turn is not an error.
 type CancelTurn struct {
 	TurnID string `json:"turn_id"`
@@ -126,30 +132,30 @@ type CancelTurn struct {
 // Kind implements Message.
 func (CancelTurn) Kind() Kind { return KindCancelTurn }
 
-// TurnEvent carries one event of a running turn, worker to hub.
+// TurnEvent carries one event of a running turn, machine to hub.
 type TurnEvent struct {
-	TurnID string       `json:"turn_id"`
-	Event  engine.Event `json:"event"`
+	TurnID string        `json:"turn_id"`
+	Event  runtime.Event `json:"event"`
 }
 
 // Kind implements Message.
 func (TurnEvent) Kind() Kind { return KindTurnEvent }
 
-// TurnDone reports the end of a turn, worker to hub. Error is empty on
-// success; otherwise Result is meaningless.
+// TurnDone reports the end of a turn, machine to hub. Error is empty on
+// success; otherwise Result holds only the tokens spent before the end.
 type TurnDone struct {
-	TurnID string        `json:"turn_id"`
-	Result engine.Result `json:"result"`
-	Error  string        `json:"error,omitempty"`
+	TurnID string         `json:"turn_id"`
+	Result runtime.Result `json:"result"`
+	Error  string         `json:"error,omitempty"`
 	// Cancelled marks an Error that was caused by CancelTurn or shutdown
-	// rather than by the engine failing.
+	// rather than by the runtime failing.
 	Cancelled bool `json:"cancelled,omitempty"`
 }
 
 // Kind implements Message.
 func (TurnDone) Kind() Kind { return KindTurnDone }
 
-// ApprovalRequest asks for permission on behalf of a turn, worker to hub.
+// ApprovalRequest asks for permission on behalf of a turn, machine to hub.
 // Input is the tool's full input as JSON: it is what the person decides on,
 // so unlike a tool_call event it is never elided.
 type ApprovalRequest struct {
@@ -163,16 +169,41 @@ type ApprovalRequest struct {
 // Kind implements Message.
 func (ApprovalRequest) Kind() Kind { return KindApprovalRequest }
 
-// ApprovalDecision settles an ApprovalRequest, hub to worker. A decision
+// ApprovalDecision settles an ApprovalRequest, hub to machine. A decision
 // for a turn or request that is no longer pending is ignored.
 type ApprovalDecision struct {
-	TurnID     string          `json:"turn_id"`
-	ApprovalID string          `json:"approval_id"`
-	Decision   engine.Decision `json:"decision"`
+	TurnID     string           `json:"turn_id"`
+	ApprovalID string           `json:"approval_id"`
+	Decision   runtime.Decision `json:"decision"`
 }
 
 // Kind implements Message.
 func (ApprovalDecision) Kind() Kind { return KindApprovalDecision }
+
+// RoomQuery is a call of one of an agent's room tools, machine to hub. The
+// hub answers for the room of the turn that asks, and for no other: a turn
+// cannot name a room.
+type RoomQuery struct {
+	TurnID string `json:"turn_id"`
+	// QueryID pairs the result with the call; unique within the turn.
+	QueryID string            `json:"query_id"`
+	Query   runtime.RoomQuery `json:"query"`
+}
+
+// Kind implements Message.
+func (RoomQuery) Kind() Kind { return KindRoomQuery }
+
+// RoomResult answers a RoomQuery, hub to machine: text for the agent to
+// read, or why there is none.
+type RoomResult struct {
+	TurnID  string `json:"turn_id"`
+	QueryID string `json:"query_id"`
+	Text    string `json:"text,omitempty"`
+	Error   string `json:"error,omitempty"`
+}
+
+// Kind implements Message.
+func (RoomResult) Kind() Kind { return KindRoomResult }
 
 // Duration is a time.Duration that marshals as a human-readable string such
 // as "15s", which keeps the wire format legible and language-neutral.
@@ -235,18 +266,21 @@ func Unmarshal(data []byte) (Message, error) {
 // decoders maps each kind to a function that decodes its payload. Adding a
 // message type means adding a line here; Unmarshal's tests cover every entry.
 var decoders = map[Kind]func(json.RawMessage) (Message, error){
-	KindHello:         decodeAs[Hello],
-	KindHeartbeat:     decodeAs[Heartbeat],
-	KindEnginesReport: decodeAs[EnginesReport],
-	KindWelcome:       decodeAs[Welcome],
-	KindProbe:         decodeAs[Probe],
-	KindStartTurn:     decodeAs[StartTurn],
-	KindCancelTurn:    decodeAs[CancelTurn],
-	KindTurnEvent:     decodeAs[TurnEvent],
-	KindTurnDone:      decodeAs[TurnDone],
+	KindHello:          decodeAs[Hello],
+	KindHeartbeat:      decodeAs[Heartbeat],
+	KindRuntimesReport: decodeAs[RuntimesReport],
+	KindWelcome:        decodeAs[Welcome],
+	KindProbe:          decodeAs[Probe],
+	KindStartTurn:      decodeAs[StartTurn],
+	KindCancelTurn:     decodeAs[CancelTurn],
+	KindTurnEvent:      decodeAs[TurnEvent],
+	KindTurnDone:       decodeAs[TurnDone],
 
 	KindApprovalRequest:  decodeAs[ApprovalRequest],
 	KindApprovalDecision: decodeAs[ApprovalDecision],
+
+	KindRoomQuery:  decodeAs[RoomQuery],
+	KindRoomResult: decodeAs[RoomResult],
 }
 
 // decodeAs decodes payload into a value of type T. An empty payload yields the

@@ -14,7 +14,7 @@ import (
 const createRoom = `-- name: CreateRoom :one
 INSERT INTO rooms (project_id, name, kind)
 VALUES ($1, $2, $3)
-RETURNING id, project_id, name, kind, created_at
+RETURNING id, project_id, name, kind, last_thread_number, created_at
 `
 
 type CreateRoomParams struct {
@@ -31,13 +31,14 @@ func (q *Queries) CreateRoom(ctx context.Context, arg CreateRoomParams) (Room, e
 		&i.ProjectID,
 		&i.Name,
 		&i.Kind,
+		&i.LastThreadNumber,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getRoom = `-- name: GetRoom :one
-SELECT id, project_id, name, kind, created_at FROM rooms WHERE id = $1
+SELECT id, project_id, name, kind, last_thread_number, created_at FROM rooms WHERE id = $1
 `
 
 func (q *Queries) GetRoom(ctx context.Context, id pgtype.UUID) (Room, error) {
@@ -48,13 +49,14 @@ func (q *Queries) GetRoom(ctx context.Context, id pgtype.UUID) (Room, error) {
 		&i.ProjectID,
 		&i.Name,
 		&i.Kind,
+		&i.LastThreadNumber,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listRoomsByProject = `-- name: ListRoomsByProject :many
-SELECT id, project_id, name, kind, created_at FROM rooms
+SELECT id, project_id, name, kind, last_thread_number, created_at FROM rooms
 WHERE project_id = $1
 ORDER BY (kind = 'main') DESC, created_at
 `
@@ -74,6 +76,7 @@ func (q *Queries) ListRoomsByProject(ctx context.Context, projectID pgtype.UUID)
 			&i.ProjectID,
 			&i.Name,
 			&i.Kind,
+			&i.LastThreadNumber,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

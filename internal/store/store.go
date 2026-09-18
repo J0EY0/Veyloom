@@ -30,7 +30,7 @@ var ErrNotFound = errors.New("store: not found")
 var ErrInvalidID = errors.New("store: invalid id")
 
 // ErrConflict is returned when a row would violate a uniqueness rule, such
-// as a second agent template with the same name.
+// as a second agent with the same name.
 var ErrConflict = errors.New("store: conflict")
 
 // NewID returns a fresh random UUID in the canonical text form, for rows

@@ -11,7 +11,8 @@ import (
 
 // EventsOptions tunes the WebSocket event stream.
 type EventsOptions struct {
-	// AllowedOrigins lists host patterns of browser origins allowed to
+	// AllowedOrigins lists host patterns of browser origins allowed to call
+	// the API from another origin (CORS) and to
 	// connect cross-origin. Same-origin requests and clients that send no
 	// Origin header are always accepted.
 	AllowedOrigins []string

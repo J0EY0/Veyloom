@@ -12,7 +12,10 @@ import (
 type app struct {
 	loader     *config.Loader
 	configPath string
-	cfg        config.Config
+	// envFile is the settings file read into the environment first;
+	// serve writes it from .env.example when it is missing.
+	envFile string
+	cfg     config.Config
 	// bindings maps each command to the flags it wants to override config
 	// keys with. They are applied only for the command actually being run:
 	// several commands define a --timeout, and viper keeps a single flag per
@@ -42,18 +45,24 @@ together on a project through a shared group chat.
 
 Settings come from, in increasing precedence: built-in defaults, a config
 file (--config, else ./veyloom.yaml, else ~/.veyloom/veyloom.yaml),
-environment variables prefixed VEYLOOM_, and command-line flags.`,
-		// Runtime failures should not be followed by a usage dump; the
+environment variables prefixed VEYLOOM_ (./.env is read into the
+environment first; serve writes it from .env.example on the first run),
+and command-line flags.`,
+		// Failures while running should not be followed by a usage dump; the
 		// error message alone is what the user needs.
 		SilenceUsage: true,
 		// Flags are parsed by now and cmd is the command being run, so this
 		// is the earliest point at which every source of configuration is
 		// available.
 		PersistentPreRunE: func(cmd *cobra.Command, _ []string) error {
+			if err := a.loadDotEnv(cmd); err != nil {
+				return err
+			}
 			return a.resolveConfig(cmd)
 		},
 	}
 	root.PersistentFlags().StringVar(&a.configPath, "config", "", "config file (default: ./veyloom.yaml, then ~/.veyloom/veyloom.yaml)")
+	root.PersistentFlags().StringVar(&a.envFile, "env-file", ".env", "settings file read into the environment; serve writes it on first run (empty: none)")
 
 	root.AddCommand(
 		newDiscoverCmd(a),

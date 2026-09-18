@@ -32,6 +32,16 @@ func (f *fakeUsers) GetUser(_ context.Context, id string) (store.User, error) {
 	return u, nil
 }
 
+func (f *fakeUsers) RenameUser(_ context.Context, id, name string) (store.User, error) {
+	u, ok := f.users[id]
+	if !ok {
+		return store.User{}, fmt.Errorf("user %s: %w", id, store.ErrNotFound)
+	}
+	u.Name = name
+	f.users[id] = u
+	return u, nil
+}
+
 func (f *fakeUsers) ListUsers(context.Context) ([]store.User, error) {
 	out := []store.User{}
 	for _, u := range f.users {
@@ -58,6 +68,7 @@ func newFakeMessages(rooms *fakeProjects, users *fakeUsers) *fakeMessages {
 // was cancelled.
 type fakeChat struct {
 	messages   *fakeMessages
+	posted     []store.NewMessage
 	running    map[string]bool
 	cancelled  []string
 	approvals  fakeApprovals
@@ -68,6 +79,7 @@ type fakeChat struct {
 
 func (c *fakeChat) PostUserMessage(ctx context.Context, m store.NewMessage) (store.Message, error) {
 	m.SenderKind = store.SenderUser
+	c.posted = append(c.posted, m)
 	return c.messages.CreateMessage(ctx, m)
 }
 
@@ -164,6 +176,55 @@ func (f *fakeMessages) ThreadForMessage(ctx context.Context, messageID string) (
 	return t, nil
 }
 
+// ListUserMentions filters by the structured mentions, newest first.
+func (f *fakeMessages) ListUserMentions(_ context.Context, userID string, before int64, limit int) ([]store.InboxItem, error) {
+	if _, ok := f.users.users[userID]; !ok {
+		return nil, fmt.Errorf("user %s: %w", userID, store.ErrNotFound)
+	}
+	var out []store.InboxItem
+	for i := len(f.messages) - 1; i >= 0; i-- {
+		m := f.messages[i]
+		if before > 0 && m.Seq >= before {
+			continue
+		}
+		for _, mention := range m.Mentions {
+			if mention.Kind == store.MentionUser && mention.ID == userID {
+				out = append(out, store.InboxItem{Message: m, RoomName: "main", SenderName: "someone"})
+				break
+			}
+		}
+		if limit > 0 && len(out) == limit {
+			break
+		}
+	}
+	if out == nil {
+		out = []store.InboxItem{}
+	}
+	return out, nil
+}
+
+// ThreadSummaries counts replies per thread; turns are not modelled here.
+func (f *fakeMessages) ThreadSummaries(_ context.Context, rootMessageIDs []string) (map[string]store.ThreadSummary, error) {
+	out := map[string]store.ThreadSummary{}
+	for _, id := range rootMessageIDs {
+		for _, thread := range f.threads {
+			if thread.RootMessageID != id {
+				continue
+			}
+			summary := store.ThreadSummary{ID: thread.ID}
+			for _, m := range f.messages {
+				if m.ThreadID == thread.ID {
+					summary.ReplyCount++
+					at := m.CreatedAt
+					summary.LastReplyAt = &at
+				}
+			}
+			out[id] = summary
+		}
+	}
+	return out, nil
+}
+
 func (f *fakeMessages) GetThread(_ context.Context, id string) (store.Thread, error) {
 	if err := checkID(id); err != nil {
 		return store.Thread{}, err
@@ -185,7 +246,7 @@ func chatHandler(t *testing.T) (http.Handler, store.Room, store.User, *fakeMessa
 	_, room, _ := projects.CreateProject(context.Background(), store.NewProject{Name: "p"})
 	user, _ := users.CreateUser(context.Background(), "alice")
 	chat := &fakeChat{messages: messages, running: map[string]bool{}}
-	handler := NewHandler(Deps{Projects: projects, Users: users, Messages: messages, Chat: chat})
+	handler := NewHandler(Deps{Projects: projects, Users: users, Messages: messages, Turns: fakeTurns{}, Chat: chat})
 	return handler, room, user, messages
 }
 
@@ -340,5 +401,31 @@ func TestGetMessageAndThread_NotFound(t *testing.T) {
 	}
 	if rec := do(t, handler, http.MethodGet, "/api/v1/threads/t404/messages", "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("thread messages: status = %d, want 404", rec.Code)
+	}
+}
+
+func TestUserInbox(t *testing.T) {
+	handler, room, alice, messages := chatHandler(t)
+	bob, err := messages.users.CreateUser(context.Background(), "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	mention := fmt.Sprintf(`,"mentions":[{"kind":"user","id":%q}]`, alice.ID)
+	do(t, handler, http.MethodPost, "/api/v1/rooms/"+room.ID+"/messages", fmt.Sprintf(`{"user_id":%q,"body":"@alice one"%s}`, bob.ID, mention), nil)
+	do(t, handler, http.MethodPost, "/api/v1/rooms/"+room.ID+"/messages", fmt.Sprintf(`{"user_id":%q,"body":"plain"}`, bob.ID), nil)
+	do(t, handler, http.MethodPost, "/api/v1/rooms/"+room.ID+"/messages", fmt.Sprintf(`{"user_id":%q,"body":"@alice two"%s}`, bob.ID, mention), nil)
+
+	var inbox InboxResponse
+	if rec := do(t, handler, http.MethodGet, "/api/v1/users/"+alice.ID+"/inbox", "", &inbox); rec.Code != http.StatusOK || len(inbox.Items) != 2 || inbox.Items[0].Body != "@alice two" || inbox.Items[0].RoomName == "" {
+		t.Errorf("inbox: status = %d, items = %+v", rec.Code, inbox.Items)
+	}
+	if rec := do(t, handler, http.MethodGet, fmt.Sprintf("/api/v1/users/%s/inbox?before=%d", alice.ID, inbox.Items[0].Seq), "", &inbox); rec.Code != http.StatusOK || len(inbox.Items) != 1 || inbox.Items[0].Body != "@alice one" {
+		t.Errorf("before: status = %d, items = %+v", rec.Code, inbox.Items)
+	}
+	if rec := do(t, handler, http.MethodGet, "/api/v1/users/"+alice.ID+"/inbox?before=x", "", nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("bad before: status = %d, want 400", rec.Code)
+	}
+	if rec := do(t, handler, http.MethodGet, "/api/v1/users/u404/inbox", "", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("unknown user: status = %d, want 404", rec.Code)
 	}
 }

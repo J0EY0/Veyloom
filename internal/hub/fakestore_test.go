@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/J0EY0/veyloom/internal/engine"
+	"github.com/J0EY0/veyloom/internal/runtime"
 )
 
-// fakeStore is an in-memory WorkerStore for tests. It mirrors the real
+// fakeStore is an in-memory MachineStore for tests. It mirrors the real
 // store's identity rule (a known id reconnects, anything else gets a new
 // sequential id) and records what was persisted so tests can assert on it.
 // The embedded Store is nil: the other methods are never reached by the
@@ -18,11 +18,11 @@ type fakeStore struct {
 	mu           sync.Mutex
 	names        map[string]string // id → name
 	touches      map[string]int
-	engines      map[string][]engine.Info
+	runtimes     map[string][]runtime.Info
 	disconnected map[string]int
-	// failRegister, when set, is returned from RegisterWorker.
+	// failRegister, when set, is returned from RegisterMachine.
 	failRegister error
-	// failTouch, when set, is returned from TouchWorker.
+	// failTouch, when set, is returned from TouchMachine.
 	failTouch error
 }
 
@@ -30,12 +30,12 @@ func newFakeStore() *fakeStore {
 	return &fakeStore{
 		names:        make(map[string]string),
 		touches:      make(map[string]int),
-		engines:      make(map[string][]engine.Info),
+		runtimes:     make(map[string][]runtime.Info),
 		disconnected: make(map[string]int),
 	}
 }
 
-func (s *fakeStore) RegisterWorker(_ context.Context, id, name string, engines []engine.Info) (string, error) {
+func (s *fakeStore) RegisterMachine(_ context.Context, id, name string, runtimes []runtime.Info) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failRegister != nil {
@@ -45,11 +45,11 @@ func (s *fakeStore) RegisterWorker(_ context.Context, id, name string, engines [
 		id = fmt.Sprintf("w%d", len(s.names)+1)
 	}
 	s.names[id] = name
-	s.engines[id] = engines
+	s.runtimes[id] = runtimes
 	return id, nil
 }
 
-func (s *fakeStore) TouchWorker(_ context.Context, id string) error {
+func (s *fakeStore) TouchMachine(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.failTouch != nil {
@@ -59,14 +59,14 @@ func (s *fakeStore) TouchWorker(_ context.Context, id string) error {
 	return nil
 }
 
-func (s *fakeStore) UpdateWorkerEngines(_ context.Context, id string, engines []engine.Info) error {
+func (s *fakeStore) UpdateMachineRuntimes(_ context.Context, id string, runtimes []runtime.Info) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.engines[id] = engines
+	s.runtimes[id] = runtimes
 	return nil
 }
 
-func (s *fakeStore) MarkWorkerDisconnected(_ context.Context, id string) error {
+func (s *fakeStore) MarkMachineDisconnected(_ context.Context, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.disconnected[id]++
@@ -85,10 +85,10 @@ func (s *fakeStore) disconnectCount(id string) int {
 	return s.disconnected[id]
 }
 
-func (s *fakeStore) storedEngines(id string) []engine.Info {
+func (s *fakeStore) storedRuntimes(id string) []runtime.Info {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.engines[id]
+	return s.runtimes[id]
 }
 
 func (s *fakeStore) storedName(id string) string {

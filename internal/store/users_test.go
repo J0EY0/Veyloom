@@ -44,3 +44,28 @@ func TestUsers_CreateGetList(t *testing.T) {
 		t.Error("blank name should be rejected")
 	}
 }
+
+func TestUsers_Rename(t *testing.T) {
+	s := storetest.New(t)
+	ctx := context.Background()
+	me, err := s.CreateUser(ctx, "jinghao")
+	if err != nil {
+		t.Fatal(err)
+	}
+	renamed, err := s.RenameUser(ctx, me.ID, "Jinghao Xian")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if renamed.ID != me.ID || renamed.Name != "Jinghao Xian" || !renamed.CreatedAt.Equal(me.CreatedAt) {
+		t.Errorf("unexpected rename: %+v", renamed)
+	}
+	if got, _ := s.GetUser(ctx, me.ID); got.Name != "Jinghao Xian" {
+		t.Errorf("user after rename: %+v", got)
+	}
+	if _, err := s.RenameUser(ctx, me.ID, "  "); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("blank name: got %v, want ErrInvalidInput", err)
+	}
+	if _, err := s.RenameUser(ctx, "00000000-0000-0000-0000-000000000000", "x"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("unknown id: got %v, want ErrNotFound", err)
+	}
+}

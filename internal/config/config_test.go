@@ -21,11 +21,11 @@ func TestDefault_IsComplete(t *testing.T) {
 	if c.Server.ReadHeaderTimeout <= 0 || c.Server.ShutdownTimeout <= 0 {
 		t.Errorf("server timeouts must be positive: %+v", c.Server)
 	}
-	if c.Hub.HeartbeatInterval <= 0 || c.Worker.DetectTimeout <= 0 {
-		t.Errorf("subsystem defaults must be filled in: hub %+v, worker %+v", c.Hub, c.Worker)
+	if c.Hub.HeartbeatInterval <= 0 || c.Machine.DetectTimeout <= 0 {
+		t.Errorf("subsystem defaults must be filled in: hub %+v, machine %+v", c.Hub, c.Machine)
 	}
-	if c.WorkerIdentityPath() != filepath.Join(c.State.Dir, "worker.json") {
-		t.Errorf("identity path = %q", c.WorkerIdentityPath())
+	if c.MachineIdentityPath() != filepath.Join(c.State.Dir, "machine.json") {
+		t.Errorf("identity path = %q", c.MachineIdentityPath())
 	}
 }
 
@@ -211,7 +211,7 @@ func TestLoad_ExpandsHomeInStateDir(t *testing.T) {
 }
 
 func TestEnvVar(t *testing.T) {
-	if got := EnvVar(KeyWorkerDetectTimeout); got != "VEYLOOM_WORKER_DETECT_TIMEOUT" {
+	if got := EnvVar(KeyMachineDetectTimeout); got != "VEYLOOM_MACHINE_DETECT_TIMEOUT" {
 		t.Errorf("EnvVar = %q", got)
 	}
 }
@@ -227,12 +227,24 @@ func TestLoad_TranscriptDirDerivedFromStateDir(t *testing.T) {
 	if cfg.Hub.TranscriptDir != filepath.Join(home, "state", "turns") {
 		t.Errorf("TranscriptDir = %q, want it under the state dir", cfg.Hub.TranscriptDir)
 	}
+	if cfg.Hub.AvatarDir != filepath.Join(home, "state", "avatars") {
+		t.Errorf("AvatarDir = %q, want it under the state dir", cfg.Hub.AvatarDir)
+	}
+	if cfg.Machine.SessionDir != filepath.Join(home, "state", "sessions") {
+		t.Errorf("SessionDir = %q, want it under the state dir", cfg.Machine.SessionDir)
+	}
+	if cfg.Machine.ToolDir != filepath.Join(home, "state", "tools") {
+		t.Errorf("ToolDir = %q, want it under the state dir", cfg.Machine.ToolDir)
+	}
 
-	cfg, err = NewLoader().Load(writeConfig(t, "hub:\n  transcript_dir: ~/elsewhere\n"))
+	cfg, err = NewLoader().Load(writeConfig(t, "hub:\n  transcript_dir: ~/elsewhere\nmachine:\n  session_dir: ~/pi-sessions\n"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if cfg.Hub.TranscriptDir != filepath.Join(home, "elsewhere") {
 		t.Errorf("explicit TranscriptDir = %q", cfg.Hub.TranscriptDir)
+	}
+	if cfg.Machine.SessionDir != filepath.Join(home, "pi-sessions") {
+		t.Errorf("explicit SessionDir = %q", cfg.Machine.SessionDir)
 	}
 }
