@@ -1,0 +1,382 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+/* Streamdown renders agent markdown with Tailwind classes of its own. */
+@source "../../node_modules/streamdown/dist/*.js";
+
+/* The colour scheme is a class on <html> that lib/theme.ts keeps in step
+   with the person's choice or the system (docs/webui.md §0). */
+@custom-variant dark (&:is(.dark *));
+
+/* Design tokens: Linear's palette mapped onto shadcn's semantic names.
+   Light is the base; .dark swaps every value. Nothing in the UI names a
+   raw colour. Chroma is limited to the four status colours and, since
+   2026-09-16, one hue per runtime — the latter only on a runtime's own
+   mark and the name pill that echoes it. */
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+
+  --background: #ffffff;
+  --foreground: #282a30;
+  --card: #ffffff;
+  --card-foreground: #282a30;
+  --popover: #ffffff;
+  --popover-foreground: #282a30;
+  --primary: #282a30;
+  --primary-foreground: #ffffff;
+  --secondary: #eeedef;
+  --secondary-foreground: #282a30;
+  --muted: #f4f2f4;
+  --muted-foreground: #6f6e77;
+  --accent: #f4f2f4;
+  --accent-foreground: #282a30;
+  --destructive: #d9534f;
+  --border: #e9e8ea;
+  --input: #e4e2e4;
+  --ring: #86848d;
+  --chart-1: #d9a514;
+  --chart-2: #e08a2e;
+  --chart-3: #3f9c6a;
+  --chart-4: #d9534f;
+  --chart-5: #6f6e77;
+
+  --sidebar: #f9f8f9;
+  --sidebar-foreground: #3c4149;
+  --sidebar-primary: #282a30;
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #ecebed;
+  --sidebar-accent-foreground: #282a30;
+  --sidebar-border: #e9e8ea;
+  --sidebar-ring: #86848d;
+
+  /* Extra tiers the design uses beyond shadcn's two levels of text. */
+  --body: #3c4149;
+  --subtle: #86848d;
+  --selection: #ecebed;
+  --status-run: #d9a514;
+  --status-wait: #e08a2e;
+  --status-ok: #3f9c6a;
+  --status-fail: #d9534f;
+  /* A runtime's own colour: the filled disc behind its mark, plus the
+     wash and ink of the name pill that echoes it. The only hue in the UI
+     besides the four status colours (docs/webui.md §0). */
+  --runtime-claude: #d97757;
+  --runtime-claude-wash: #fbeee8;
+  --runtime-claude-ink: #a1502f;
+  --runtime-codex: #10a37f;
+  --runtime-codex-wash: #e2f2ec;
+  --runtime-codex-ink: #18755a;
+  --runtime-pi: #6f5fdc;
+  --runtime-pi-wash: #eceafa;
+  --runtime-pi-ink: #5244ad;
+  --shadow-card: 0 1px 2px rgb(0 0 0 / 0.03);
+  --shadow-elev: 0 12px 32px rgb(0 0 0 / 0.08), 0 2px 6px rgb(0 0 0 / 0.04);
+  --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.1), 0 1px 3px rgb(0 0 0 / 0.06);
+}
+
+.dark {
+  color-scheme: dark;
+
+  --background: #141516;
+  --foreground: #f7f8f8;
+  --card: #141516;
+  --card-foreground: #f7f8f8;
+  --popover: #1c1c1f;
+  --popover-foreground: #f7f8f8;
+  --primary: #f7f8f8;
+  --primary-foreground: #141516;
+  --secondary: #28282c;
+  --secondary-foreground: #f7f8f8;
+  --muted: #232326;
+  --muted-foreground: #8a8f98;
+  --accent: #232326;
+  --accent-foreground: #f7f8f8;
+  --destructive: #e0605b;
+  --border: #23252a;
+  --input: #34343a;
+  --ring: #62666d;
+  --chart-1: #e5be3d;
+  --chart-2: #ea9a4a;
+  --chart-3: #52b384;
+  --chart-4: #e0605b;
+  --chart-5: #8a8f98;
+
+  --sidebar: #0f1011;
+  --sidebar-foreground: #d0d6e0;
+  --sidebar-primary: #f7f8f8;
+  --sidebar-primary-foreground: #0f1011;
+  --sidebar-accent: #1c1c1f;
+  --sidebar-accent-foreground: #f7f8f8;
+  --sidebar-border: #23252a;
+  --sidebar-ring: #62666d;
+
+  --body: #d0d6e0;
+  --subtle: #62666d;
+  --selection: #28282c;
+  --status-run: #e5be3d;
+  --status-wait: #ea9a4a;
+  --status-ok: #52b384;
+  --status-fail: #e0605b;
+  --runtime-claude: #d97757;
+  --runtime-claude-wash: #35241d;
+  --runtime-claude-ink: #e5a184;
+  --runtime-codex: #2eb88f;
+  --runtime-codex-wash: #17302a;
+  --runtime-codex-ink: #5fc7a4;
+  --runtime-pi: #8172e8;
+  --runtime-pi-wash: #232041;
+  --runtime-pi-ink: #a79bf2;
+  --shadow-card: none;
+  --shadow-elev: 0 16px 48px rgb(0 0 0 / 0.45), 0 2px 8px rgb(0 0 0 / 0.3);
+  --shadow-pop: 0 8px 24px rgb(0 0 0 / 0.4);
+}
+
+@theme inline {
+  --font-sans: "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Noto Sans CJK SC", sans-serif;
+  --font-heading: var(--font-sans);
+  --font-mono: ui-monospace, "SF Mono", Menlo, "JetBrains Mono", Consolas, monospace;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  --color-body: var(--body);
+  --color-subtle: var(--subtle);
+  --color-selection: var(--selection);
+  --color-status-run: var(--status-run);
+  --color-status-wait: var(--status-wait);
+  --color-status-ok: var(--status-ok);
+  --color-status-fail: var(--status-fail);
+  --color-runtime-claude: var(--runtime-claude);
+  --color-runtime-claude-wash: var(--runtime-claude-wash);
+  --color-runtime-claude-ink: var(--runtime-claude-ink);
+  --color-runtime-codex: var(--runtime-codex);
+  --color-runtime-codex-wash: var(--runtime-codex-wash);
+  --color-runtime-codex-ink: var(--runtime-codex-ink);
+  --color-runtime-pi: var(--runtime-pi);
+  --color-runtime-pi-wash: var(--runtime-pi-wash);
+  --color-runtime-pi-ink: var(--runtime-pi-ink);
+
+  --shadow-card: var(--shadow-card);
+  --shadow-elev: var(--shadow-elev);
+  --shadow-pop: var(--shadow-pop);
+
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+
+  --animate-breathe: breathe 1.8s ease-in-out infinite;
+  --animate-ripple: ripple 2s ease-out infinite;
+  --animate-blink: blink 1s steps(2) infinite;
+  --animate-shimmer: shimmer 2s linear infinite;
+  @keyframes shimmer {
+    from {
+      background-position: 100% center;
+    }
+    to {
+      background-position: 0% center;
+    }
+  }
+  @keyframes blink {
+    50% {
+      opacity: 0;
+    }
+  }
+  @keyframes ripple {
+    from {
+      transform: scale(0.7);
+      opacity: 0.6;
+    }
+    to {
+      transform: scale(1.25);
+      opacity: 0;
+    }
+  }
+  @keyframes breathe {
+    0%,
+    100% {
+      opacity: 0.35;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    scrollbar-width: thin;
+    scrollbar-color: var(--input) transparent;
+  }
+  html {
+    @apply font-sans;
+    height: 100%;
+  }
+  body {
+    @apply bg-sidebar text-foreground;
+    height: 100%;
+    margin: 0;
+    /* No base font size of our own: shadcn's components size their own
+       text against the root, and inherit it where they don't (a card's
+       title, for one). Sizes are in rem throughout, so the interface size
+       setting, which moves the root font size (lib/uiSize.ts), scales
+       text and spacing together. */
+    line-height: 1.5;
+    letter-spacing: -0.005em;
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+    touch-action: manipulation;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  /* Icons are drawn at a lighter stroke than lucide's default, everywhere. */
+  svg.lucide {
+    stroke-width: 1.75;
+  }
+}
+
+/* Agent replies are markdown rendered by Streamdown. Its defaults suit a
+   chat column; the room is denser. These rules are unlayered on purpose,
+   so they win over the utilities Streamdown puts on its elements. */
+.prose-agent {
+  @apply text-body;
+  height: auto;
+  font-size: 0.90625rem; /* 14.5px at the default size */
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+.prose-agent > :not(:last-child) {
+  margin-bottom: 0.5em;
+}
+.prose-agent p,
+.prose-agent li {
+  line-height: inherit;
+  padding-block: 0;
+}
+.prose-agent h1,
+.prose-agent h2,
+.prose-agent h3,
+.prose-agent h4,
+.prose-agent h5,
+.prose-agent h6 {
+  margin: 0.9em 0 0.4em;
+  font-size: 1em;
+  line-height: inherit;
+  font-weight: 600;
+}
+.prose-agent > :first-child {
+  margin-top: 0;
+}
+.prose-agent ul,
+.prose-agent ol {
+  padding-left: 1.4em;
+  list-style-position: outside;
+}
+.prose-agent li + li {
+  margin-top: 0.125rem;
+}
+.prose-agent a {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.prose-agent blockquote {
+  border-left: 2px solid var(--input);
+  padding-left: 0.75rem;
+  color: var(--muted-foreground);
+}
+.prose-agent hr {
+  border-color: var(--border);
+  margin: 0.75rem 0;
+}
+.prose-agent [data-streamdown="code-block"] {
+  margin-block: 0.4em;
+  font-size: 0.78125rem;
+}
+.prose-agent [data-streamdown="inline-code"] {
+  font-size: 0.78125rem;
+}
+.prose-agent [data-streamdown="table-wrapper"] {
+  font-size: 0.8125rem;
+}
+
+/* A side panel slides in from the right edge it lives on, and out. The
+   way out holds its last frame and the transition ends with it: a view
+   transition lasts 250ms by default, and without "forwards" the panel,
+   faded out at 150ms, snapped back in for the last 100ms before it went. */
+::view-transition-group(.panel-in) {
+  animation-duration: 200ms;
+}
+::view-transition-new(.panel-in) {
+  animation: panel-in 200ms cubic-bezier(0.2, 0, 0, 1) both;
+}
+::view-transition-group(.panel-out) {
+  animation-duration: 150ms;
+}
+::view-transition-old(.panel-out) {
+  animation: panel-out 150ms ease-in forwards;
+}
+@keyframes panel-in {
+  from {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+@keyframes panel-out {
+  to {
+    opacity: 0;
+    transform: translateX(16px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+  ::view-transition-group(*),
+  ::view-transition-old(*),
+  ::view-transition-new(*) {
+    animation: none !important;
+  }
+}

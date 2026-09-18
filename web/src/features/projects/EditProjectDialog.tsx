@@ -1,0 +1,109 @@
+import { useId, useRef, useState, type FormEvent } from 'react'
+import { useUpdateProject } from '@/api/projects'
+import type { Project } from '@/api/types'
+import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Input } from '@/components/ui/input'
+import { Textarea } from '@/components/ui/textarea'
+import { useT } from '@/lib/i18n'
+
+export interface EditProjectDialogProps {
+  project: Project
+  // Asks for the name alone, as the sidebar's rename does.
+  rename?: boolean
+  onClose: () => void
+}
+
+// Renames a project, moves its checkout or says what it is. Members work
+// under the checkout, so moving it moves them along (the hub does that,
+// 2026-09-17). The description opens every agent's brief (2026-09-18): what
+// the project is for, its goals, its stack, written once by a person.
+export function EditProjectDialog({ project, rename = false, onClose }: EditProjectDialogProps) {
+  const update = useUpdateProject(project.id)
+  const nameRef = useRef<HTMLInputElement>(null)
+  const [nameError, setNameError] = useState<string>()
+  const [error, setError] = useState<string>()
+  const id = useId()
+  const t = useT()
+
+  function onSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault()
+    const data = new FormData(event.currentTarget)
+    const name = String(data.get('name') ?? '').trim()
+    if (name === '') {
+      setNameError(t('project.nameRequired'))
+      nameRef.current?.focus()
+      return
+    }
+    setNameError(undefined)
+    setError(undefined)
+    const req = rename ? { name } : { name, repo_path: String(data.get('repo_path') ?? '').trim(), description: String(data.get('description') ?? '').trim() }
+    update.mutate(req, { onSuccess: onClose, onError: (err) => setError(err.message) })
+  }
+
+  return (
+    <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
+      <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+        <form onSubmit={onSubmit}>
+          <DialogHeader>
+            <DialogTitle>{rename ? t('project.renameTitle') : t('project.edit')}</DialogTitle>
+          </DialogHeader>
+          <FieldGroup className="my-4 gap-4">
+            <Field data-invalid={nameError ? true : undefined}>
+              <FieldLabel htmlFor={`${id}-name`}>{t('project.name')}</FieldLabel>
+              <Input
+                id={`${id}-name`}
+                ref={nameRef}
+                name="name"
+                defaultValue={project.name}
+                autoComplete="off"
+                spellCheck={false}
+                aria-invalid={nameError ? true : undefined}
+              />
+              {nameError ? <FieldError>{nameError}</FieldError> : null}
+            </Field>
+            {rename ? null : (
+              <Field>
+                <FieldLabel htmlFor={`${id}-path`}>{t('project.repoPath')}</FieldLabel>
+                <Input
+                  id={`${id}-path`}
+                  name="repo_path"
+                  defaultValue={project.repo_path}
+                  autoComplete="off"
+                  spellCheck={false}
+                  placeholder="/Users/me/project"
+                  className="font-mono text-[0.8125rem]"
+                />
+              </Field>
+            )}
+            {rename ? null : (
+              <Field>
+                <FieldLabel htmlFor={`${id}-description`}>{t('project.description')}</FieldLabel>
+                <Textarea
+                  id={`${id}-description`}
+                  name="description"
+                  defaultValue={project.description ?? ''}
+                  rows={4}
+                  maxLength={4000}
+                  placeholder={t('project.descriptionPlaceholder')}
+                  className="max-h-48 text-[0.8125rem]"
+                />
+                <FieldDescription>{t('project.descriptionHint')}</FieldDescription>
+              </Field>
+            )}
+            {error ? <FieldError>{error}</FieldError> : null}
+          </FieldGroup>
+          <DialogFooter>
+            <Button type="button" variant="ghost" onClick={onClose}>
+              {t('common.cancel')}
+            </Button>
+            <Button type="submit" disabled={update.isPending} aria-busy={update.isPending}>
+              {update.isPending ? t('common.saving') : t('common.save')}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
