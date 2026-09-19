@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -30,9 +29,9 @@ type CodexConfig struct {
 	// SetupTimeout bounds everything before the turn itself: starting the
 	// app-server, the initialize handshake and thread start or resume.
 	SetupTimeout time.Duration
-	// ProxyBinary is the executable Codex runs as the MCP bridge to the
-	// turn's tools: veyloom itself, run as `mcp-proxy`. Empty means the
-	// running executable.
+	// ProxyBinary is the veyloom executable Codex runs as `mcp-proxy`, the
+	// MCP bridge to the turn's room tools. Empty means there is none, and
+	// turns run without the room tools.
 	ProxyBinary string
 }
 
@@ -132,21 +131,13 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 	// config; it runs the proxy pointed at this turn's endpoint.
 	var mcpServer map[string]any
 	var token string
-	if spec.Host != nil {
-		proxy := r.cfg.ProxyBinary
-		if proxy == "" {
-			path, err := os.Executable()
-			if err != nil {
-				return nil, fmt.Errorf("codex: locate own executable for the MCP proxy: %w", err)
-			}
-			proxy = path
-		}
+	if spec.Host != nil && r.cfg.ProxyBinary != "" {
 		ep, err := r.tools.register(spec.Host, nil)
 		if err != nil {
 			return nil, fmt.Errorf("codex: tool endpoint: %w", err)
 		}
 		token = ep.token
-		command, args := mcpProxyServer(proxy, ep.MCP)
+		command, args := mcpProxyServer(r.cfg.ProxyBinary, ep.MCP)
 		mcpServer = map[string]any{
 			"command": command,
 			"args":    args,
@@ -182,7 +173,7 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 	t := &codexTurn{
 		mcpServer: mcpServer,
 		release:   release,
-		turnBase:  newTurnBase(cancel),
+		turnBase:  newTurnBase(ctx, cancel),
 		ctx:       ctx,
 		stopProc:  stopProc,
 		cfg:       r.cfg,
@@ -191,6 +182,7 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 		eof:       make(chan struct{}),
 		completed: make(chan codexTurnEnd, 1),
 		items:     make(map[string]codexItem),
+		mcpFailed: make(map[string]bool),
 	}
 	go t.run(spec)
 	return t, nil
@@ -253,6 +245,13 @@ type codexTurn struct {
 	tokensBase  codexTokens
 	tokensTotal codexTokens
 	tokensSeen  bool
+	// reviewing counts Codex's automatic reviews under way; the warning it
+	// sends a person during one is that review's reasoning, held in
+	// reviewNote until the review completes. mcpFailed remembers the MCP
+	// servers already reported as failing to start, which Codex retries.
+	reviewing  int
+	reviewNote string
+	mcpFailed  map[string]bool
 
 	eof       chan struct{}
 	completed chan codexTurnEnd
@@ -316,6 +315,9 @@ func (t *codexTurn) converse(spec TurnSpec) (Result, error) {
 		// Codex names its threads itself, so only its own reference resumes.
 		method = "thread/resume"
 		params["threadId"] = spec.Session.Ref
+		// Only the thread's id is read back; without this the reply carries
+		// the thread's whole history, which grows with every turn.
+		params["excludeTurns"] = true
 	} else if spec.SystemPrompt != "" {
 		// The role card is fixed at creation; a resumed thread keeps the
 		// instructions it was started with.
@@ -599,6 +601,87 @@ func (t *codexTurn) notification(msg codexMessage) {
 		case t.completed <- end:
 		default:
 		}
+	case "item/autoApprovalReview/started":
+		t.mu.Lock()
+		t.reviewing++
+		t.mu.Unlock()
+	case "item/autoApprovalReview/completed":
+		t.autoReviewed(msg.Params)
+	case "guardianWarning":
+		var p struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(msg.Params, &p) != nil || p.Message == "" {
+			break
+		}
+		t.mu.Lock()
+		held := t.reviewing > 0
+		if held {
+			t.reviewNote = p.Message
+		}
+		t.mu.Unlock()
+		if !held {
+			t.notice(t.ctx, NoticeWarning, p.Message)
+		}
+	case "autoApprovalReview/strictReviewRequired":
+		t.notice(t.ctx, NoticeInfo, "Codex will have every further command in this turn reviewed before it runs")
+	case "warning":
+		var p struct {
+			Message string `json:"message"`
+		}
+		if json.Unmarshal(msg.Params, &p) == nil && p.Message != "" {
+			t.notice(t.ctx, NoticeWarning, p.Message)
+		}
+	case "configWarning", "deprecationNotice":
+		var p struct {
+			Summary string  `json:"summary"`
+			Details *string `json:"details"`
+			Path    string  `json:"path"`
+		}
+		if json.Unmarshal(msg.Params, &p) != nil || p.Summary == "" {
+			break
+		}
+		text := p.Summary
+		if p.Details != nil && *p.Details != "" {
+			text += ": " + *p.Details
+		}
+		if p.Path != "" {
+			text += " (" + p.Path + ")"
+		}
+		level := NoticeWarning
+		if msg.Method == "deprecationNotice" {
+			level = NoticeInfo
+		}
+		t.notice(t.ctx, level, text)
+	case "model/rerouted":
+		var p struct {
+			FromModel string `json:"fromModel"`
+			ToModel   string `json:"toModel"`
+			Reason    string `json:"reason"`
+		}
+		if json.Unmarshal(msg.Params, &p) == nil && p.ToModel != "" {
+			t.notice(t.ctx, NoticeInfo, fmt.Sprintf("Codex switched this turn from %s to %s (%s)", p.FromModel, p.ToModel, p.Reason))
+		}
+	case "mcpServer/startupStatus/updated":
+		var p struct {
+			Name   string  `json:"name"`
+			Status string  `json:"status"`
+			Error  *string `json:"error"`
+		}
+		if json.Unmarshal(msg.Params, &p) != nil || p.Status != "failed" {
+			break
+		}
+		t.mu.Lock()
+		seen := t.mcpFailed[p.Name]
+		t.mcpFailed[p.Name] = true
+		t.mu.Unlock()
+		if !seen {
+			text := "MCP server " + p.Name + " failed to start"
+			if p.Error != nil && *p.Error != "" {
+				text += ": " + *p.Error
+			}
+			t.notice(t.ctx, NoticeWarning, text)
+		}
 	case "error":
 		var p struct {
 			Error struct {
@@ -665,9 +748,15 @@ func (t *codexTurn) itemCompleted(item codexItemView) {
 		t.emit(t.ctx, Event{Kind: EventToolResult, Tool: "commandExecution", Text: truncate(text, t.cfg.MaxEventBytes)})
 	case "mcpToolCall":
 		tool := item.Server + "/" + item.Tool
-		text := compactJSON(item.Result)
-		if len(item.Error) > 0 && string(item.Error) != "null" {
-			text = "error: " + compactJSON(item.Error)
+		text := mcpResultText(item.Result)
+		if jsonPresent(item.Error) {
+			var e struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(item.Error, &e) != nil || e.Message == "" {
+				e.Message = compactJSON(item.Error)
+			}
+			text = "error: " + e.Message
 		}
 		t.emit(t.ctx, Event{Kind: EventToolResult, Tool: tool, Text: truncate(text, t.cfg.MaxEventBytes)})
 	case "fileChange":
@@ -678,6 +767,20 @@ func (t *codexTurn) itemCompleted(item codexItemView) {
 			t.emit(t.ctx, Event{Kind: EventFileChanged, Path: c.Path})
 		}
 	}
+}
+
+// mcpResultText is what an MCP tool call returned, as a person reads it:
+// the text of its content blocks, or the whole result when there is none.
+func mcpResultText(raw json.RawMessage) string {
+	var result struct {
+		Content json.RawMessage `json:"content"`
+	}
+	if json.Unmarshal(raw, &result) == nil && len(result.Content) > 0 {
+		if text := toolResultText(result.Content); text != "" && text != string(result.Content) {
+			return text
+		}
+	}
+	return compactJSON(raw)
 }
 
 func (t *codexTurn) remember(id string, item codexItem) {
@@ -727,9 +830,246 @@ func (t *codexTurn) serveRequest(msg codexMessage) {
 			input["grantRoot"] = p.GrantRoot
 		}
 		t.respond(msg.ID, map[string]string{"decision": t.decide("fileChange", input)})
+	case "item/tool/requestUserInput":
+		t.respond(msg.ID, t.answerQuestions(msg.Params))
+	case "mcpServer/elicitation/request":
+		t.respond(msg.ID, t.elicit(msg.Params))
+	case "item/permissions/requestApproval":
+		var p struct {
+			Cwd         string          `json:"cwd"`
+			Reason      string          `json:"reason"`
+			Permissions json.RawMessage `json:"permissions"`
+		}
+		_ = json.Unmarshal(msg.Params, &p)
+		t.respond(msg.ID, t.decidePermissions(p.Permissions, p.Reason, p.Cwd))
 	default:
+		// Never in silence: people see what was asked and that it was
+		// turned down, told before the reply lets Codex move on.
+		t.notice(t.ctx, NoticeError, "Codex asked for "+msg.Method+", which Veyloom cannot answer yet; it was told no")
 		t.respondError(msg.ID, -32601, "veyloom does not support "+msg.Method)
 	}
+}
+
+// codexQuestionTool names Codex's questions (its request_user_input tool)
+// in approvals.
+const codexQuestionTool = "requestUserInput"
+
+// answerQuestions puts request_user_input's questions to people and gives
+// Codex what they said, by question id. A person who chooses not to answer
+// gives it no answers, which is also what Codex falls back to.
+func (t *codexTurn) answerQuestions(params json.RawMessage) map[string]any {
+	var p struct {
+		Questions []struct {
+			ID       string `json:"id"`
+			Header   string `json:"header"`
+			Question string `json:"question"`
+			IsOther  bool   `json:"isOther"`
+			IsSecret bool   `json:"isSecret"`
+			Options  []struct {
+				Label       string `json:"label"`
+				Description string `json:"description"`
+			} `json:"options"`
+		} `json:"questions"`
+	}
+	_ = json.Unmarshal(params, &p)
+	questions := make([]Question, 0, len(p.Questions))
+	asked := make(map[string]bool, len(p.Questions))
+	for _, q := range p.Questions {
+		options := make([]QuestionOption, len(q.Options))
+		for i, o := range q.Options {
+			options[i] = QuestionOption{Label: o.Label, Description: o.Description}
+		}
+		asked[q.ID] = true
+		questions = append(questions, Question{ID: q.ID, Header: q.Header, Question: q.Question, Options: options, Other: q.IsOther || len(options) == 0, Secret: q.IsSecret})
+	}
+
+	answers := map[string]any{}
+	if d, err := t.askQuestions(t.ctx, codexQuestionTool, questions); err == nil {
+		for id, a := range d.Answers() {
+			if asked[id] && len(a) > 0 {
+				answers[id] = map[string][]string{"answers": a}
+			}
+		}
+	}
+	return map[string]any{"answers": answers}
+}
+
+// elicit puts an MCP server's request to people, a form to fill in or a
+// page to open, and answers Codex with the MCP elicitation result. OpenAI's
+// own form modes carry a schema too and are shown as forms.
+func (t *codexTurn) elicit(params json.RawMessage) map[string]any {
+	var p struct {
+		ServerName      string          `json:"serverName"`
+		Mode            string          `json:"mode"`
+		Message         string          `json:"message"`
+		RequestedSchema json.RawMessage `json:"requestedSchema"`
+		URL             string          `json:"url"`
+	}
+	_ = json.Unmarshal(params, &p)
+	var d Decision
+	var err error
+	if p.Mode == "url" {
+		d, err = t.askLink(t.ctx, elicitationTool, LinkRequest{Server: p.ServerName, Message: p.Message, URL: p.URL})
+	} else {
+		d, err = t.askForm(t.ctx, elicitationTool, FormRequest{Server: p.ServerName, Message: p.Message, Schema: p.RequestedSchema})
+	}
+	action := elicitationAction(d, err)
+	result := map[string]any{"action": action, "content": nil, "_meta": nil}
+	if content := d.Content(); action == ElicitAccept && p.Mode != "url" && content != nil {
+		result["content"] = content
+	}
+	return result
+}
+
+// codexReviewer names Codex's own approval reviewer (approvals_reviewer set
+// to auto_review or guardian_subagent) in approvals it settled.
+const codexReviewer = "codex_auto_review"
+
+// codexVerdicts maps an automatic review's outcome onto a verdict.
+var codexVerdicts = map[string]string{
+	"approved": VerdictAllowed,
+	"denied":   VerdictDenied,
+	"timedOut": VerdictExpired,
+	"aborted":  VerdictCancelled,
+}
+
+// autoReviewed tells people about a request Codex's own reviewer settled:
+// what it was about, the verdict, the reviewer's reasoning (or the warning
+// it sent a person while reviewing) and the risk it saw.
+func (t *codexTurn) autoReviewed(params json.RawMessage) {
+	var p struct {
+		Review struct {
+			Status            string  `json:"status"`
+			RiskLevel         *string `json:"riskLevel"`
+			UserAuthorization *string `json:"userAuthorization"`
+			Rationale         *string `json:"rationale"`
+		} `json:"review"`
+		Action json.RawMessage `json:"action"`
+	}
+	err := json.Unmarshal(params, &p)
+	t.mu.Lock()
+	if t.reviewing > 0 {
+		t.reviewing--
+	}
+	held := t.reviewNote
+	t.reviewNote = ""
+	t.mu.Unlock()
+	if err != nil {
+		return
+	}
+	verdict, ok := codexVerdicts[p.Review.Status]
+	if !ok {
+		t.notice(t.ctx, NoticeWarning, "Codex's automatic review ended as "+p.Review.Status+": "+held)
+		return
+	}
+	why := deref(p.Review.Rationale)
+	if why == "" {
+		why = held
+	}
+	findings := map[string]string{}
+	if risk := deref(p.Review.RiskLevel); risk != "" {
+		findings["risk"] = risk
+	}
+	if auth := deref(p.Review.UserAuthorization); auth != "" {
+		findings["authorization"] = auth
+	}
+	var detail json.RawMessage
+	if len(findings) > 0 {
+		detail, _ = json.Marshal(findings)
+	}
+	tool, input := codexReviewedAction(p.Action)
+	t.reviewed(t.ctx, tool, input, codexReviewer, verdict, why, detail)
+}
+
+// codexReviewedAction names what an automatic review was about the way the
+// room names Codex's requests: a command as commandExecution with its
+// command, a patch as fileChange with its paths, a tool by server/tool.
+func codexReviewedAction(raw json.RawMessage) (tool, input string) {
+	var a struct {
+		Type     string   `json:"type"`
+		Command  string   `json:"command"`
+		Program  string   `json:"program"`
+		Argv     []string `json:"argv"`
+		Cwd      string   `json:"cwd"`
+		Files    []string `json:"files"`
+		Server   string   `json:"server"`
+		ToolName string   `json:"toolName"`
+	}
+	if json.Unmarshal(raw, &a) != nil {
+		return "autoReview", compactJSON(raw)
+	}
+	encode := func(v any) string {
+		data, _ := json.Marshal(v)
+		return string(data)
+	}
+	switch a.Type {
+	case "command":
+		return "commandExecution", encode(map[string]string{"command": a.Command, "cwd": a.Cwd})
+	case "execve":
+		command := strings.Join(a.Argv, " ")
+		if command == "" {
+			command = a.Program
+		}
+		return "commandExecution", encode(map[string]string{"command": command, "cwd": a.Cwd})
+	case "applyPatch":
+		return "fileChange", encode(map[string]any{"paths": a.Files})
+	case "mcpToolCall":
+		return a.Server + "/" + a.ToolName, compactJSON(raw)
+	case "requestPermissions":
+		return codexPermissionsTool, compactJSON(raw)
+	case "networkAccess":
+		return "network", compactJSON(raw)
+	}
+	return a.Type, compactJSON(raw)
+}
+
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
+}
+
+// codexPermissionsTool names, in approvals, a request for more than the
+// sandbox allows: network access, or paths outside the workspace.
+const codexPermissionsTool = "permissions"
+
+// decidePermissions asks the hub about a request for more permissions and
+// answers it: what was asked for, for this turn only, or nothing.
+func (t *codexTurn) decidePermissions(requested json.RawMessage, reason, cwd string) map[string]any {
+	var profile struct {
+		Network    json.RawMessage `json:"network"`
+		FileSystem json.RawMessage `json:"fileSystem"`
+	}
+	_ = json.Unmarshal(requested, &profile)
+	asked := map[string]any{}
+	if jsonPresent(profile.Network) {
+		asked["network"] = profile.Network
+	}
+	if jsonPresent(profile.FileSystem) {
+		asked["fileSystem"] = profile.FileSystem
+	}
+
+	input := map[string]any{}
+	for k, v := range asked {
+		input[k] = v
+	}
+	if reason != "" {
+		input["reason"] = reason
+	}
+	if cwd != "" {
+		input["cwd"] = cwd
+	}
+	granted := map[string]any{}
+	if t.decide(codexPermissionsTool, input) == "accept" {
+		granted = asked
+	}
+	return map[string]any{"permissions": granted, "scope": "turn"}
+}
+
+// jsonPresent reports whether a JSON field was given a value.
+func jsonPresent(raw json.RawMessage) bool {
+	return len(raw) > 0 && string(raw) != "null"
 }
 
 // decide asks the hub and maps its answer onto the app-server's decision

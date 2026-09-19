@@ -9,18 +9,28 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 )
 
-// The fake app-server is this test binary re-executed with an environment
-// variable set: a shell script cannot hold a JSON-RPC conversation, and
-// the fake must answer requests, raise requests of its own and wait for
-// the replies. TestMain diverts into it before any test runs.
+// The fake app-server, and the fake Claude Code and pi, are this test binary
+// re-executed with an environment variable set: a shell script cannot hold
+// a JSON-RPC conversation, and the fakes must answer requests, raise
+// requests of their own and wait for the replies. TestMain diverts into
+// them before any test runs.
 func TestMain(m *testing.M) {
 	if os.Getenv("VEYLOOM_FAKE_CODEX") == "1" {
 		fakeCodexMain()
+		os.Exit(0)
+	}
+	if os.Getenv("VEYLOOM_FAKE_CLAUDE") == "1" {
+		fakeClaudeMain()
+		os.Exit(0)
+	}
+	if os.Getenv("VEYLOOM_FAKE_PI") == "1" {
+		fakePiMain()
 		os.Exit(0)
 	}
 	os.Exit(m.Run())
@@ -29,8 +39,9 @@ func TestMain(m *testing.M) {
 // fakeCodexMain plays `codex app-server`. Every line it receives is
 // appended to the file named by VEYLOOM_FAKE_CODEX_RECORD so tests can
 // assert on what the runner sent. The turn's script is chosen by keywords
-// in the prompt, written as [hang], [fail], [approve], [filechange] or
-// [unsupported]; any other prompt plays the default turn.
+// in the prompt, written as [hang], [fail], [approve], [filechange],
+// [permissions], [question], [elicit], [review] or [unsupported]; any other
+// prompt plays the default turn.
 func fakeCodexMain() {
 	if len(os.Args) < 2 || os.Args[1] != "app-server" {
 		fmt.Fprintf(os.Stderr, "fake codex: unexpected args %v\n", os.Args[1:])
@@ -226,8 +237,109 @@ func (f *fakeAppServer) play(threadID, prompt string) bool {
 			f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "fileChange", "id": "fc-1", "changes": changes, "status": "declined"}}))
 			complete("completed", "", "not patched")
 		}
+	case strings.Contains(prompt, "[permissions]"):
+		f.send(map[string]any{"id": 103, "method": "item/permissions/requestApproval", "params": item("", map[string]any{
+			"itemId": "perm-1", "startedAtMs": 0, "environmentId": nil, "cwd": "/repo", "reason": "fetch deps",
+			"permissions": map[string]any{"network": map[string]any{"enabled": true}, "fileSystem": nil},
+		})})
+		reply, ok := f.awaitReply(103)
+		if !ok {
+			return false
+		}
+		var res struct {
+			Permissions struct {
+				Network *struct {
+					Enabled bool `json:"enabled"`
+				} `json:"network"`
+				FileSystem json.RawMessage `json:"fileSystem"`
+			} `json:"permissions"`
+			Scope string `json:"scope"`
+		}
+		json.Unmarshal(reply.Result, &res)
+		switch granted := res.Permissions; {
+		case granted.Network != nil && granted.Network.Enabled && granted.FileSystem == nil:
+			complete("completed", "", "network for the "+res.Scope)
+		case granted.Network == nil && granted.FileSystem == nil:
+			complete("completed", "", "nothing granted for the "+res.Scope)
+		default:
+			complete("completed", "", "unexpected grant: "+string(reply.Result))
+		}
+	case strings.Contains(prompt, "[question]"):
+		f.send(map[string]any{"id": 104, "method": "item/tool/requestUserInput", "params": item("", map[string]any{
+			"itemId": "q-1", "isBlocking": true, "autoResolutionMs": nil,
+			"questions": []map[string]any{
+				{"id": "colour", "header": "Colour", "question": "Which colour?", "isOther": false, "isSecret": false,
+					"options": []map[string]any{{"label": "red", "description": "warm"}, {"label": "blue", "description": "cool"}}},
+				{"id": "token", "header": "Token", "question": "Your token?", "isOther": false, "isSecret": true, "options": nil},
+			},
+		})})
+		reply, ok := f.awaitReply(104)
+		if !ok {
+			return false
+		}
+		var res struct {
+			Answers map[string]struct {
+				Answers []string `json:"answers"`
+			} `json:"answers"`
+		}
+		json.Unmarshal(reply.Result, &res)
+		var parts []string
+		for _, id := range []string{"colour", "token", "stray"} {
+			if a, ok := res.Answers[id]; ok {
+				parts = append(parts, id+"="+strings.Join(a.Answers, "|"))
+			}
+		}
+		if len(parts) == 0 {
+			complete("completed", "", "no answers")
+		} else {
+			complete("completed", "", strings.Join(parts, "; "))
+		}
+	case strings.Contains(prompt, "[elicit]"):
+		// An MCP server asks for a form, then for a link to be opened.
+		f.send(map[string]any{"id": 105, "method": "mcpServer/elicitation/request", "params": map[string]any{
+			"threadId": threadID, "turnId": "turn-1", "serverName": "deploy", "mode": "form", "_meta": nil, "message": "Where to?",
+			"requestedSchema": map[string]any{"type": "object", "properties": map[string]any{"region": map[string]any{"type": "string", "enum": []string{"eu", "us"}}}, "required": []string{"region"}},
+		}})
+		form, ok := f.awaitReply(105)
+		if !ok {
+			return false
+		}
+		f.send(map[string]any{"id": 106, "method": "mcpServer/elicitation/request", "params": map[string]any{
+			"threadId": threadID, "turnId": "turn-1", "serverName": "deploy", "mode": "url", "_meta": nil, "message": "Sign in",
+			"url": "https://login.example.com/device", "elicitationId": "el-1",
+		}})
+		link, ok := f.awaitReply(106)
+		if !ok {
+			return false
+		}
+		complete("completed", "", "form="+compactJSON(form.Result)+"; link="+compactJSON(link.Result))
+	case strings.Contains(prompt, "[review]"):
+		// Codex's own reviewer settles two requests: one approved with its
+		// reasoning, one denied whose reasoning only came as the warning
+		// sent during the review. Around them, what Codex tells people.
+		command := map[string]any{"type": "command", "source": "unifiedExec", "command": "/bin/zsh -lc 'curl -sI https://example.com'", "cwd": "/repo"}
+		f.notify("item/autoApprovalReview/started", item("", map[string]any{"reviewId": "rv-1", "targetItemId": "exec-1", "startedAtMs": 1, "review": map[string]any{"status": "inProgress"}, "action": command}))
+		f.notify("guardianWarning", item("", map[string]any{"message": "Automatic approval review approved (risk: low)"}))
+		f.notify("item/autoApprovalReview/completed", item("", map[string]any{"reviewId": "rv-1", "targetItemId": "exec-1", "startedAtMs": 1, "completedAtMs": 2, "decisionSource": "agent",
+			"review": map[string]any{"status": "approved", "riskLevel": "low", "userAuthorization": "high", "rationale": "a public HEAD request"}, "action": command}))
+		patch := map[string]any{"type": "applyPatch", "cwd": "/repo", "files": []string{"/etc/hosts"}}
+		f.notify("item/autoApprovalReview/started", item("", map[string]any{"reviewId": "rv-2", "startedAtMs": 3, "review": map[string]any{"status": "inProgress"}, "action": patch}))
+		f.notify("guardianWarning", item("", map[string]any{"message": "writing outside the workspace"}))
+		f.notify("item/autoApprovalReview/completed", item("", map[string]any{"reviewId": "rv-2", "startedAtMs": 3, "completedAtMs": 4, "decisionSource": "agent",
+			"review": map[string]any{"status": "denied", "riskLevel": "high", "userAuthorization": nil, "rationale": nil}, "action": patch}))
+		f.notify("guardianWarning", item("", map[string]any{"message": "outside any review"}))
+		f.notify("autoApprovalReview/strictReviewRequired", item("", map[string]any{"startedAtMs": 5}))
+		f.notify("warning", map[string]any{"threadId": threadID, "message": "rate limits are close"})
+		f.notify("configWarning", map[string]any{"summary": "unknown key", "details": "foo is not a setting", "path": "/home/me/.codex/config.toml"})
+		f.notify("deprecationNotice", map[string]any{"summary": "sandbox_permissions is going away", "details": nil})
+		f.notify("model/rerouted", item("", map[string]any{"fromModel": "gpt-6", "toModel": "gpt-6-safe", "reason": "highRiskCyberActivity"}))
+		for range 2 { // Codex retries a server that will not start
+			f.notify("mcpServer/startupStatus/updated", map[string]any{"threadId": threadID, "name": "node_repl", "status": "starting", "error": nil})
+			f.notify("mcpServer/startupStatus/updated", map[string]any{"threadId": threadID, "name": "node_repl", "status": "failed", "error": "handshake failed"})
+		}
+		complete("completed", "", "reviewed")
 	case strings.Contains(prompt, "[unsupported]"):
-		f.send(map[string]any{"id": 102, "method": "item/tool/requestUserInput", "params": item("", map[string]any{"itemId": "q-1"})})
+		f.send(map[string]any{"id": 102, "method": "item/somethingNew/request", "params": item("", map[string]any{"itemId": "q-1"})})
 		reply, ok := f.awaitReply(102)
 		if !ok {
 			return false
@@ -246,7 +358,11 @@ func (f *fakeAppServer) play(threadID, prompt string) bool {
 		f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "commandExecution", "id": "cmd-1", "command": "ls", "cwd": "/repo", "status": "completed", "aggregatedOutput": "a.txt\n", "exitCode": 1, "commandActions": []any{}}}))
 		f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "fileChange", "id": "fc-1", "changes": []map[string]any{{"path": "notes.md", "kind": map[string]any{"type": "add"}, "diff": "+hi"}}, "status": "completed"}}))
 		f.notify("item/started", item("", map[string]any{"item": map[string]any{"type": "mcpToolCall", "id": "mcp-1", "server": "github", "tool": "search", "status": "inProgress", "arguments": map[string]any{"q": "veyloom"}}}))
-		f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "mcpToolCall", "id": "mcp-1", "server": "github", "tool": "search", "status": "completed", "arguments": map[string]any{"q": "veyloom"}, "result": map[string]any{"hits": 1}}}))
+		f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "mcpToolCall", "id": "mcp-1", "server": "github", "tool": "search", "status": "completed", "arguments": map[string]any{"q": "veyloom"}, "result": map[string]any{
+			"content": []map[string]any{{"type": "text", "text": "1 hit"}, {"type": "text", "text": "J0EY0/veyloom"}}, "structuredContent": nil, "_meta": nil,
+		}}}))
+		f.notify("item/started", item("", map[string]any{"item": map[string]any{"type": "mcpToolCall", "id": "mcp-2", "server": "github", "tool": "search", "status": "inProgress", "arguments": map[string]any{}}}))
+		f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "mcpToolCall", "id": "mcp-2", "server": "github", "tool": "search", "status": "failed", "arguments": map[string]any{}, "error": map[string]any{"message": "server gone"}}}))
 		f.notify("error", item("", map[string]any{"error": map[string]any{"message": "rate limited"}, "willRetry": true}))
 		// Two model responses in the turn, on a thread that had already
 		// spent 1000 input (400 of it cached) and 90 output.
@@ -376,7 +492,7 @@ func TestCodex_HandshakeTurnAndEvents(t *testing.T) {
 		kinds = append(kinds, ev.Kind)
 		byKind[ev.Kind] = append(byKind[ev.Kind], ev)
 	}
-	want := []EventKind{EventSession, EventStatus, EventText, EventText, EventToolCall, EventToolResult, EventFileChanged, EventToolCall, EventToolResult, EventError, EventText}
+	want := []EventKind{EventSession, EventStatus, EventText, EventText, EventToolCall, EventToolResult, EventFileChanged, EventToolCall, EventToolResult, EventToolCall, EventToolResult, EventError, EventText}
 	if strings.Join(kindStrings(kinds), ",") != strings.Join(kindStrings(want), ",") {
 		t.Errorf("events = %v\n   want %v", kinds, want)
 	}
@@ -389,7 +505,7 @@ func TestCodex_HandshakeTurnAndEvents(t *testing.T) {
 	if calls := byKind[EventToolCall]; calls[0].Tool != "commandExecution" || calls[0].Input != "ls" || calls[1].Tool != "github/search" || calls[1].Input != `{"q":"veyloom"}` {
 		t.Errorf("tool calls: %+v", calls)
 	}
-	if results := byKind[EventToolResult]; results[0].Text != "a.txt\n[exit code 1]" || results[1].Text != `{"hits":1}` {
+	if results := byKind[EventToolResult]; results[0].Text != "a.txt\n[exit code 1]" || results[1].Text != "1 hit\nJ0EY0/veyloom" || results[2].Text != "error: server gone" {
 		t.Errorf("tool results: %+v", results)
 	}
 	if byKind[EventFileChanged][0].Path != "notes.md" {
@@ -454,6 +570,9 @@ func TestCodex_ResumesTheThread(t *testing.T) {
 	resume := paramsOf(t, sent["thread/resume"][0])
 	if resume["threadId"] != "thr-old" || resume["approvalPolicy"] != "never" || resume["sandbox"] != "read-only" {
 		t.Errorf("thread/resume params = %v", resume)
+	}
+	if resume["excludeTurns"] != true {
+		t.Error("thread/resume should not ask for the thread's whole history back")
 	}
 	if _, has := resume["developerInstructions"]; has {
 		t.Error("a resumed thread keeps its instructions; none should be sent")
@@ -539,10 +658,66 @@ func TestCodex_UnsupportedServerRequestIsRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	drain(t, turn)
+	events := drain(t, turn)
 	res, err := turn.Result()
 	if err != nil || res.Output != "asked" {
 		t.Errorf("the server should get a JSON-RPC error and carry on; result = %+v, %v", res, err)
+	}
+	// Not in silence: people are told what was asked and turned down.
+	var told bool
+	for _, ev := range events {
+		if ev.Kind == EventNotice && ev.Level == NoticeError && strings.Contains(ev.Text, "item/somethingNew/request") {
+			told = true
+		}
+	}
+	if !told {
+		t.Errorf("a refused request should be a notice, events = %+v", events)
+	}
+}
+
+func TestCodex_AutoReviewsAndNoticesAreShown(t *testing.T) {
+	h := newCodexHarness(t)
+	turn, err := h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "[review] go", Permission: PermissionEditWithApproval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	events := drain(t, turn)
+	if res, err := turn.Result(); err != nil || res.Output != "reviewed" {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	var reviews []Event
+	var notices []string
+	for _, ev := range events {
+		switch ev.Kind {
+		case EventApprovalRequest:
+			reviews = append(reviews, ev)
+		case EventNotice:
+			notices = append(notices, ev.Level+": "+ev.Text)
+		}
+	}
+	if len(reviews) != 2 {
+		t.Fatalf("reviews = %+v, want two", reviews)
+	}
+	approved, denied := reviews[0], reviews[1]
+	if approved.Reviewer != "codex_auto_review" || approved.Verdict != VerdictAllowed || approved.Text != "a public HEAD request" || approved.ApprovalID == "" ||
+		approved.Tool != "commandExecution" || approved.Input != `{"command":"/bin/zsh -lc 'curl -sI https://example.com'","cwd":"/repo"}` || string(approved.Detail) != `{"authorization":"high","risk":"low"}` {
+		t.Errorf("approved review = %+v (detail %s)", approved, approved.Detail)
+	}
+	// No reasoning of its own: the warning sent during the review says why.
+	if denied.Verdict != VerdictDenied || denied.Text != "writing outside the workspace" || denied.Tool != "fileChange" || denied.Input != `{"paths":["/etc/hosts"]}` || string(denied.Detail) != `{"risk":"high"}` {
+		t.Errorf("denied review = %+v (detail %s)", denied, denied.Detail)
+	}
+	want := []string{
+		"warning: outside any review",
+		"info: Codex will have every further command in this turn reviewed before it runs",
+		"warning: rate limits are close",
+		"warning: unknown key: foo is not a setting (/home/me/.codex/config.toml)",
+		"info: sandbox_permissions is going away",
+		"info: Codex switched this turn from gpt-6 to gpt-6-safe (highRiskCyberActivity)",
+		"warning: MCP server node_repl failed to start: handshake failed",
+	}
+	if strings.Join(notices, "\n") != strings.Join(want, "\n") {
+		t.Errorf("notices:\n%s\nwant:\n%s", strings.Join(notices, "\n"), strings.Join(want, "\n"))
 	}
 }
 
@@ -654,5 +829,129 @@ func TestCodex_ReportsCompaction(t *testing.T) {
 	}
 	if strings.Join(phases, ",") != "start,end" {
 		t.Errorf("compaction phases = %v, want start then end", phases)
+	}
+}
+
+func TestCodex_MCPResultText(t *testing.T) {
+	for _, tc := range []struct {
+		name, raw, want string
+	}{
+		{"text blocks", `{"content":[{"type":"text","text":"a"},{"type":"image","data":"x"},{"type":"text","text":"b"}],"_meta":null}`, "a\nb"},
+		{"no text blocks", `{"content":[{"type":"image","data":"x"}]}`, `{"content":[{"data":"x","type":"image"}]}`},
+		{"no content", `{"hits":1}`, `{"hits":1}`},
+		{"nothing", ``, ``},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := mcpResultText(json.RawMessage(tc.raw)); got != tc.want {
+				t.Errorf("mcpResultText(%s) = %q, want %q", tc.raw, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCodex_PermissionsRequest(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		allow  bool
+		output string
+	}{
+		{"allowed", true, "network for the turn"},
+		{"denied", false, "nothing granted for the turn"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCodexHarness(t)
+			turn, err := h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "[permissions] please", Permission: PermissionEditWithApproval})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, _ := awaitApproval(t, turn)
+			if req.Tool != "permissions" || req.Input != `{"cwd":"/repo","network":{"enabled":true},"reason":"fetch deps"}` {
+				t.Fatalf("unexpected approval request: %+v", req)
+			}
+			if err := turn.Answer(req.ApprovalID, Decision{Allow: tc.allow}); err != nil {
+				t.Fatal(err)
+			}
+			drain(t, turn)
+			res, err := turn.Result()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Output != tc.output {
+				t.Errorf("Output = %q, want %q", res.Output, tc.output)
+			}
+		})
+	}
+}
+
+func TestCodex_QuestionsReachAPerson(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		d      Decision
+		output string
+	}{
+		// An answer to something not asked is not passed on.
+		{"answered", Decision{Allow: true, Answer: json.RawMessage(`{"answers":{"colour":["blue"],"token":["hunter2"],"stray":["x"]}}`)}, "colour=blue; token=hunter2"},
+		{"declined", Decision{Allow: false, Message: "not now"}, "no answers"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newCodexHarness(t)
+			turn, err := h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "[question] please", Permission: PermissionEditWithApproval})
+			if err != nil {
+				t.Fatal(err)
+			}
+			req, _ := awaitApproval(t, turn)
+			var set QuestionSet
+			if err := json.Unmarshal([]byte(req.Input), &set); err != nil || req.ApprovalKind != ApprovalQuestion || req.Tool != "requestUserInput" {
+				t.Fatalf("request = %+v (%v)", req, err)
+			}
+			want := []Question{
+				{ID: "colour", Header: "Colour", Question: "Which colour?", Options: []QuestionOption{{Label: "red", Description: "warm"}, {Label: "blue", Description: "cool"}}},
+				// No options: the only way to answer is to write one.
+				{ID: "token", Header: "Token", Question: "Your token?", Other: true, Secret: true},
+			}
+			if !reflect.DeepEqual(set.Questions, want) {
+				t.Errorf("questions = %+v\nwant %+v", set.Questions, want)
+			}
+			if err := turn.Answer(req.ApprovalID, tc.d); err != nil {
+				t.Fatal(err)
+			}
+			drain(t, turn)
+			if res, err := turn.Result(); err != nil || res.Output != tc.output {
+				t.Errorf("result = %+v, %v; want %q", res, err, tc.output)
+			}
+		})
+	}
+}
+
+// What an MCP server asks through Codex, a form or a link, reaches a person;
+// what they do comes back as the MCP elicitation result.
+func TestCodex_ElicitationsReachAPerson(t *testing.T) {
+	h := newCodexHarness(t)
+	turn, err := h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "[elicit] deploy", Permission: PermissionEditWithApproval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	form, _ := awaitApproval(t, turn)
+	var asked FormRequest
+	if err := json.Unmarshal([]byte(form.Input), &asked); err != nil || form.ApprovalKind != ApprovalForm || form.Tool != "elicitation" ||
+		asked.Server != "deploy" || asked.Message != "Where to?" || !strings.Contains(string(asked.Schema), `"enum":["eu","us"]`) {
+		t.Fatalf("form request = %+v (%v)", form, err)
+	}
+	if err := turn.Answer(form.ApprovalID, Decision{Allow: true, Answer: json.RawMessage(`{"content":{"region":"eu"}}`)}); err != nil {
+		t.Fatal(err)
+	}
+	link, _ := awaitApproval(t, turn)
+	var opened LinkRequest
+	if err := json.Unmarshal([]byte(link.Input), &opened); err != nil || link.ApprovalKind != ApprovalLink || opened.URL != "https://login.example.com/device" || opened.Message != "Sign in" {
+		t.Fatalf("link request = %+v (%v)", link, err)
+	}
+	if err := turn.Answer(link.ApprovalID, Decision{Allow: false, Message: "not now"}); err != nil {
+		t.Fatal(err)
+	}
+	drain(t, turn)
+	res, err := turn.Result()
+	want := `form={"_meta":null,"action":"accept","content":{"region":"eu"}}; link={"_meta":null,"action":"decline","content":null}`
+	if err != nil || res.Output != want {
+		t.Errorf("result = %q, %v\nwant %q", res.Output, err, want)
 	}
 }

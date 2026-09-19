@@ -3,6 +3,8 @@ package runtime
 import (
 	"bufio"
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -127,4 +129,45 @@ func (b *tailBuffer) String() string {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	return string(b.buf)
+}
+
+// errInputClosed is returned by jsonLines.send once the input is closed.
+var errInputClosed = errors.New("runtime: input closed")
+
+// jsonLines writes JSON values to a CLI's stdin, one per line, from any
+// goroutine, until it is closed; a CLI that talks over its standard
+// streams takes its prompt and its answers that way. Once closed there is
+// nobody to tell, and lines are dropped.
+type jsonLines struct {
+	mu     sync.Mutex
+	w      io.WriteCloser
+	closed bool
+}
+
+func newJSONLines(w io.WriteCloser) *jsonLines {
+	return &jsonLines{w: w}
+}
+
+func (j *jsonLines) send(v any) error {
+	data, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if j.closed {
+		return errInputClosed
+	}
+	_, err = j.w.Write(append(data, '\n'))
+	return err
+}
+
+// close closes the input, once; the CLI reads end of file.
+func (j *jsonLines) close() {
+	j.mu.Lock()
+	defer j.mu.Unlock()
+	if !j.closed {
+		j.closed = true
+		j.w.Close()
+	}
 }

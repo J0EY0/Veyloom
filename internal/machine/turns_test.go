@@ -107,13 +107,15 @@ func TestTurn_NoCoalescingWhenDisabled(t *testing.T) {
 func TestTurn_UnknownRuntimeReportsFailure(t *testing.T) {
 	hubEnd, _ := connectedMachine(t, Config{})
 
-	req := protocol.StartTurn{TurnID: "t1", Runtime: "codex", Spec: runtime.TurnSpec{Prompt: "x"}}
+	// A runtime no runner answers to: a builtin one would start its real CLI
+	// wherever that is installed.
+	req := protocol.StartTurn{TurnID: "t1", Runtime: "nosuch", Spec: runtime.TurnSpec{Prompt: "x"}}
 	if err := hubEnd.Send(context.Background(), req); err != nil {
 		t.Fatal(err)
 	}
 	_, done := collectTurn(t, hubEnd, "t1")
 
-	if done.Error == "" || !strings.Contains(done.Error, "codex") {
+	if done.Error == "" || !strings.Contains(done.Error, `"nosuch" has no runner`) {
 		t.Errorf("expected an error naming the runtime, got %+v", done)
 	}
 }

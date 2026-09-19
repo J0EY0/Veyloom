@@ -14,7 +14,7 @@ import (
 const createApproval = `-- name: CreateApproval :one
 INSERT INTO approvals (id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, message_id)
 VALUES (COALESCE($9::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, created_at, decided_at
+RETURNING id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, reviewer, answer, created_at, decided_at
 `
 
 type CreateApprovalParams struct {
@@ -57,37 +57,52 @@ func (q *Queries) CreateApproval(ctx context.Context, arg CreateApprovalParams) 
 		&i.Message,
 		&i.MessageID,
 		&i.DecidedBy,
+		&i.Reviewer,
+		&i.Answer,
 		&i.CreatedAt,
 		&i.DecidedAt,
 	)
 	return i, err
 }
 
-const decideApproval = `-- name: DecideApproval :one
-UPDATE approvals SET
-    status     = $2,
-    message    = $3,
-    decided_by = $4,
-    decided_at = now()
-WHERE id = $1 AND status = 'pending'
-RETURNING id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, created_at, decided_at
+const createReviewedApproval = `-- name: CreateReviewedApproval :one
+INSERT INTO approvals (turn_id, room_id, thread_id, member_id, request_id, kind, payload, message_id,
+                       status, message, reviewer, answer, decided_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, now())
+RETURNING id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, reviewer, answer, created_at, decided_at
 `
 
-type DecideApprovalParams struct {
-	ID        pgtype.UUID
+type CreateReviewedApprovalParams struct {
+	TurnID    pgtype.UUID
+	RoomID    pgtype.UUID
+	ThreadID  pgtype.UUID
+	MemberID  pgtype.UUID
+	RequestID string
+	Kind      string
+	Payload   []byte
+	MessageID pgtype.UUID
 	Status    string
 	Message   string
-	DecidedBy pgtype.UUID
+	Reviewer  string
+	Answer    []byte
 }
 
-// The first decision wins: only a pending approval can be decided, so two
-// people answering at once cannot both succeed.
-func (q *Queries) DecideApproval(ctx context.Context, arg DecideApprovalParams) (Approval, error) {
-	row := q.db.QueryRow(ctx, decideApproval,
-		arg.ID,
+// A request the runtime settled on its own, recorded already decided so the
+// room sees who decided and why.
+func (q *Queries) CreateReviewedApproval(ctx context.Context, arg CreateReviewedApprovalParams) (Approval, error) {
+	row := q.db.QueryRow(ctx, createReviewedApproval,
+		arg.TurnID,
+		arg.RoomID,
+		arg.ThreadID,
+		arg.MemberID,
+		arg.RequestID,
+		arg.Kind,
+		arg.Payload,
+		arg.MessageID,
 		arg.Status,
 		arg.Message,
-		arg.DecidedBy,
+		arg.Reviewer,
+		arg.Answer,
 	)
 	var i Approval
 	err := row.Scan(
@@ -103,6 +118,59 @@ func (q *Queries) DecideApproval(ctx context.Context, arg DecideApprovalParams) 
 		&i.Message,
 		&i.MessageID,
 		&i.DecidedBy,
+		&i.Reviewer,
+		&i.Answer,
+		&i.CreatedAt,
+		&i.DecidedAt,
+	)
+	return i, err
+}
+
+const decideApproval = `-- name: DecideApproval :one
+UPDATE approvals SET
+    status     = $2,
+    message    = $3,
+    decided_by = $4,
+    answer     = $5,
+    decided_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, reviewer, answer, created_at, decided_at
+`
+
+type DecideApprovalParams struct {
+	ID        pgtype.UUID
+	Status    string
+	Message   string
+	DecidedBy pgtype.UUID
+	Answer    []byte
+}
+
+// The first decision wins: only a pending approval can be decided, so two
+// people answering at once cannot both succeed.
+func (q *Queries) DecideApproval(ctx context.Context, arg DecideApprovalParams) (Approval, error) {
+	row := q.db.QueryRow(ctx, decideApproval,
+		arg.ID,
+		arg.Status,
+		arg.Message,
+		arg.DecidedBy,
+		arg.Answer,
+	)
+	var i Approval
+	err := row.Scan(
+		&i.ID,
+		&i.TurnID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.MemberID,
+		&i.RequestID,
+		&i.Kind,
+		&i.Payload,
+		&i.Status,
+		&i.Message,
+		&i.MessageID,
+		&i.DecidedBy,
+		&i.Reviewer,
+		&i.Answer,
 		&i.CreatedAt,
 		&i.DecidedAt,
 	)
@@ -110,7 +178,7 @@ func (q *Queries) DecideApproval(ctx context.Context, arg DecideApprovalParams) 
 }
 
 const getApproval = `-- name: GetApproval :one
-SELECT id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, created_at, decided_at FROM approvals WHERE id = $1
+SELECT id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, reviewer, answer, created_at, decided_at FROM approvals WHERE id = $1
 `
 
 func (q *Queries) GetApproval(ctx context.Context, id pgtype.UUID) (Approval, error) {
@@ -129,6 +197,8 @@ func (q *Queries) GetApproval(ctx context.Context, id pgtype.UUID) (Approval, er
 		&i.Message,
 		&i.MessageID,
 		&i.DecidedBy,
+		&i.Reviewer,
+		&i.Answer,
 		&i.CreatedAt,
 		&i.DecidedAt,
 	)
@@ -136,7 +206,7 @@ func (q *Queries) GetApproval(ctx context.Context, id pgtype.UUID) (Approval, er
 }
 
 const listPendingApprovals = `-- name: ListPendingApprovals :many
-SELECT ap.id, ap.turn_id, ap.room_id, ap.thread_id, ap.member_id, ap.request_id, ap.kind, ap.payload, ap.status, ap.message, ap.message_id, ap.decided_by, ap.created_at, ap.decided_at, mb.display_name AS member_name, p.name AS project_name
+SELECT ap.id, ap.turn_id, ap.room_id, ap.thread_id, ap.member_id, ap.request_id, ap.kind, ap.payload, ap.status, ap.message, ap.message_id, ap.decided_by, ap.reviewer, ap.answer, ap.created_at, ap.decided_at, mb.display_name AS member_name, p.name AS project_name
 FROM approvals ap
 JOIN members mb ON mb.id = ap.member_id
 JOIN rooms r ON r.id = ap.room_id
@@ -175,6 +245,8 @@ func (q *Queries) ListPendingApprovals(ctx context.Context) ([]ListPendingApprov
 			&i.Approval.Message,
 			&i.Approval.MessageID,
 			&i.Approval.DecidedBy,
+			&i.Approval.Reviewer,
+			&i.Approval.Answer,
 			&i.Approval.CreatedAt,
 			&i.Approval.DecidedAt,
 			&i.MemberName,
@@ -191,7 +263,7 @@ func (q *Queries) ListPendingApprovals(ctx context.Context) ([]ListPendingApprov
 }
 
 const listPendingRoomApprovals = `-- name: ListPendingRoomApprovals :many
-SELECT id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, created_at, decided_at FROM approvals WHERE room_id = $1 AND status = 'pending' ORDER BY created_at
+SELECT id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, reviewer, answer, created_at, decided_at FROM approvals WHERE room_id = $1 AND status = 'pending' ORDER BY created_at
 `
 
 // Oldest first: the order people should deal with them in.
@@ -217,6 +289,8 @@ func (q *Queries) ListPendingRoomApprovals(ctx context.Context, roomID pgtype.UU
 			&i.Message,
 			&i.MessageID,
 			&i.DecidedBy,
+			&i.Reviewer,
+			&i.Answer,
 			&i.CreatedAt,
 			&i.DecidedAt,
 		); err != nil {
@@ -231,7 +305,7 @@ func (q *Queries) ListPendingRoomApprovals(ctx context.Context, roomID pgtype.UU
 }
 
 const listTurnApprovals = `-- name: ListTurnApprovals :many
-SELECT id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, created_at, decided_at FROM approvals WHERE turn_id = $1 ORDER BY created_at
+SELECT id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, reviewer, answer, created_at, decided_at FROM approvals WHERE turn_id = $1 ORDER BY created_at
 `
 
 func (q *Queries) ListTurnApprovals(ctx context.Context, turnID pgtype.UUID) ([]Approval, error) {
@@ -256,6 +330,8 @@ func (q *Queries) ListTurnApprovals(ctx context.Context, turnID pgtype.UUID) ([]
 			&i.Message,
 			&i.MessageID,
 			&i.DecidedBy,
+			&i.Reviewer,
+			&i.Answer,
 			&i.CreatedAt,
 			&i.DecidedAt,
 		); err != nil {
@@ -275,7 +351,7 @@ UPDATE approvals SET
     message    = $3,
     decided_at = now()
 WHERE turn_id = $1 AND status = 'pending'
-RETURNING id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, created_at, decided_at
+RETURNING id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, status, message, message_id, decided_by, reviewer, answer, created_at, decided_at
 `
 
 type ResolveTurnApprovalsParams struct {
@@ -308,6 +384,8 @@ func (q *Queries) ResolveTurnApprovals(ctx context.Context, arg ResolveTurnAppro
 			&i.Message,
 			&i.MessageID,
 			&i.DecidedBy,
+			&i.Reviewer,
+			&i.Answer,
 			&i.CreatedAt,
 			&i.DecidedAt,
 		); err != nil {

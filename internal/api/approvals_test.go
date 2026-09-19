@@ -68,7 +68,7 @@ func (c *fakeChat) DecideApproval(ctx context.Context, id, userID string, d runt
 	if d.Allow {
 		a.Status = store.ApprovalAllowed
 	}
-	a.Message, a.DecidedBy = d.Message, userID
+	a.Message, a.DecidedBy, a.Answer = d.Message, userID, d.Answer
 	c.approvals[id] = a
 	c.decided = append(c.decided, id)
 	return a, nil
@@ -152,5 +152,19 @@ func TestApprovals_ListsWhatWaitsAcrossRooms(t *testing.T) {
 	}
 	if rec := do(t, handler, http.MethodGet, "/api/v1/approvals", "", nil); rec.Code != http.StatusBadRequest {
 		t.Errorf("without a status: %d, want 400", rec.Code)
+	}
+}
+
+func TestApprovals_DecideWithAnswers(t *testing.T) {
+	handler, _, _ := approvalsHandler(t)
+	for _, bad := range []string{`"blue"`, `["blue"]`, `1`} {
+		if rec := do(t, handler, http.MethodPost, "/api/v1/approvals/a1/decide", `{"user_id":"u1","allow":true,"answer":`+bad+`}`, nil); rec.Code != http.StatusBadRequest {
+			t.Errorf("answer %s: status = %d, want 400", bad, rec.Code)
+		}
+	}
+	var res ApprovalResponse
+	rec := do(t, handler, http.MethodPost, "/api/v1/approvals/a1/decide", `{"user_id":"u1","allow":true,"answer":{"answers":{"1":["blue"]}}}`, &res)
+	if rec.Code != http.StatusOK || string(res.Approval.Answer) != `{"answers":{"1":["blue"]}}` {
+		t.Errorf("decide with answers: status = %d, approval = %+v; body: %s", rec.Code, res.Approval, rec.Body)
 	}
 }

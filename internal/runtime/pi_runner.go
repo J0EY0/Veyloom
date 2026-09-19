@@ -78,8 +78,10 @@ var piToolSets = map[string][]string{
 // piEditTools are the tools whose use means a file changed.
 var piEditTools = map[string]bool{"edit": true, "write": true}
 
-// PiRunner runs turns on the pi coding agent in print mode with JSON event
-// output. Options honoured from the agent:
+// PiRunner runs turns on the pi coding agent in RPC mode: commands go in on
+// stdin, pi's events and its extensions' requests to people come out on
+// stdout, and the answers go back in (docs/design.md 4.6). Options honoured
+// from the agent:
 //
 //	provider   string    passed as --provider
 //	thinking   string    passed as --thinking (off, minimal, low, medium, high, xhigh)
@@ -100,8 +102,9 @@ func (*PiRunner) Name() string { return "pi" }
 // Close releases the tool endpoint. Turns still running lose it.
 func (r *PiRunner) Close() error { return r.tools.close() }
 
-// StartTurn implements Runner. The prompt is the positional message; pi
-// treats piped stdin as extra context, so stdin is left empty.
+// StartTurn implements Runner. The prompt goes in as the RPC prompt
+// command, after one asking for the session's id, which pi does not print
+// on its own in this mode.
 func (r *PiRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error) {
 	bin := r.cfg.Binary
 	if bin == "" {
@@ -149,6 +152,7 @@ func (r *PiRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error) {
 		Args:        r.args(spec),
 		Dir:         spec.WorkDir,
 		Env:         env,
+		StdinPipe:   true,
 		StderrBytes: r.cfg.StderrBytes,
 		WaitDelay:   r.cfg.WaitDelay,
 	})
@@ -158,8 +162,14 @@ func (r *PiRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error) {
 		return nil, fmt.Errorf("pi: %w", err)
 	}
 
-	t := &piTurn{turnBase: newTurnBase(cancel), release: release}
-	go t.run(ctx, proc, r.cfg)
+	t := &piTurn{turnBase: newTurnBase(ctx, cancel), ctx: ctx, cfg: r.cfg, release: release, in: newJSONLines(proc.stdin)}
+	go t.run(proc)
+	// Written while run reads; should a write fail, pi has gone, and run
+	// says why.
+	go func() {
+		t.in.send(map[string]any{"id": "state", "type": "get_state"})
+		t.in.send(map[string]any{"id": "prompt", "type": "prompt", "message": spec.Prompt})
+	}()
 	return t, nil
 }
 
@@ -171,10 +181,9 @@ func (r *PiRunner) toolDir() string {
 	return filepath.Join(os.TempDir(), "veyloom-tools")
 }
 
-// args builds the command line for spec. The prompt comes last so that no
-// flag can be mistaken for it.
+// args builds the command line for spec; the prompt is no part of it.
 func (r *PiRunner) args(spec TurnSpec) []string {
-	args := []string{"-p", "--mode", "json"}
+	args := []string{"--mode", "rpc"}
 	if spec.SystemPrompt != "" {
 		args = append(args, "--append-system-prompt", spec.SystemPrompt)
 	}
@@ -205,8 +214,7 @@ func (r *PiRunner) args(spec TurnSpec) []string {
 		}
 		args = append(args, "--tools", strings.Join(tools, ","))
 	}
-	args = append(args, optStrings(spec.Options, "extra_args")...)
-	return append(args, spec.Prompt)
+	return append(args, optStrings(spec.Options, "extra_args")...)
 }
 
 // sessionFile is the file pi keeps the session in, or empty when the
@@ -237,222 +245,51 @@ func isSessionKey(key string) bool {
 
 type piTurn struct {
 	*turnBase
+	// ctx is the turn's lifetime; requests to people wait on it.
+	ctx context.Context
+	cfg PiConfig
 	// release gives the turn's tool endpoint back.
 	release func()
+	// in carries the commands and the answers to pi's requests. It is
+	// closed once the agent is done: pi then exits.
+	in *jsonLines
 }
 
-func (t *piTurn) run(ctx context.Context, proc *cliProcess, cfg PiConfig) {
-	parser := newPiParser(cfg, func(ev Event) { t.emit(ctx, ev) })
-	proc.lines(parser.feed)
+// run reads pi's output until it ends, then reconciles the exit status
+// with what was parsed. Requests to people are answered as they come; the
+// end of the agent's run, or a prompt pi refused, closes the input, which
+// ends pi.
+func (t *piTurn) run(proc *cliProcess) {
+	parser := newPiParser(t.cfg, func(ev Event) { t.emit(t.ctx, ev) })
+	proc.lines(func(raw []byte) {
+		var head struct {
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &head) != nil || head.Type == "" {
+			// pi prints some problems, such as a missing API key, as text.
+			parser.note(string(raw))
+			return
+		}
+		if head.Type == "extension_ui_request" {
+			t.serveUI(raw)
+			return
+		}
+		var ev piEvent
+		if err := json.Unmarshal(raw, &ev); err != nil {
+			parser.note(string(raw))
+			return
+		}
+		parser.handle(ev)
+		if ev.Type == "agent_end" || (ev.Type == "response" && ev.Command == "prompt" && !ev.Success) {
+			t.in.close()
+		}
+	})
+	t.in.close()
 	waitErr := proc.wait()
 
 	res, err := parser.finish(waitErr, proc.stderrTail())
 	if t.release != nil {
 		t.release()
 	}
-	t.finish(ctx, res, err)
-}
-
-// piEvent is the union of the JSON event records the runner reads.
-type piEvent struct {
-	Type string `json:"type"`
-	// session header
-	ID string `json:"id"`
-	// message events
-	Message               *piMessage `json:"message"`
-	AssistantMessageEvent *struct {
-		Type  string `json:"type"`
-		Delta string `json:"delta"`
-	} `json:"assistantMessageEvent"`
-	// tool events
-	ToolCallID string          `json:"toolCallId"`
-	ToolName   string          `json:"toolName"`
-	Args       json.RawMessage `json:"args"`
-	Result     json.RawMessage `json:"result"`
-	IsError    bool            `json:"isError"`
-	// compaction_end
-	Aborted      bool   `json:"aborted"`
-	ErrorMessage string `json:"errorMessage"`
-}
-
-type piMessage struct {
-	Role         string    `json:"role"`
-	Content      []piBlock `json:"content"`
-	StopReason   string    `json:"stopReason"`
-	ErrorMessage string    `json:"errorMessage"`
-	Usage        *piUsage  `json:"usage"`
-}
-
-type piBlock struct {
-	Type string `json:"type"`
-	Text string `json:"text"`
-}
-
-// piUsage is one assistant message's tokens. Pi reports cached input apart
-// from fresh input, as Anthropic does.
-type piUsage struct {
-	Input      float64 `json:"input"`
-	Output     float64 `json:"output"`
-	CacheRead  float64 `json:"cacheRead"`
-	CacheWrite float64 `json:"cacheWrite"`
-}
-
-// piParser turns pi's event stream into events and collects the result:
-// the session id from the header, the last assistant message as the reply,
-// usage summed over every assistant message, and the tail of any plain-text
-// lines pi printed instead of JSON.
-type piParser struct {
-	cfg       PiConfig
-	emit      func(Event)
-	sessionID string
-	streamed  strings.Builder
-	last      *piMessage
-	usage     piUsage
-	notes     []string
-	ended     bool
-}
-
-func newPiParser(cfg PiConfig, emit func(Event)) *piParser {
-	return &piParser{cfg: cfg, emit: emit}
-}
-
-func (p *piParser) feed(raw []byte) {
-	var ev piEvent
-	if err := json.Unmarshal(raw, &ev); err != nil || ev.Type == "" {
-		p.note(string(raw))
-		return
-	}
-
-	switch ev.Type {
-	case "session":
-		p.sessionID = ev.ID
-		p.emit(Event{Kind: EventSession, SessionRef: ev.ID})
-		p.emit(Event{Kind: EventStatus, Text: "session " + ev.ID})
-	case "compaction_start":
-		p.emit(Event{Kind: EventCompaction, Phase: CompactionStart})
-	case "compaction_end":
-		// A result means the summary is in place; without one the session
-		// is as it was (pi may try again, which it then announces anew).
-		if ev.Aborted || ev.ErrorMessage != "" || len(ev.Result) == 0 || string(ev.Result) == "null" {
-			p.emit(Event{Kind: EventCompaction, Phase: CompactionFailed, Text: ev.ErrorMessage})
-		} else {
-			p.emit(Event{Kind: EventCompaction, Phase: CompactionEnd})
-		}
-	case "message_update":
-		if e := ev.AssistantMessageEvent; e != nil && e.Type == "text_delta" && e.Delta != "" {
-			p.streamed.WriteString(e.Delta)
-			p.emit(Event{Kind: EventText, Text: e.Delta})
-		}
-	case "message_end":
-		if ev.Message != nil && ev.Message.Role == "assistant" {
-			msg := *ev.Message
-			p.last = &msg
-			if msg.Usage != nil {
-				p.usage.Input += msg.Usage.Input
-				p.usage.Output += msg.Usage.Output
-				p.usage.CacheRead += msg.Usage.CacheRead
-				p.usage.CacheWrite += msg.Usage.CacheWrite
-			}
-		}
-	case "tool_execution_start":
-		p.emit(Event{Kind: EventToolCall, Tool: ev.ToolName, Input: truncate(compactJSON(ev.Args), p.cfg.MaxEventBytes)})
-		if piEditTools[ev.ToolName] {
-			if path := piArgPath(ev.Args); path != "" {
-				p.emit(Event{Kind: EventFileChanged, Path: path})
-			}
-		}
-	case "tool_execution_end":
-		text := truncate(piResultText(ev.Result), p.cfg.MaxEventBytes)
-		if ev.IsError {
-			text = "error: " + text
-		}
-		p.emit(Event{Kind: EventToolResult, Tool: ev.ToolName, Text: text})
-	case "agent_end":
-		p.ended = true
-	}
-}
-
-// note keeps a plain-text stdout line; only the last few matter.
-func (p *piParser) note(line string) {
-	line = strings.TrimSpace(line)
-	if line == "" {
-		return
-	}
-	p.notes = append(p.notes, line)
-	if len(p.notes) > p.cfg.NoteLines {
-		p.notes = p.notes[len(p.notes)-p.cfg.NoteLines:]
-	}
-}
-
-// finish reconciles what was parsed with how the process ended.
-func (p *piParser) finish(waitErr error, stderr string) (Result, error) {
-	if p.last == nil {
-		detail := strings.Join(p.notes, " | ")
-		if stderr = strings.TrimSpace(stderr); stderr != "" {
-			detail = strings.TrimSpace(detail + " " + stderr)
-		}
-		if detail == "" && waitErr != nil {
-			detail = waitErr.Error()
-		}
-		if detail == "" {
-			detail = "output ended without an assistant message"
-		}
-		return Result{Failure: classifyFailure(detail)}, fmt.Errorf("pi: %s", detail)
-	}
-	usage := Usage{InputTokens: tokens(p.usage.Input), CacheReadTokens: tokens(p.usage.CacheRead), CacheWriteTokens: tokens(p.usage.CacheWrite), OutputTokens: tokens(p.usage.Output)}
-	if p.last.StopReason == "error" || p.last.StopReason == "aborted" {
-		reason := p.last.ErrorMessage
-		if reason == "" {
-			reason = p.last.StopReason
-		}
-		return Result{Usage: usage, Failure: classifyFailure(reason)}, fmt.Errorf("pi: %s", reason)
-	}
-
-	var output strings.Builder
-	for _, block := range p.last.Content {
-		if block.Type == "text" {
-			output.WriteString(block.Text)
-		}
-	}
-	text := output.String()
-	if strings.TrimSpace(text) == "" {
-		text = p.streamed.String()
-	}
-	return Result{Output: text, SessionRef: p.sessionID, Usage: usage}, nil
-}
-
-// piArgPath reads the path argument of an edit or write call.
-func piArgPath(raw json.RawMessage) string {
-	var args struct {
-		Path string `json:"path"`
-	}
-	if err := json.Unmarshal(raw, &args); err != nil {
-		return ""
-	}
-	return args.Path
-}
-
-// piResultText flattens a tool result, which is a string, an object with
-// text content blocks, or anything else pi's tools return.
-func piResultText(raw json.RawMessage) string {
-	if len(raw) == 0 {
-		return ""
-	}
-	var s string
-	if json.Unmarshal(raw, &s) == nil {
-		return s
-	}
-	var wrapped struct {
-		Content []piBlock `json:"content"`
-	}
-	if json.Unmarshal(raw, &wrapped) == nil && len(wrapped.Content) > 0 {
-		parts := make([]string, 0, len(wrapped.Content))
-		for _, b := range wrapped.Content {
-			if b.Type == "text" {
-				parts = append(parts, b.Text)
-			}
-		}
-		return strings.Join(parts, "\n")
-	}
-	return compactJSON(raw)
+	t.finish(t.ctx, res, err)
 }

@@ -60,6 +60,8 @@ type turnStore interface {
 // approvalStore is the approval access the hub uses.
 type approvalStore interface {
 	CreateApproval(ctx context.Context, a store.NewApproval) (store.Approval, error)
+	CreateReviewedApproval(ctx context.Context, a store.NewReviewedApproval) (store.Approval, error)
+	GetApproval(ctx context.Context, id string) (store.Approval, error)
 	DecideApproval(ctx context.Context, id string, out store.ApprovalOutcome) (store.Approval, error)
 	ResolveTurnApprovals(ctx context.Context, turnID string, status store.ApprovalStatus, message string) ([]store.Approval, error)
 }

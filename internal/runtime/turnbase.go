@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -19,6 +20,8 @@ var ErrUnknownApproval = errors.New("runtime: unknown approval")
 type turnBase struct {
 	events chan Event
 	done   chan struct{}
+	// life is the turn's lifetime, which cancel ends.
+	life   context.Context
 	cancel context.CancelFunc
 
 	mu     sync.Mutex
@@ -27,12 +30,22 @@ type turnBase struct {
 	// pending holds one channel per approval request awaiting an Answer.
 	// A channel is closed, never sent on, when the turn ends first.
 	pending map[string]chan Decision
+
+	// emitMu orders every emit against finish closing the channel: an event
+	// sent from a goroutine the runtime does not wait for, such as one
+	// serving a request from the CLI, is delivered before the close or
+	// dropped, never sent on a closed channel.
+	emitMu sync.Mutex
+	closed bool
 }
 
-func newTurnBase(cancel context.CancelFunc) *turnBase {
+// newTurnBase makes the plumbing for a turn that lives as long as life,
+// which cancel ends.
+func newTurnBase(life context.Context, cancel context.CancelFunc) *turnBase {
 	return &turnBase{
 		events:  make(chan Event, 16),
 		done:    make(chan struct{}),
+		life:    life,
 		cancel:  cancel,
 		pending: make(map[string]chan Decision),
 	}
@@ -43,7 +56,7 @@ func newTurnBase(cancel context.CancelFunc) *turnBase {
 // when the outcome has something to say beyond the error, its Failure.
 func failedTurn(res Result, err error) Turn {
 	ctx, cancel := context.WithCancel(context.Background())
-	t := newTurnBase(cancel)
+	t := newTurnBase(ctx, cancel)
 	t.finish(ctx, res, err)
 	cancel()
 	return t
@@ -69,6 +82,11 @@ func (t *turnBase) emit(ctx context.Context, ev Event) bool {
 	if ev.At.IsZero() {
 		ev.At = time.Now()
 	}
+	t.emitMu.Lock()
+	defer t.emitMu.Unlock()
+	if t.closed {
+		return false
+	}
 	select {
 	case t.events <- ev:
 		return true
@@ -82,13 +100,27 @@ func (t *turnBase) emit(ctx context.Context, ev Event) bool {
 // that needs the decision, which for a CLI is the one serving the CLI's
 // permission callback.
 func (t *turnBase) requestApproval(ctx context.Context, tool, input string) (Decision, error) {
+	return t.ask(ctx, ApprovalToolUse, tool, input)
+}
+
+// ask is requestApproval for any kind of request: a question, a form, a
+// link, or permission (tool_use). It waits until Answer settles the
+// request, the turn ends, or ctx ends. A ctx that ends while the turn goes
+// on means the runtime took the request back, and people are told so they
+// stop being asked.
+func (t *turnBase) ask(ctx context.Context, kind, tool, input string) (Decision, error) {
 	id := randomHex(8)
 	ch := make(chan Decision, 1)
 	t.mu.Lock()
 	t.pending[id] = ch
 	t.mu.Unlock()
 
-	if !t.emit(ctx, Event{Kind: EventApprovalRequest, ApprovalID: id, Tool: tool, Input: input}) {
+	if kind == ApprovalToolUse {
+		kind = ""
+	}
+	// Shown for as long as the turn lives, even when ctx is already over:
+	// people then see the request, and then that it was taken back.
+	if !t.emit(t.life, Event{Kind: EventApprovalRequest, ApprovalID: id, ApprovalKind: kind, Tool: tool, Input: input}) {
 		t.forget(id)
 		return Decision{}, ErrTurnCancelled
 	}
@@ -99,9 +131,23 @@ func (t *turnBase) requestApproval(ctx context.Context, tool, input string) (Dec
 		}
 		return d, nil
 	case <-ctx.Done():
-		t.forget(id)
+		if t.forget(id) && t.life.Err() == nil {
+			t.emit(t.life, Event{Kind: EventApprovalWithdrawn, ApprovalID: id})
+		}
 		return Decision{}, ErrTurnCancelled
 	}
+}
+
+// reviewed tells people about a request the runtime settled on its own:
+// who decided (reviewer), the verdict, why, and the reviewer's findings as
+// JSON. Nothing waits for an answer.
+func (t *turnBase) reviewed(ctx context.Context, tool, input, reviewer, verdict, why string, detail json.RawMessage) bool {
+	return t.emit(ctx, Event{Kind: EventApprovalRequest, ApprovalID: randomHex(8), Tool: tool, Input: input, Reviewer: reviewer, Verdict: verdict, Text: why, Detail: detail})
+}
+
+// notice shows people something the runtime said, at a level.
+func (t *turnBase) notice(ctx context.Context, level, text string) bool {
+	return t.emit(ctx, Event{Kind: EventNotice, Level: level, Text: text})
 }
 
 // Answer implements Turn. Each request accepts exactly one answer.
@@ -117,11 +163,14 @@ func (t *turnBase) Answer(approvalID string, d Decision) error {
 	return nil
 }
 
-// forget drops a pending request that will not be answered.
-func (t *turnBase) forget(approvalID string) {
+// forget drops a pending request that will not be answered. It reports
+// whether the request was still pending, rather than answered or released.
+func (t *turnBase) forget(approvalID string) bool {
 	t.mu.Lock()
+	defer t.mu.Unlock()
+	_, ok := t.pending[approvalID]
 	delete(t.pending, approvalID)
-	t.mu.Unlock()
+	return ok
 }
 
 // finish records the outcome and closes the channels. If ctx was cancelled
@@ -139,6 +188,9 @@ func (t *turnBase) finish(ctx context.Context, res Result, err error) {
 		delete(t.pending, id)
 	}
 	t.mu.Unlock()
+	t.emitMu.Lock()
+	t.closed = true
 	close(t.events)
+	t.emitMu.Unlock()
 	close(t.done)
 }

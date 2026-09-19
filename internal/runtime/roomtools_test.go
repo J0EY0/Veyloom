@@ -231,9 +231,9 @@ func TestClaude_RoomToolsInEveryPreset(t *testing.T) {
 			if got := flagValue(args, "--allowedTools"); got != want {
 				t.Errorf("--allowedTools = %q, want %q", got, want)
 			}
-			// The permission prompt stays with the one preset that prompts.
-			if got := flagValue(args, "--permission-prompt-tool") != ""; got != (preset == PermissionEditWithApproval) {
-				t.Errorf("--permission-prompt-tool present = %v", got)
+			// Requests to people go over stdio, not through the MCP server.
+			if got := flagValue(args, "--permission-prompt-tool"); got != "stdio" {
+				t.Errorf("--permission-prompt-tool = %q", got)
 			}
 		})
 	}
@@ -248,6 +248,23 @@ func TestClaude_NoHostNoToolFlags(t *testing.T) {
 	for _, flag := range []string{"--mcp-config", "--allowedTools"} {
 		if strings.Contains(string(raw), flag) {
 			t.Errorf("a turn with no host to ask has no use for %s: %s", flag, raw)
+		}
+	}
+}
+
+// Without a proxy there is no bridge: the room tools are left out, and the
+// turn runs, asking people over stdio as ever.
+func TestClaude_NoProxy(t *testing.T) {
+	for _, preset := range []string{PermissionReadOnly, PermissionEditWithApproval} {
+		argsPath, _ := fakeClaudeCLI(t, claudeFixture, 0, "")
+		if _, _, err := runClaude(t, ClaudeConfig{}, TurnSpec{Prompt: "hi", Permission: preset, Host: &recordingHost{}}); err != nil {
+			t.Fatalf("%s: %v", preset, err)
+		}
+		raw, _ := os.ReadFile(argsPath)
+		for _, flag := range []string{"--mcp-config", "--allowedTools"} {
+			if strings.Contains(string(raw), flag) {
+				t.Errorf("%s: with no proxy there is no use for %s: %s", preset, flag, raw)
+			}
 		}
 	}
 }
@@ -291,6 +308,20 @@ func TestCodex_RoomToolsServerInTheThreadConfig(t *testing.T) {
 	if params := paramsOf(t, h.sent(t)["thread/start"][0]); params["config"] != nil {
 		t.Errorf("config = %v, want none", params["config"])
 	}
+
+	// Nor without a proxy to reach the host through: the turn runs, bare.
+	h = newCodexHarness(t)
+	turn, err = h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "hi", Permission: PermissionReadOnly, Host: &recordingHost{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, turn)
+	if _, err := turn.Result(); err != nil {
+		t.Fatal(err)
+	}
+	if params := paramsOf(t, h.sent(t)["thread/start"][0]); params["config"] != nil {
+		t.Errorf("without a proxy, config = %v, want none", params["config"])
+	}
 }
 
 func TestPi_RoomToolsThroughTheExtension(t *testing.T) {
@@ -319,8 +350,10 @@ func TestPi_RoomToolsThroughTheExtension(t *testing.T) {
 			if got := flagValue(args, "--tools"); got != tools {
 				t.Errorf("--tools = %q, want %q", got, tools)
 			}
-			if args[len(args)-1] != "the prompt" {
-				t.Errorf("the prompt must stay last: %q", args)
+			for _, arg := range args {
+				if arg == "the prompt" {
+					t.Errorf("the prompt goes in over stdin, not on the command line: %q", args)
+				}
 			}
 		})
 	}

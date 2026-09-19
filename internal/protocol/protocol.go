@@ -155,15 +155,27 @@ type TurnDone struct {
 // Kind implements Message.
 func (TurnDone) Kind() Kind { return KindTurnDone }
 
-// ApprovalRequest asks for permission on behalf of a turn, machine to hub.
-// Input is the tool's full input as JSON: it is what the person decides on,
-// so unlike a tool_call event it is never elided.
+// ApprovalRequest asks a person, on behalf of a turn, machine to hub: for
+// permission to use a tool, or for answers to questions, a form or a link
+// (ApprovalKind). Input is in full, never elided: it is what the person
+// decides on. With Reviewer set the runtime has settled the request itself
+// and the hub only records it; nothing waits for a decision.
 type ApprovalRequest struct {
-	TurnID     string    `json:"turn_id"`
-	ApprovalID string    `json:"approval_id"`
-	Tool       string    `json:"tool"`
-	Input      string    `json:"input"`
-	At         time.Time `json:"at"`
+	TurnID     string `json:"turn_id"`
+	ApprovalID string `json:"approval_id"`
+	// ApprovalKind is one of the runtime.Approval constants; empty is
+	// tool_use.
+	ApprovalKind string    `json:"approval_kind,omitempty"`
+	Tool         string    `json:"tool"`
+	Input        string    `json:"input"`
+	At           time.Time `json:"at"`
+	// Reviewer, Verdict, Why and Detail describe a request the runtime
+	// settled: who decided, the verdict (a runtime.Verdict constant), why,
+	// and the reviewer's findings as JSON.
+	Reviewer string          `json:"reviewer,omitempty"`
+	Verdict  string          `json:"verdict,omitempty"`
+	Why      string          `json:"why,omitempty"`
+	Detail   json.RawMessage `json:"detail,omitempty"`
 }
 
 // Kind implements Message.

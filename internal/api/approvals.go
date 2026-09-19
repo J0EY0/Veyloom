@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 
@@ -32,6 +33,9 @@ type DecideApprovalRequest struct {
 	Allow  bool   `json:"allow"`
 	// Message is an optional note; on a denial the agent sees it.
 	Message string `json:"message"`
+	// Answer goes with an allowed request that asked for more than yes or
+	// no: for a question {"answers": {"<question id>": ["..."]}}.
+	Answer json.RawMessage `json:"answer,omitempty"`
 }
 
 // ApprovalResponse is the body of single-approval endpoints.
@@ -68,7 +72,14 @@ func (h *handlers) decideApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "user_id is required")
 		return
 	}
-	a, err := h.deps.Chat.DecideApproval(r.Context(), r.PathValue("id"), req.UserID, runtime.Decision{Allow: req.Allow, Message: strings.TrimSpace(req.Message)})
+	if string(req.Answer) == "null" {
+		req.Answer = nil
+	}
+	if len(req.Answer) > 0 && !isJSONObject(req.Answer) {
+		writeError(w, http.StatusBadRequest, "answer must be a JSON object")
+		return
+	}
+	a, err := h.deps.Chat.DecideApproval(r.Context(), r.PathValue("id"), req.UserID, runtime.Decision{Allow: req.Allow, Message: strings.TrimSpace(req.Message), Answer: req.Answer})
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
@@ -119,4 +130,10 @@ func (h *handlers) listTurnApprovals(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ApprovalsResponse{Approvals: approvals})
+}
+
+// isJSONObject reports whether raw is a JSON object.
+func isJSONObject(raw json.RawMessage) bool {
+	var v map[string]json.RawMessage
+	return json.Unmarshal(raw, &v) == nil && v != nil
 }

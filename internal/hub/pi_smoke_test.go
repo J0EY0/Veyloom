@@ -1,19 +1,15 @@
 package hub
 
 import (
-	"context"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
-	"github.com/J0EY0/veyloom/internal/machine"
-	"github.com/J0EY0/veyloom/internal/protocol"
 	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
-	"github.com/J0EY0/veyloom/internal/store/storetest"
 )
 
 // TestPiSmoke_SessionLifecycle drives the real pi CLI through the hub: it
@@ -38,80 +34,15 @@ func TestPiSmoke_SessionLifecycle(t *testing.T) {
 		t.Skipf("pi is not installed: %v", err)
 	}
 
-	s := storetest.New(t)
-	ctx, cancel := context.WithCancel(context.Background())
-	t.Cleanup(cancel)
-
 	sessionDir := filepath.Join(t.TempDir(), "sessions")
-	h := New(s, Config{TranscriptDir: t.TempDir(), HeartbeatInterval: time.Hour})
 	runners := runtime.BuiltinRunnersWith(runtime.RunnerOptions{SessionDir: sessionDir, ToolDir: filepath.Join(t.TempDir(), "tools")})
-	w := machine.New(machine.Config{Name: "laptop"}, machine.NewDiscovery(nil, time.Second), &machine.MemoryIdentity{}, runners)
-	hubEnd, machineEnd := protocol.Pipe()
-	go h.Serve(ctx, hubEnd)
-	go w.Run(ctx, machineEnd)
-	eventually(t, func() bool { return len(h.Machines()) == 1 }, "machine to connect")
-	machineID := h.Machines()[0].ID
-
 	firstDir, secondDir := t.TempDir(), t.TempDir()
-	_, room, err := s.CreateProject(ctx, store.NewProject{Name: "smoke", RepoPath: firstDir})
-	if err != nil {
-		t.Fatal(err)
-	}
-	user, err := s.CreateUser(ctx, "alice")
-	if err != nil {
-		t.Fatal(err)
-	}
-	agent, err := s.CreateAgent(ctx, store.NewAgent{
-		Name: "Pi smoke", MachineID: machineID, Runtime: "pi", PermissionPreset: store.PermissionReadOnly,
+	r := newSmokeRoom(t, runners, store.NewAgent{
+		Name: "Pi smoke", Runtime: "pi", PermissionPreset: store.PermissionReadOnly,
 		RoleCard: "Answer in as few words as you can.",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	member, err := s.CreateMember(ctx, store.NewMember{RoomID: room.ID, AgentID: agent.ID, DisplayName: "Pi", RepoPath: firstDir})
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	say := func(body, threadID string) store.Message {
-		t.Helper()
-		msg, err := h.PostUserMessage(ctx, store.NewMessage{
-			RoomID: room.ID, ThreadID: threadID, UserID: user.ID, Body: body,
-			Mentions: []store.Mention{{Kind: store.MentionAgent, ID: member.ID}},
-		})
-		if err != nil {
-			t.Fatal(err)
-		}
-		return msg
-	}
-	// waitDone waits for the room's n-th turn and fails on anything but done.
-	waitDone := func(n int) store.Turn {
-		t.Helper()
-		deadline := time.Now().Add(3 * time.Minute)
-		for time.Now().Before(deadline) {
-			turns, err := s.ListRoomTurns(ctx, room.ID, 50)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if len(turns) == n && turns[0].Status != store.TurnRunning {
-				if turns[0].Status != store.TurnDone {
-					t.Fatalf("turn %d ended %s: %s", n, turns[0].Status, turns[0].Error)
-				}
-				return turns[0]
-			}
-			time.Sleep(200 * time.Millisecond)
-		}
-		t.Fatalf("turn %d did not finish in time", n)
-		return store.Turn{}
-	}
-	lastReply := func(threadID string) string {
-		t.Helper()
-		msg, err := s.LastAgentMessageInThread(ctx, threadID)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return msg.Body
-	}
+	}, firstDir)
+	ctx, s, member := r.ctx, r.s, r.member
+	say, waitDone, lastReply := r.say, r.waitDone, r.lastReply
 
 	// Turn 1 starts the session in the file the hub named.
 	asked := say("Remember the word banana. Reply with exactly: ok", "")
@@ -224,4 +155,70 @@ func TestPiSmoke_SessionLifecycle(t *testing.T) {
 		t.Errorf("the chat has one topic, pi said %q", reply)
 	}
 	t.Logf("turn 5 with the room tools: pi said %q", lastReply(thread.ID))
+}
+
+// TestPiSmoke_ExtensionDialogs drives the real pi through the hub with an
+// extension whose tool asks the person things (testdata/piask): pi's RPC
+// mode hands its dialogs to the runner, which puts them on cards, and the
+// answers given there are what the extension gets. Same terms as
+// TestPiSmoke_SessionLifecycle.
+func TestPiSmoke_ExtensionDialogs(t *testing.T) {
+	if os.Getenv("VEYLOOM_PI_SMOKE") != "1" {
+		t.Skip("set VEYLOOM_PI_SMOKE=1 to run against the real pi CLI")
+	}
+	if _, err := exec.LookPath("pi"); err != nil {
+		t.Skipf("pi is not installed: %v", err)
+	}
+	ask, err := filepath.Abs("testdata/piask/ask.ts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	runners := runtime.BuiltinRunnersWith(runtime.RunnerOptions{SessionDir: filepath.Join(t.TempDir(), "sessions"), ToolDir: filepath.Join(t.TempDir(), "tools")})
+	r := newSmokeRoom(t, runners, store.NewAgent{
+		Name: "Pi dialogs", Runtime: "pi", PermissionPreset: store.PermissionFullAuto,
+		RoleCard:       "Answer in as few words as you can.",
+		RuntimeOptions: map[string]any{"extra_args": []any{"-e", ask}},
+	}, t.TempDir())
+
+	r.say("Call your ask_person tool once, then reply with exactly the text it returned.", "")
+	turn, asked := r.decideAllWith(1, func(a store.Approval) runtime.Decision {
+		switch a.Tool {
+		case "select":
+			return runtime.Decision{Allow: true, Answer: json.RawMessage(`{"answers":{"1":["production"]}}`)}
+		case "input":
+			return runtime.Decision{Allow: true, Answer: json.RawMessage(`{"answers":{"1":["v9"]}}`)}
+		case "editor":
+			return runtime.Decision{Allow: true, Answer: json.RawMessage(`{"answers":{"1":["- fixed things\n- and more\n"]}}`)}
+		}
+		return runtime.Decision{Allow: true}
+	})
+	var got []string
+	for _, a := range asked {
+		got = append(got, string(a.Kind)+" "+a.Tool)
+	}
+	if strings.Join(got, ", ") != "tool_use confirm, question select, question input, question editor" {
+		t.Errorf("requests = %q, want the confirmation, the choice, the line and the text", got)
+	}
+	var editor runtime.QuestionSet
+	if json.Unmarshal(asked[3].Input, &editor) != nil || len(editor.Questions) != 1 || !editor.Questions[0].Multiline || editor.Questions[0].Default != "- fixed things\n" {
+		t.Errorf("the editor = %s, want several lines starting from its prefill", asked[3].Input)
+	}
+	results := toolResults(t, turn, "ask_person")
+	if len(results) != 1 || results[0] != `{"confirmed":true,"environment":"production","name":"v9","notes":"- fixed things\n- and more\n"}` {
+		t.Errorf("the extension got %q, want the answers given on the cards", results)
+	}
+	if notices := noticesOf(t, turn); len(notices) != 1 || notices[0] != "Asked the person four things" {
+		t.Errorf("notices = %q, want the extension's notification", notices)
+	}
+	t.Logf("pi asked %q; the extension got %q; pi said %q", got, results, r.lastReply(mustThread(t, r, turn).ID))
+}
+
+// mustThread is the thread a turn replied in.
+func mustThread(t *testing.T, r *smokeRoom, turn store.Turn) store.Thread {
+	t.Helper()
+	thread, err := r.s.ThreadForMessage(r.ctx, turn.ReplyMessageID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return thread
 }

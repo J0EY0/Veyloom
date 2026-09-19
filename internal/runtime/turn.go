@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"math"
 	"time"
 )
@@ -98,10 +99,45 @@ const (
 	// it; the hub only needs to know, because a session that has just
 	// forgotten detail is shown the topic it works in once more.
 	EventCompaction EventKind = "compaction"
-	// EventApprovalRequest reports that the agent wants to use Tool with
-	// Input and may not without permission. ApprovalID identifies the
-	// request; the turn waits until Turn.Answer settles it.
+	// EventApprovalRequest reports that the agent needs a person's answer:
+	// permission to use Tool with Input or, as ApprovalKind says, answers
+	// to questions, a form filled in or a link opened. ApprovalID identifies
+	// the request; the turn waits until Turn.Answer settles it. With
+	// Reviewer set the runtime has settled the request itself (Verdict, and
+	// why in Text) and nothing waits: the event is there so people see it.
 	EventApprovalRequest EventKind = "approval_request"
+	// EventNotice is something the runtime wants people to see, in Text, at
+	// a Level: a note, a warning, an error it carried on after.
+	EventNotice EventKind = "notice"
+	// EventApprovalWithdrawn reports that the runtime no longer waits for
+	// the answer to the request ApprovalID, while the turn goes on: it took
+	// the request back, as Claude Code does when one of its hooks settles a
+	// permission first. People stop being asked.
+	EventApprovalWithdrawn EventKind = "approval_withdrawn"
+)
+
+// Approval kinds, as carried in Event.ApprovalKind. Empty means tool_use.
+const (
+	ApprovalToolUse  = "tool_use"
+	ApprovalQuestion = "question"
+	ApprovalForm     = "form"
+	ApprovalLink     = "link"
+)
+
+// Verdicts of a request a runtime settled without a person, as carried in
+// Event.Verdict; they are the settled statuses of an approval.
+const (
+	VerdictAllowed   = "allowed"
+	VerdictDenied    = "denied"
+	VerdictExpired   = "expired"
+	VerdictCancelled = "cancelled"
+)
+
+// Levels of an EventNotice.
+const (
+	NoticeInfo    = "info"
+	NoticeWarning = "warning"
+	NoticeError   = "error"
 )
 
 // Event is one thing that happened during a turn. Fields other than Kind
@@ -121,6 +157,17 @@ type Event struct {
 	// Input may be elided for size, an approval request carries the full
 	// input: it is what the person is asked to approve.
 	ApprovalID string `json:"approval_id,omitempty"`
+	// ApprovalKind is set on an EventApprovalRequest that asks for more
+	// than permission: one of the Approval constants other than tool_use.
+	ApprovalKind string `json:"approval_kind,omitempty"`
+	// Reviewer, Verdict and Detail are set on an EventApprovalRequest the
+	// runtime settled itself: who decided, one of the Verdict constants, and
+	// the reviewer's findings as JSON, such as the risk it saw.
+	Reviewer string          `json:"reviewer,omitempty"`
+	Verdict  string          `json:"verdict,omitempty"`
+	Detail   json.RawMessage `json:"detail,omitempty"`
+	// Level is set on EventNotice: one of the Notice constants.
+	Level string `json:"level,omitempty"`
 }
 
 // The phases of an EventCompaction. Only a compaction that ended counts as
@@ -137,6 +184,10 @@ type Decision struct {
 	// Message is shown to the agent when the request is denied, so it can
 	// explain itself or try something else.
 	Message string `json:"message,omitempty"`
+	// Answer is what the person gave beyond yes or no, as JSON: for a
+	// question {"answers": {"<question id>": ["..."]}}, for a form
+	// {"content": {...}}.
+	Answer json.RawMessage `json:"answer,omitempty"`
 }
 
 // Result is what a finished turn produced. A turn that failed or was

@@ -130,6 +130,9 @@ type activeTurn struct {
 	relayTo []relayTarget
 	// pending holds the approvals waiting for a decision, by approval ID.
 	pending map[string]*pendingApproval
+	// withdrawn are the runtime's request ids it took back before the hub
+	// had recorded them; each is closed as soon as it is.
+	withdrawn map[string]bool
 	// finished is set once completion has begun; approvals raised after
 	// that are settled at once instead of registered.
 	finished bool
@@ -502,6 +505,11 @@ func (m *TurnManager) OnEvent(turnID string, ev runtime.Event) {
 		// Bookkeeping between the runtime and the hub: it is in the
 		// transcript, and the room has no use for it.
 		m.noteSessionRef(at, ev.SessionRef)
+		return
+	}
+	if ev.Kind == runtime.EventApprovalWithdrawn {
+		// The room hears of it as the approval's decision.
+		m.withdraw(at, ev.ApprovalID)
 		return
 	}
 	if ev.Kind == runtime.EventToolCall {

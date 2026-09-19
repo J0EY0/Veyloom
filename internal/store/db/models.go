@@ -35,6 +35,8 @@ type Approval struct {
 	Message   string
 	MessageID pgtype.UUID
 	DecidedBy pgtype.UUID
+	Reviewer  string
+	Answer    []byte
 	CreatedAt pgtype.Timestamptz
 	DecidedAt pgtype.Timestamptz
 }

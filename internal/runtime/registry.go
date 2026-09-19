@@ -16,6 +16,11 @@ type RunnerOptions struct {
 	// ToolDir is where runners write the files that give their CLI the
 	// room tools (see PiConfig.ToolDir). Empty means a temporary directory.
 	ToolDir string
+	// ProxyBinary is the veyloom executable Claude Code and Codex run as
+	// `mcp-proxy` to reach a turn's tools. Empty means there is no bridge:
+	// their turns run without the room tools, and a Claude turn that would
+	// ask for approval does not start.
+	ProxyBinary string
 }
 
 // BuiltinRunners returns the runtimes that can execute turns, keyed by name,
@@ -28,8 +33,12 @@ func BuiltinRunners() map[string]Runner {
 // runtimes are added here as their runners are implemented.
 func BuiltinRunnersWith(opts RunnerOptions) map[string]Runner {
 	fake := NewFake()
-	claude := NewClaudeRunner(DefaultClaudeConfig())
-	codex := NewCodexRunner(DefaultCodexConfig())
+	claudeCfg := DefaultClaudeConfig()
+	claudeCfg.ProxyBinary = opts.ProxyBinary
+	claude := NewClaudeRunner(claudeCfg)
+	codexCfg := DefaultCodexConfig()
+	codexCfg.ProxyBinary = opts.ProxyBinary
+	codex := NewCodexRunner(codexCfg)
 	piCfg := DefaultPiConfig()
 	piCfg.SessionDir = opts.SessionDir
 	piCfg.ToolDir = opts.ToolDir

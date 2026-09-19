@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -25,6 +26,11 @@ func TestMarshalRoundTrip(t *testing.T) {
 		TurnDone{TurnID: "t2", Error: "boom"},
 		ApprovalRequest{TurnID: "t1", ApprovalID: "a1", Tool: "Bash", Input: `{"command":"make test"}`, At: time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)},
 		ApprovalDecision{TurnID: "t1", ApprovalID: "a1", Decision: runtime.Decision{Allow: false, Message: "not now"}},
+		ApprovalRequest{TurnID: "t1", ApprovalID: "a2", ApprovalKind: runtime.ApprovalQuestion, Tool: "AskUserQuestion", Input: `{"questions":[]}`, At: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)},
+		ApprovalDecision{TurnID: "t1", ApprovalID: "a2", Decision: runtime.Decision{Allow: true, Answer: json.RawMessage(`{"answers":{"db":["Postgres"]}}`)}},
+		ApprovalRequest{TurnID: "t1", ApprovalID: "a3", Tool: "commandExecution", Input: `{"command":"curl"}`, At: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC),
+			Reviewer: "codex_auto_review", Verdict: runtime.VerdictAllowed, Why: "low risk", Detail: json.RawMessage(`{"risk":"low"}`)},
+		TurnEvent{TurnID: "t1", Event: runtime.Event{Kind: runtime.EventNotice, Level: runtime.NoticeWarning, Text: "rate limits are close", At: time.Date(2026, 9, 19, 0, 0, 0, 0, time.UTC)}},
 		RoomQuery{TurnID: "t1", QueryID: "q1", Query: runtime.RoomQuery{Tool: runtime.RoomToolReadTopic, Topic: 12, Before: 340, Limit: 20}},
 		RoomResult{TurnID: "t1", QueryID: "q1", Text: "Topic #12 ..."},
 		RoomResult{TurnID: "t1", QueryID: "q2", Error: "topic #99: not found"},

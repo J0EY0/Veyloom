@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 
 	"github.com/spf13/cobra"
 
@@ -69,7 +70,13 @@ func runServe(cmd *cobra.Command, cfg config.Config) error {
 	h := hub.New(dir, cfg.Hub, hub.WithLogger(logger))
 	discovery := machine.NewDiscovery(runtime.Builtin(), cfg.Machine.DetectTimeout)
 	identity := machine.FileIdentity{Path: cfg.MachineIdentityPath()}
-	runners := runtime.BuiltinRunnersWith(runtime.RunnerOptions{SessionDir: cfg.Machine.SessionDir, ToolDir: cfg.Machine.ToolDir})
+	// The CLIs reach a turn's tools through this very executable, run as
+	// `veyloom mcp-proxy`.
+	self, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("locate the veyloom executable for the MCP proxy: %w", err)
+	}
+	runners := runtime.BuiltinRunnersWith(runtime.RunnerOptions{SessionDir: cfg.Machine.SessionDir, ToolDir: cfg.Machine.ToolDir, ProxyBinary: self})
 	local := machine.New(cfg.Machine, discovery, identity, runners)
 
 	// Any failure on either side of the pipe stops the whole process; on

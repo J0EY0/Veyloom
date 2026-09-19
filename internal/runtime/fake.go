@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"strings"
 	"time"
+	"unicode/utf8"
 )
 
 // ErrTurnCancelled is the Result error of a turn stopped by Cancel or by its
@@ -33,6 +34,18 @@ var ErrTurnCancelled = errors.New("runtime: turn cancelled")
 //	room_tool string  call this room tool first, with room_topic (number)
 //	                 and room_text (string) as its arguments, and reply
 //	                 with what it answered
+//	notice   string  show people this warning before replying
+//	reviewed string  report a command its own reviewer settled with this
+//	                 verdict (allowed, denied) before replying
+//	question string  ask this, with options red and blue, and a secret
+//	                 passphrase, then reply with the answer to the first and
+//	                 how long the passphrase was
+//	form     string  have a form filled in with this message (a name, a
+//	                 size, a count and a yes-or-no), then reply with it
+//	link     string  have this link opened, then reply with whether it was
+//	withdraw_ms number  ask permission to run a command, take the request
+//	                 back after this long unless answered, and reply with
+//	                 what became of it
 type Fake struct{}
 
 // NewFake returns the fake runtime.
@@ -49,7 +62,7 @@ func (*Fake) Detect(context.Context) Info {
 // StartTurn implements Runner.
 func (*Fake) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	t := &fakeTurn{turnBase: newTurnBase(cancel)}
+	t := &fakeTurn{turnBase: newTurnBase(ctx, cancel)}
 	go t.run(ctx, spec)
 	return t, nil
 }
@@ -123,6 +136,72 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 	if reply == "" {
 		reply = "Echo: " + lastLine(spec.Prompt)
 	}
+	if text := optString(spec.Options, "notice"); text != "" && !t.notice(ctx, NoticeWarning, text) {
+		t.finish(ctx, Result{}, ErrTurnCancelled)
+		return
+	}
+	if verdict := optString(spec.Options, "reviewed"); verdict != "" &&
+		!t.reviewed(ctx, fakeApprovalTool, fakeReviewedInput, fakeReviewer, verdict, "the fake reviewer's reasons", json.RawMessage(`{"risk":"low"}`)) {
+		t.finish(ctx, Result{}, ErrTurnCancelled)
+		return
+	}
+	if q := optString(spec.Options, "question"); q != "" {
+		d, err := t.askQuestions(ctx, "AskUserQuestion", []Question{
+			{ID: "1", Header: "Colour", Question: q, Options: []QuestionOption{{Label: "red"}, {Label: "blue"}}, Other: true},
+			{ID: "2", Question: "The passphrase?", Other: true, Secret: true},
+		})
+		if err != nil {
+			t.finish(ctx, Result{}, err)
+			return
+		}
+		if a := d.Answers(); len(a["1"]) > 0 {
+			reply = "Answer: " + answerText(a["1"])
+			// Says what reached it without repeating a secret.
+			if pass := a["2"]; len(pass) > 0 {
+				reply += fmt.Sprintf(" (passphrase of %d characters)", utf8.RuneCountInString(pass[0]))
+			}
+		} else {
+			reply = "No answer: " + d.Message
+		}
+	}
+	if message := optString(spec.Options, "form"); message != "" {
+		d, err := t.askForm(ctx, "elicitation", FormRequest{Server: "fake", Message: message, Schema: json.RawMessage(fakeFormSchema)})
+		if err != nil {
+			t.finish(ctx, Result{}, err)
+			return
+		}
+		if content := d.Content(); content != nil {
+			reply = "Form: " + compactJSON(content)
+		} else {
+			reply = "No form: " + d.Message
+		}
+	}
+	if url := optString(spec.Options, "link"); url != "" {
+		d, err := t.askLink(ctx, "elicitation", LinkRequest{Server: "fake", Message: "Sign in to continue", URL: url})
+		if err != nil {
+			t.finish(ctx, Result{}, err)
+			return
+		}
+		if d.Allow {
+			reply = "Link done"
+		} else {
+			reply = "No link: " + d.Message
+		}
+	}
+	if _, ok := spec.Options["withdraw_ms"]; ok {
+		wait, stop := context.WithTimeout(ctx, time.Duration(optFloat(spec.Options, "withdraw_ms"))*time.Millisecond)
+		d, err := t.requestApproval(wait, fakeApprovalTool, fakeApprovalInput)
+		stop()
+		switch {
+		case ctx.Err() != nil:
+			t.finish(ctx, Result{}, err)
+			return
+		case err != nil:
+			reply = "Withdrawn"
+		default:
+			reply = fmt.Sprintf("Answered before withdrawing: %v", d.Allow)
+		}
+	}
 	if optBool(spec.Options, "approval") {
 		d, err := t.requestApproval(ctx, fakeApprovalTool, fakeApprovalInput)
 		if err != nil {
@@ -165,11 +244,24 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 	t.finish(ctx, Result{Output: reply, SessionRef: session, Usage: usage}, nil)
 }
 
-// What the fake runtime asks permission for when the approval option is set.
+// What the fake runtime asks permission for when the approval option is set,
+// and what its own reviewer settles when the reviewed option is.
 const (
 	fakeApprovalTool  = "Bash"
 	fakeApprovalInput = `{"command":"make test"}`
+	fakeReviewedInput = `{"command":"curl -sI https://example.com"}`
+	fakeReviewer      = "fake_review"
 )
+
+// fakeFormSchema is the form the form option asks for: one field of every
+// kind MCP elicitation allows.
+const fakeFormSchema = `{"type":"object","properties":{` +
+	`"name":{"type":"string","title":"Name","description":"Who is deploying","minLength":1},` +
+	`"size":{"type":"string","title":"Size","oneOf":[{"const":"s","title":"Small"},{"const":"l","title":"Large"}]},` +
+	`"regions":{"type":"array","title":"Regions","items":{"type":"string","enum":["eu","us","ap"]},"minItems":1},` +
+	`"count":{"type":"integer","title":"Count","minimum":1,"maximum":5,"default":1},` +
+	`"notify":{"type":"boolean","title":"Notify me","default":true}},` +
+	`"required":["name","size"]}`
 
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")

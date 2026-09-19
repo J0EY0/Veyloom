@@ -5,29 +5,10 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
-
-// fakePiCLI installs a `pi` script on PATH that records its arguments,
-// prints the given event stream and exits with the given code.
-func fakePiCLI(t *testing.T, output string, exitCode int, stderr string) (argsPath string) {
-	t.Helper()
-	dir := t.TempDir()
-	argsPath = filepath.Join(dir, "args")
-	outputPath := filepath.Join(dir, "output.jsonl")
-	if err := os.WriteFile(outputPath, []byte(output), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	script := "printf '%s\\n' \"$@\" > " + argsPath + "\n" +
-		"[ -n \"" + stderr + "\" ] && echo \"" + stderr + "\" >&2\n" +
-		"/bin/cat " + outputPath + "\n" +
-		"exit " + strconv.Itoa(exitCode) + "\n"
-	fakeBinary(t, "pi", script)
-	return argsPath
-}
 
 const piFixture = `{"type":"session","version":3,"id":"pi-sess-1","timestamp":"2026-09-13T00:00:00Z","cwd":"/tmp"}
 {"type":"agent_start"}
@@ -87,7 +68,7 @@ func TestPi_ParsesEventStream(t *testing.T) {
 			text.WriteString(ev.Text)
 		}
 	}
-	want := "session,status,text,tool_call,tool_result,tool_call,file_changed,tool_result,tool_call,tool_result,text"
+	want := "session,status,text,tool_call,tool_result,tool_call,tool_result,file_changed,tool_call,tool_result,text"
 	if strings.Join(kinds, ",") != want {
 		t.Errorf("events = %v\n   want %s", kinds, want)
 	}
@@ -126,7 +107,7 @@ func TestPi_Args(t *testing.T) {
 	args, _ := os.ReadFile(argsPath)
 	got := strings.Split(strings.TrimSpace(string(args)), "\n")
 	want := []string{
-		"-p", "--mode", "json",
+		"--mode", "rpc",
 		"--append-system-prompt", "You test things.",
 		"--provider", "anthropic",
 		"--model", "anthropic/claude-sonnet-5",
@@ -134,7 +115,6 @@ func TestPi_Args(t *testing.T) {
 		"--session", "pi-sess-prev",
 		"--tools", "read,grep,find,ls,edit,write",
 		"--no-extensions",
-		"@Tester run the suite",
 	}
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("args = %q\n  want %q", got, want)

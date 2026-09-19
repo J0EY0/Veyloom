@@ -5,6 +5,14 @@ INSERT INTO approvals (id, turn_id, room_id, thread_id, member_id, request_id, k
 VALUES (COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8)
 RETURNING *;
 
+-- name: CreateReviewedApproval :one
+-- A request the runtime settled on its own, recorded already decided so the
+-- room sees who decided and why.
+INSERT INTO approvals (turn_id, room_id, thread_id, member_id, request_id, kind, payload, message_id,
+                       status, message, reviewer, answer, decided_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg('answer'), now())
+RETURNING *;
+
 -- name: GetApproval :one
 SELECT * FROM approvals WHERE id = $1;
 
@@ -15,6 +23,7 @@ UPDATE approvals SET
     status     = $2,
     message    = $3,
     decided_by = $4,
+    answer     = sqlc.narg('answer'),
     decided_at = now()
 WHERE id = $1 AND status = 'pending'
 RETURNING *;

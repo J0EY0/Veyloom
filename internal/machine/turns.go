@@ -190,7 +190,10 @@ func (r *turnRunner) pump(ctx context.Context, turnID string, turn runtime.Turn)
 // everything else is a fire-and-forget TurnEvent.
 func outbound(turnID string, ev runtime.Event) protocol.Message {
 	if ev.Kind == runtime.EventApprovalRequest {
-		return protocol.ApprovalRequest{TurnID: turnID, ApprovalID: ev.ApprovalID, Tool: ev.Tool, Input: ev.Input, At: ev.At}
+		return protocol.ApprovalRequest{
+			TurnID: turnID, ApprovalID: ev.ApprovalID, ApprovalKind: ev.ApprovalKind, Tool: ev.Tool, Input: ev.Input, At: ev.At,
+			Reviewer: ev.Reviewer, Verdict: ev.Verdict, Why: ev.Text, Detail: ev.Detail,
+		}
 	}
 	return protocol.TurnEvent{TurnID: turnID, Event: ev}
 }

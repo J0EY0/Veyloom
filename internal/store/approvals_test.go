@@ -201,3 +201,98 @@ func TestApprovals_ListAndResolve(t *testing.T) {
 		t.Errorf("nothing should be pending, got %+v", pending)
 	}
 }
+
+func TestApprovals_KindsAndAnswers(t *testing.T) {
+	f := newApprovalFixture(t)
+	ctx := context.Background()
+
+	in := f.newApproval("q1")
+	in.Kind = store.ApprovalQuestion
+	in.Tool = "AskUserQuestion"
+	in.Input = `{"questions":[{"id":"db","question":"Which database?","options":[{"label":"Postgres"},{"label":"SQLite"}]}]}`
+	q, err := f.s.CreateApproval(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if q.Kind != store.ApprovalQuestion || q.Reviewer != "" || q.Answer != nil {
+		t.Errorf("question = %+v", q)
+	}
+	answered, err := f.s.DecideApproval(ctx, q.ID, store.ApprovalOutcome{
+		Status: store.ApprovalAllowed, DecidedBy: f.user.ID, Answer: []byte(`{"answers": {"db": ["Postgres"]}}`),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(answered.Answer) != `{"answers":{"db":["Postgres"]}}` {
+		t.Errorf("answer = %s, want it stored and compact", answered.Answer)
+	}
+
+	// A decision without an answer leaves the column empty.
+	plain, _ := f.s.CreateApproval(ctx, f.newApproval("t1"))
+	if denied, err := f.s.DecideApproval(ctx, plain.ID, store.ApprovalOutcome{Status: store.ApprovalDenied, DecidedBy: f.user.ID}); err != nil || denied.Answer != nil {
+		t.Errorf("denied = %+v, %v; want no answer", denied, err)
+	}
+
+	// A form's fields keep the order the server listed them in.
+	form := f.newApproval("f1")
+	form.Kind = store.ApprovalForm
+	form.Tool = "elicitation"
+	form.Input = `{"server":"deploy","message":"Where to?","schema":{"type":"object","properties":{"name":{"type":"string"},"regions":{"type":"array"},"count":{"type":"integer"}}}}`
+	if got, err := f.s.CreateApproval(ctx, form); err != nil || string(got.Input) != form.Input {
+		t.Errorf("form input = %s, %v; want it back as sent, keys in order", got.Input, err)
+	}
+
+	odd := f.newApproval("x1")
+	odd.Kind = "survey"
+	if _, err := f.s.CreateApproval(ctx, odd); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("unknown kind: got %v, want ErrInvalidInput", err)
+	}
+}
+
+func TestApprovals_Reviewed(t *testing.T) {
+	f := newApprovalFixture(t)
+	ctx := context.Background()
+
+	in := store.NewReviewedApproval{
+		NewApproval: f.newApproval("review-1"),
+		Status:      store.ApprovalAllowed,
+		Message:     "a public HEAD request; low risk",
+		Reviewer:    "codex_auto_review",
+		Answer:      []byte(`{"risk":"low","authorization":"high"}`),
+	}
+	in.Tool = "commandExecution"
+	in.Input = `{"command":"curl -sI https://example.com"}`
+	a, err := f.s.CreateReviewedApproval(ctx, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Status != store.ApprovalAllowed || a.Reviewer != "codex_auto_review" || a.Message != "a public HEAD request; low risk" || a.DecidedBy != "" || a.DecidedAt == nil {
+		t.Errorf("reviewed = %+v", a)
+	}
+	if string(a.Answer) != `{"risk":"low","authorization":"high"}` || a.Kind != store.ApprovalToolUse {
+		t.Errorf("reviewed answer %s, kind %s", a.Answer, a.Kind)
+	}
+
+	// Nothing waits for it: it is never pending, but it is the turn's.
+	if pending, _ := f.s.ListPendingRoomApprovals(ctx, f.room.ID); len(pending) != 0 {
+		t.Errorf("pending = %+v, want none", pending)
+	}
+	if all, _ := f.s.ListTurnApprovals(ctx, f.turn.ID); len(all) != 1 || all[0].ID != a.ID {
+		t.Errorf("turn approvals = %+v", all)
+	}
+	// Already decided: a person cannot decide it again.
+	if _, err := f.s.DecideApproval(ctx, a.ID, store.ApprovalOutcome{Status: store.ApprovalDenied, DecidedBy: f.user.ID}); !errors.Is(err, store.ErrConflict) {
+		t.Errorf("deciding a reviewed approval: got %v, want ErrConflict", err)
+	}
+
+	undecided := in
+	undecided.RequestID, undecided.Status = "review-2", store.ApprovalPending
+	if _, err := f.s.CreateReviewedApproval(ctx, undecided); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("pending review: got %v, want ErrInvalidInput", err)
+	}
+	anonymous := in
+	anonymous.RequestID, anonymous.Reviewer = "review-3", ""
+	if _, err := f.s.CreateReviewedApproval(ctx, anonymous); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("no reviewer: got %v, want ErrInvalidInput", err)
+	}
+}

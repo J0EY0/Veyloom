@@ -2,37 +2,13 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
-	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 )
-
-// fakeClaudeCLI installs a `claude` script on PATH that records its
-// arguments and stdin, prints the given stream-json output and exits with
-// the given code. It returns the paths of the recorded arguments and stdin.
-func fakeClaudeCLI(t *testing.T, output string, exitCode int, stderr string) (argsPath, stdinPath string) {
-	t.Helper()
-	dir := t.TempDir()
-	argsPath = filepath.Join(dir, "args")
-	stdinPath = filepath.Join(dir, "stdin")
-	outputPath := filepath.Join(dir, "output.jsonl")
-	if err := os.WriteFile(outputPath, []byte(output), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	// PATH is restricted to the fake's directory, so external commands
-	// need absolute paths; printf, test and exit are shell builtins.
-	script := "printf '%s\\n' \"$@\" > " + argsPath + "\n" +
-		"/bin/cat > " + stdinPath + "\n" +
-		"[ -n \"" + stderr + "\" ] && echo \"" + stderr + "\" >&2\n" +
-		"/bin/cat " + outputPath + "\n" +
-		"exit " + strconv.Itoa(exitCode) + "\n"
-	fakeBinary(t, "claude", script)
-	return argsPath, stdinPath
-}
 
 const claudeFixture = `{"type":"system","subtype":"init","session_id":"sess-1","model":"claude-opus-5","cwd":"/tmp"}
 {"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"I will "}}}
@@ -84,7 +60,7 @@ func TestClaude_ParsesStreamJSON(t *testing.T) {
 		}
 	}
 	// The session is reported first, before anything can go wrong.
-	want := []EventKind{EventSession, EventStatus, EventText, EventText, EventToolCall, EventToolResult, EventToolCall, EventFileChanged, EventToolResult, EventText}
+	want := []EventKind{EventSession, EventStatus, EventText, EventText, EventToolCall, EventToolResult, EventToolCall, EventToolResult, EventFileChanged, EventText}
 	if strings.Join(kindStrings(kinds), ",") != strings.Join(kindStrings(want), ",") {
 		t.Errorf("events = %v\n   want %v", kinds, want)
 	}
@@ -170,26 +146,30 @@ func TestClaude_ArgsAndStdin(t *testing.T) {
 	args, _ := os.ReadFile(argsPath)
 	got := strings.Split(strings.TrimSpace(string(args)), "\n")
 	want := []string{
-		"-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+		"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
 		"--append-system-prompt", "You are the architect.",
 		"--model", "opus",
 		"--resume", "sess-prev",
 		"--permission-mode", "acceptEdits",
+		"--permission-prompt-tool", "stdio",
 		"--max-budget-usd", "2.5",
 		"--add-dir", "/extra",
 	}
-	// edit_with_approval also wires up the approval tool; its exact value
-	// is covered by the approval tests.
-	if len(got) < len(want)+4 || got[len(want)] != "--permission-prompt-tool" || got[len(want)+2] != "--mcp-config" {
-		t.Fatalf("args = %q\n  want %q followed by the approval flags", got, want)
-	}
-	got = got[:len(want)]
 	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
 		t.Errorf("args = %q\n  want %q", got, want)
 	}
+	// The prompt is the one user message on stdin, verbatim.
 	stdin, _ := os.ReadFile(stdinPath)
-	if string(stdin) != spec.Prompt {
-		t.Errorf("stdin = %q, want the prompt verbatim", stdin)
+	var first struct {
+		Type    string `json:"type"`
+		Message struct {
+			Role    string `json:"role"`
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	lines := strings.Split(strings.TrimSpace(string(stdin)), "\n")
+	if err := json.Unmarshal([]byte(lines[0]), &first); err != nil || len(lines) != 1 || first.Type != "user" || first.Message.Role != "user" || first.Message.Content != spec.Prompt {
+		t.Errorf("stdin = %q, want one user message carrying the prompt", stdin)
 	}
 }
 
@@ -416,5 +396,58 @@ func TestClaude_ReportsCompaction(t *testing.T) {
 	}
 	if got := compactionPhases(events); got != "start,end" {
 		t.Errorf("compaction phases = %q, want start then end; the status going back to null is no third event", got)
+	}
+}
+
+// What the CLI says only to whoever reads its stream, a retry and the tool
+// uses it turned down on its own, reaches people as notices.
+func TestClaude_RetriesAndDenialsAreNotices(t *testing.T) {
+	fixture := `{"type":"system","subtype":"init","session_id":"sess-1","model":"claude-opus-5"}
+{"type":"system","subtype":"api_retry","attempt":1,"max_retries":10,"retry_delay_ms":2500,"error_status":529,"error":{"type":"overloaded_error","message":"Overloaded"},"session_id":"sess-1"}
+{"type":"system","subtype":"api_retry","attempt":2,"max_retries":10,"retry_delay_ms":5000,"error_status":null,"error":"connection reset","session_id":"sess-1"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"Could not write."}]},"session_id":"sess-1"}
+{"type":"result","subtype":"success","is_error":false,"result":"Could not write.","session_id":"sess-1","usage":{"input_tokens":1,"output_tokens":1},"permission_denials":[{"tool_name":"Write","tool_use_id":"tu1","tool_input":{"file_path":"notes.md","content":"hi"}},{"tool_name":"Bash","tool_use_id":"tu2","tool_input":{"command":"rm -rf build"}}]}
+`
+	fakeClaudeCLI(t, fixture, 0, "")
+	events, res, err := runClaude(t, ClaudeConfig{}, TurnSpec{Prompt: "x", Permission: PermissionReadOnly})
+	if err != nil || res.Output != "Could not write." {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	var notices []string
+	for _, ev := range events {
+		if ev.Kind == EventNotice {
+			notices = append(notices, ev.Level+": "+ev.Text)
+		}
+	}
+	want := []string{
+		"warning: Claude Code: the API request failed (HTTP 529): Overloaded; retrying in 2.5s, attempt 1 of 10",
+		"warning: Claude Code: the API request failed: connection reset; retrying in 5s, attempt 2 of 10",
+		`warning: Claude Code turned down Write {"content":"hi","file_path":"notes.md"} by its own rules, without asking anyone`,
+		"warning: Claude Code turned down `rm -rf build` by its own rules, without asking anyone",
+	}
+	if strings.Join(notices, "\n") != strings.Join(want, "\n") {
+		t.Errorf("notices:\n%s\nwant:\n%s", strings.Join(notices, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+// An edit the CLI did not carry out, denied or refused, changed nothing.
+func TestClaude_RefusedEditChangesNoFile(t *testing.T) {
+	fakeClaudeCLI(t, `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu1","name":"Write","input":{"file_path":"notes.md","content":"x"}},{"type":"tool_use","id":"tu2","name":"Edit","input":{"file_path":"main.go"}}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu1","content":"This member is read-only in Veyloom","is_error":true}]}}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu2","content":"The file main.go has been updated."}]}}
+{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"s"}
+`, 0, "")
+	events, _, err := runClaude(t, ClaudeConfig{}, TurnSpec{Prompt: "x"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changed []string
+	for _, ev := range events {
+		if ev.Kind == EventFileChanged {
+			changed = append(changed, ev.Path)
+		}
+	}
+	if strings.Join(changed, ",") != "main.go" {
+		t.Errorf("files changed = %q, want only the edit that went through", changed)
 	}
 }
