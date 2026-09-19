@@ -7,6 +7,7 @@ import { formatTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { describeTool } from './activity'
 import { useT } from '@/lib/i18n'
+import { decisionNote } from '@/features/approvals/describe'
 
 // One line of a turn's record. Long tool output is folded to three lines
 // until asked for.
@@ -37,7 +38,7 @@ function Detail({ line }: { line: TranscriptLine }) {
         <span className="text-muted-foreground">
           {t('event.approval', { status: line.approval?.status ?? '' })}
           {line.approval?.decided_by ? ` · ${line.approval.decided_by}` : ''}
-          {line.approval?.message ? ` · ${line.approval.message}` : ''}
+          {line.approval?.message ? ` · ${decisionNote(line.approval.message)}` : ''}
         </span>
       )
     default:

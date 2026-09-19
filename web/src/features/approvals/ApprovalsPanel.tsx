@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Spinner } from '@/components/ui/spinner'
 import { useMentionTargets } from '@/features/rooms/useMentionTargets'
-import { ApprovalCard } from './ApprovalCard'
+import { RequestCard } from './RequestCard'
 import { useT } from '@/lib/i18n'
 
 export interface ApprovalsPanelProps {
@@ -57,7 +57,7 @@ export function ApprovalsPanel({ roomId, onClose, onOpenThread }: ApprovalsPanel
       ) : (
         pending.data.map((approval) => (
           <div key={approval.id}>
-            <ApprovalCard approval={approval} memberName={names.get(approval.member_id) ?? 'agent'} names={names} />
+            <RequestCard approval={approval} memberName={names.get(approval.member_id) ?? 'agent'} names={names} />
             <Button variant="ghost" size="xs" onClick={() => onOpenThread(approval.thread_id)} className="mt-1 text-subtle hover:text-foreground">
               {t('approvals.openTopic')}
             </Button>

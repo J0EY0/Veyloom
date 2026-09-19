@@ -1,3 +1,4 @@
+import { type AskKind, waitingKeys } from '@/features/approvals/kinds'
 import { ReplyIcon } from 'lucide-react'
 import type { ThreadSummary } from '@/api/types'
 import { StatusDot, type StatusTone } from '@/components/shared/status-dot'
@@ -14,14 +15,15 @@ export interface TopicFooterProps {
   // The runtime is compacting the session of the turn in flight.
   compacting?: boolean
   // What the topic's agent is waiting for a person to approve.
-  waitingFor?: string
+  // What the topic's turn waits on a person for, if anything.
+  waiting?: Waiting
 }
 
 // The line under a topic root: how the latest turn is doing, how much was
 // said, when. Clicking opens the topic.
-export function TopicFooter({ summary, onOpen, liveTool, waitingFor, compacting }: TopicFooterProps) {
+export function TopicFooter({ summary, onOpen, liveTool, waiting, compacting }: TopicFooterProps) {
   const t = useT()
-  const state = topicState(summary, liveTool, waitingFor, compacting)
+  const state = topicState(summary, liveTool, waiting, compacting)
   return (
     <Button
       type="button"
@@ -45,6 +47,13 @@ export function TopicFooter({ summary, onOpen, liveTool, waitingFor, compacting 
   )
 }
 
+// Waiting is what a turn waits on a person for: in one line, and of what
+// kind, a permission, an answer, a form or a link.
+export interface Waiting {
+  what: string
+  kind: AskKind
+}
+
 export interface TopicState {
   tone: StatusTone
   text: string
@@ -52,12 +61,12 @@ export interface TopicState {
 
 // topicState reads the summary as one phrase; the same words appear in
 // the topic panel's turn headers.
-export function topicState(summary: ThreadSummary, liveTool?: string, waitingFor?: string, compacting?: boolean): TopicState {
+export function topicState(summary: ThreadSummary, liveTool?: string, waiting?: Waiting, compacting?: boolean): TopicState {
   const turn = summary.last_turn
   if (!turn) return { tone: 'idle', text: t('topic.plain') }
   switch (turn.status) {
     case 'running':
-      if (waitingFor) return { tone: 'wait', text: t('topic.waiting', { what: waitingFor }) }
+      if (waiting) return { tone: 'wait', text: t(waitingKeys[waiting.kind].topic, { what: waiting.what }) }
       if (compacting) return { tone: 'run', text: t('turn.compacting') }
       return { tone: 'run', text: liveTool ? t('topic.running', { tool: liveTool }) : t('topic.working') }
     case 'failed':

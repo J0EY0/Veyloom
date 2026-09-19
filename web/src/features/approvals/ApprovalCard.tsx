@@ -16,7 +16,7 @@ import { Label } from '@/components/ui/label'
 import { useCurrentUser } from '@/lib/currentUser'
 import { formatTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
-import { approvalCommand } from './describe'
+import { approvalCommand, decisionNote } from './describe'
 import { useT } from '@/lib/i18n'
 import type { MessageKey } from '@/i18n/zh-CN'
 
@@ -28,6 +28,18 @@ export interface ApprovalCardProps {
   names: Map<string, string>
 }
 
+// Reviewers a runtime brings of its own, by the code the hub records.
+const reviewers: Record<string, MessageKey> = {
+  codex_auto_review: 'approval.reviewer.codexAutoReview',
+}
+
+const risks: Record<string, MessageKey> = {
+  low: 'approval.risk.low',
+  medium: 'approval.risk.medium',
+  high: 'approval.risk.high',
+  critical: 'approval.risk.critical',
+}
+
 const outcome = {
   allowed: { tone: 'ok', key: 'approval.ran' },
   denied: { tone: 'fail', key: 'approval.denied' },
@@ -37,7 +49,8 @@ const outcome = {
 
 // A permission request as AI Elements draws a tool confirmation: what the
 // agent wants to run, and the two buttons that answer it. Once settled it
-// says who decided and when (docs/webui.md §4.5).
+// says who decided and when (docs/webui.md §4.5); when the runtime's own
+// reviewer decided, which one, the risk it saw and why (docs/design.md 4.6).
 export function ApprovalCard({ approval, memberName, names }: ApprovalCardProps) {
   const user = useCurrentUser()
   const decide = useDecideApproval()
@@ -62,13 +75,19 @@ export function ApprovalCard({ approval, memberName, names }: ApprovalCardProps)
     )
   }
 
+  const reviewer = approval.reviewer ? (reviewers[approval.reviewer] ? t(reviewers[approval.reviewer]) : approval.reviewer) : undefined
+  const risk = findingOf(approval.answer, 'risk')
+  const who = reviewer ?? (approval.decided_by ? (names.get(approval.decided_by) ?? t('approval.someone')) : undefined)
   const decided = (
     <div className="text-[0.78125rem] text-subtle">
-      {approval.decided_by
-        ? t(approval.status === 'allowed' ? 'approval.allowedBy' : 'approval.deniedBy', { who: names.get(approval.decided_by) ?? t('approval.someone') })
-        : t('approval.nobody')}
+      {who === undefined
+        ? t('approval.nobody')
+        : approval.status === 'allowed' || approval.status === 'denied'
+          ? t(approval.status === 'allowed' ? 'approval.allowedBy' : 'approval.deniedBy', { who })
+          : t('approval.reviewUnfinished', { who })}
+      {reviewer && risk ? ` · ${risks[risk] ? t(risks[risk]) : risk}` : ''}
       {approval.decided_at ? ` · ${formatTime(approval.decided_at)}` : ''}
-      {approval.message ? ` · “${approval.message}”` : ''}
+      {approval.message ? ` · “${decisionNote(approval.message)}”` : ''}
     </div>
   )
 
@@ -125,4 +144,11 @@ export function ApprovalCard({ approval, memberName, names }: ApprovalCardProps)
       <ConfirmationRejected>{decided}</ConfirmationRejected>
     </Confirmation>
   )
+}
+
+// findingOf reads one of a reviewer's findings from an approval's answer.
+function findingOf(answer: unknown, key: string): string | undefined {
+  if (typeof answer !== 'object' || answer === null) return undefined
+  const value = (answer as Record<string, unknown>)[key]
+  return typeof value === 'string' && value !== '' ? value : undefined
 }

@@ -9,7 +9,7 @@ describe('topicState', () => {
     expect(topicState(summary('t'))).toEqual({ tone: 'idle', text: '话题' })
     expect(topicState(summary('t', { last_turn: { id: 'x', status: 'running', started_at: '' } }))).toEqual({ tone: 'run', text: '正在工作' })
     expect(topicState(summary('t', { last_turn: { id: 'x', status: 'running', started_at: '' } }), 'Bash')).toEqual({ tone: 'run', text: '正在跑 Bash' })
-    expect(topicState(summary('t', { last_turn: { id: 'x', status: 'running', started_at: '' } }), 'Bash', 'make test')).toEqual({
+    expect(topicState(summary('t', { last_turn: { id: 'x', status: 'running', started_at: '' } }), 'Bash', { what: 'make test', kind: 'tool_use' })).toEqual({
       tone: 'wait',
       text: '在等你审批 · make test',
     })
@@ -25,7 +25,9 @@ describe('topicState', () => {
   it('says so while the runtime compacts the session, unless a person is waited for', () => {
     const running = summary('t', { last_turn: { id: 'x', status: 'running', started_at: '' } })
     expect(topicState(running, undefined, undefined, true)).toEqual({ tone: 'run', text: '整理上下文中' })
-    expect(topicState(running, 'Bash', 'make test', true).tone).toBe('wait')
+    expect(topicState(running, 'Bash', { what: 'make test', kind: 'tool_use' }, true).tone).toBe('wait')
+    expect(topicState(running, undefined, { what: 'Which database?', kind: 'question' })).toEqual({ tone: 'wait', text: '在等你回答 · Which database?' })
+    expect(topicState(running, undefined, { what: 'deploy “Where to?”', kind: 'form' }).text).toBe('在等你填写 · deploy “Where to?”')
   })
 })
 

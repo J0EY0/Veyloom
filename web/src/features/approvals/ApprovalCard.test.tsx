@@ -45,6 +45,25 @@ describe('ApprovalCard', () => {
     expect(screen.getByText('无人决定')).toBeInTheDocument()
   })
 
+  it("names the runtime's own reviewer, the risk it saw and why", () => {
+    renderWithProviders(
+      <ApprovalCard
+        approval={approval('ap3', {
+          status: 'allowed',
+          reviewer: 'codex_auto_review',
+          answer: { risk: 'low', authorization: 'high' },
+          decided_at: '2026-09-19T01:11:00Z',
+          message: '公开的 HEAD 请求',
+        })}
+        names={names}
+      />,
+    )
+    const line = screen.getByText(/Codex 自动审核 允许/)
+    expect(line).toHaveTextContent('低风险')
+    expect(line).toHaveTextContent('“公开的 HEAD 请求”')
+    expect(screen.queryByRole('button', { name: '允许' })).not.toBeInTheDocument()
+  })
+
   it('explains a lost race', async () => {
     stubApi({ '/approvals/ap1/decide': Response.json({ error: 'approval ap1: already decided' }, { status: 409 }) })
     renderWithProviders(<ApprovalCard approval={approval('ap1')} names={names} />)

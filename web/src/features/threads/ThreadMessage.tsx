@@ -1,6 +1,6 @@
 import type { Approval, Message } from '@/api/types'
 import { AttachmentList } from '@/components/shared/attachment-list'
-import { ApprovalCard } from '@/features/approvals/ApprovalCard'
+import { RequestCard } from '@/features/approvals/RequestCard'
 import { AgentBody } from '@/features/rooms/AgentBody'
 import { MessageBody } from '@/features/rooms/MessageBody'
 import type { Sender } from '@/features/rooms/useSenderNames'
@@ -24,7 +24,7 @@ export interface ThreadMessageProps {
 export function ThreadMessage({ message, sender, approval, names, target = 'room', inTurn }: ThreadMessageProps) {
   const known = names ?? new Map<string, string>()
   if (approval) {
-    return <ApprovalCard approval={approval} names={known} />
+    return <RequestCard approval={approval} names={known} />
   }
   if (message.sender_kind === 'system') {
     return <p className="mt-1.5 text-xs text-subtle">{message.body}</p>

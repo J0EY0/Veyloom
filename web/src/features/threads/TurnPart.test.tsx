@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { applyTurnEvent, resetLiveTurns } from '@/lib/liveTurns'
 import { stubApi } from '@/test/fetch'
-import { message, turn } from '@/test/fixtures'
+import { approval, message, turn } from '@/test/fixtures'
 import { renderWithProviders } from '@/test/render'
 import { TurnPart } from './TurnPart'
 
@@ -45,6 +45,37 @@ describe('TurnPart', () => {
     expect(screen.queryByRole('button', { name: '取消' })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '查看完整记录' }))
     expect(onOpenTurn).toHaveBeenCalledWith('x1')
+  })
+
+  it('says what a turn waits for rather than seeming to type', async () => {
+    stubApi({
+      '/turns/x1/approvals': {
+        approvals: [approval('q1', { turn_id: 'x1', kind: 'question', tool: 'AskUserQuestion', input: { questions: [{ id: '1', question: 'Which?' }] } })],
+      },
+    })
+    renderWithProviders(<TurnPart turn={turn('x1', 't1', { status: 'running', ended_at: undefined })} messages={[]} who={who} first last />)
+    expect(await screen.findByText('在等你回答')).toBeInTheDocument()
+    expect(screen.queryByText('正在输入')).not.toBeInTheDocument()
+  })
+
+  it('keeps what the runtime told people in sight, running or finished', async () => {
+    stubApi({
+      '/turns/x1/approvals': { approvals: [] },
+      '/turns/x2/approvals': { approvals: [] },
+      '/turns/x2/transcript': new Response(
+        '{"kind":"event","event":{"kind":"notice","level":"error","text":"Codex asked for item/x, which Veyloom cannot answer yet"}}\n',
+      ),
+    })
+    applyTurnEvent('x1', { kind: 'notice', level: 'warning', text: 'MCP server node_repl failed to start' })
+    applyTurnEvent('x1', { kind: 'tool_call', tool: 'Bash', input: '{"command":"make"}' })
+    const { unmount } = renderWithProviders(<TurnPart turn={turn('x1', 't1', { status: 'running', ended_at: undefined })} messages={[]} who={who} first last />)
+    // Not folded into the activity line: there without opening anything.
+    expect(screen.getByRole('note')).toHaveTextContent('警告: MCP server node_repl failed to start')
+    expect(screen.getByRole('button', { name: '1 个工具调用' })).toBeInTheDocument()
+    unmount()
+
+    renderWithProviders(<TurnPart turn={turn('x2', 't1')} messages={[]} who={who} first last />)
+    expect(await screen.findByRole('note')).toHaveTextContent('错误: Codex asked for item/x, which Veyloom cannot answer yet')
   })
 
   it('leaves the tools to the first stretch of a turn and the words arriving to the last', () => {

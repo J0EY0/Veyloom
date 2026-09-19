@@ -46,6 +46,28 @@ describe('MemberIsland', () => {
     expect(onOpenThread).toHaveBeenCalledWith('t9')
   })
 
+  it('sends a question to its card rather than answering it from here', async () => {
+    const onOpenThread = vi.fn()
+    const question = approval('q1', {
+      kind: 'question',
+      tool: 'AskUserQuestion',
+      thread_id: 't7',
+      input: { questions: [{ id: '1', question: 'Which database?', options: [{ label: 'Postgres' }] }] },
+    })
+    renderWithProviders(
+      <MemberIsland
+        states={[{ member: member('a1', 'Claude Architect'), status: 'waiting', approval: question }]}
+        onOpenThread={onOpenThread}
+        onOpenMembers={() => {}}
+      />,
+    )
+    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent('Claude Architect 在提问 · Which database?')
+    expect(screen.getByLabelText('Claude Architect · 等你回答')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '允许' })).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '去回答' }))
+    expect(onOpenThread).toHaveBeenCalledWith('t7')
+  })
+
   it('counts idle members and opens the members panel', async () => {
     const onOpenMembers = vi.fn()
     renderWithProviders(

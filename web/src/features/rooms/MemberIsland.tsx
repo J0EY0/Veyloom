@@ -7,12 +7,13 @@ import { HoverCard, HoverCardContent, HoverCardTrigger } from '@/components/ui/h
 import { Item, ItemActions, ItemContent, ItemGroup, ItemMedia, ItemTitle } from '@/components/ui/item'
 import { Separator } from '@/components/ui/separator'
 import { approvalCommand } from '@/features/approvals/describe'
+import { askKind, waitingKeys } from '@/features/approvals/kinds'
 import { useCurrentUser } from '@/lib/currentUser'
 import { formatElapsed } from '@/lib/format'
 import { useLiveTurn } from '@/lib/liveTurns'
 import { useNow } from '@/lib/useNow'
 import { cn } from '@/lib/utils'
-import { statusKey, statusTone } from './memberStatus'
+import { statusLabelKey, statusTone } from './memberStatus'
 import type { MemberState } from './useMemberStates'
 import { useT } from '@/lib/i18n'
 
@@ -59,7 +60,19 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
         </HoverCardContent>
       </HoverCard>
       <Separator orientation="vertical" className="h-4.5! bg-input" />
-      {waiting?.approval ? (
+      {waiting?.approval && askKind(waiting.approval.kind) !== 'tool_use' ? (
+        // A question, a form or a link is dealt with on its card, in its
+        // topic, not from here.
+        <>
+          <span className="min-w-0 truncate text-muted-foreground">
+            <b className="font-medium text-foreground">{waiting.member.display_name}</b> {t(waitingKeys[askKind(waiting.approval.kind)].island)} ·{' '}
+            {approvalCommand(waiting.approval)}
+          </span>
+          <Button size="xs" className="rounded-full px-3" onClick={() => onOpenThread(waiting.approval!.thread_id)}>
+            {t(askKind(waiting.approval.kind) === 'question' ? 'island.answer' : 'island.handle')}
+          </Button>
+        </>
+      ) : waiting?.approval ? (
         <>
           <span className="min-w-0 truncate text-muted-foreground">
             <b className="font-medium text-foreground">{waiting.member.display_name}</b> {t('island.waiting')} ·{' '}
@@ -118,7 +131,7 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
 
 function Face({ state, first, onOpenThread }: { state: MemberState; first: boolean; onOpenThread: (id: string) => void }) {
   const t = useT()
-  const label = `${state.member.display_name} · ${t(statusKey[state.status])}`
+  const label = `${state.member.display_name} · ${t(statusLabelKey(state))}`
   const ring =
     state.status === 'working'
       ? 'shadow-[0_0_0_2px_var(--popover),0_0_0_3.5px_var(--status-run)]'
@@ -173,7 +186,7 @@ function MemberRow({ state, onOpenThread }: { state: MemberState; onOpenThread: 
         ) : null}
         <span className="inline-flex flex-none items-center gap-1.5 text-xs text-muted-foreground">
           <StatusDot tone={statusTone[state.status]} />
-          {t(statusKey[state.status])}
+          {t(statusLabelKey(state))}
         </span>
       </ItemActions>
     </>

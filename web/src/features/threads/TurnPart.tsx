@@ -4,10 +4,12 @@ import { useCancelTurn } from '@/api/turns'
 import type { Message, Turn } from '@/api/types'
 import { Shimmer } from '@/components/ai-elements/shimmer'
 import { AgentMarkdown } from '@/components/shared/agent-markdown'
+import { askKind, waitingKeys } from '@/features/approvals/kinds'
 import { Button } from '@/components/ui/button'
 import type { Sender } from '@/features/rooms/useSenderNames'
 import { ActivityBlock } from '@/features/turns/ActivityBlock'
-import { activityFromEvents, activityFromTranscript } from '@/features/turns/activity'
+import { activityFromEvents, activityFromTranscript, isNotice } from '@/features/turns/activity'
+import { NoticeList } from '@/features/turns/NoticeList'
 import { formatDuration } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import { useLiveTurn } from '@/lib/liveTurns'
@@ -40,12 +42,17 @@ export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, 
   const live = useLiveTurn(running ? turn.id : undefined)
   const transcript = useTranscript(turn.id, first && !running)
   const cancel = useCancelTurn()
-  const items = running ? activityFromEvents(live?.events ?? []) : activityFromTranscript(transcript.data ?? [])
+  const activity = running ? activityFromEvents(live?.events ?? []) : activityFromTranscript(transcript.data ?? [])
+  // What the runtime told people stays in sight; the rest folds into a line.
+  const notices = activity.filter(isNotice)
+  const items = activity.filter((item) => !isNotice(item))
   const took = turn.ended_at ? formatDuration(turn.started_at, turn.ended_at) : undefined
+  const waiting = (approvals.data ?? []).find((a) => a.status === 'pending')
 
   return (
     <ThreadRow sender={who} time={messages[0]?.created_at ?? turn.started_at}>
       {first ? <ActivityBlock items={items} duration={took} onOpen={onOpenTurn ? () => onOpenTurn(turn.id) : undefined} /> : null}
+      {first ? <NoticeList notices={notices} /> : null}
       {messages.map((message) => (
         <ThreadMessage key={message.id} message={message} sender={who} approval={approvalByNote.get(message.id)} names={names} target={target} inTurn />
       ))}
@@ -56,7 +63,13 @@ export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, 
               <AgentMarkdown text={live.text} mentions={null} names={names ?? new Map()} streaming className="text-[0.875rem]" />
             ) : (
               <Shimmer as="span" className="text-[0.875rem]">
-                {live?.compacting ? t('turn.compacting') : live?.tool ? t('topic.running', { tool: live.tool }) : t('turn.typing')}
+                {waiting
+                  ? t(waitingKeys[askKind(waiting.kind)].turn)
+                  : live?.compacting
+                    ? t('turn.compacting')
+                    : live?.tool
+                      ? t('topic.running', { tool: live.tool })
+                      : t('turn.typing')}
               </Shimmer>
             )}
           </div>

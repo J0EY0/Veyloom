@@ -1,6 +1,8 @@
 // Wire types for /api/v1. Field names match the JSON tags on the Go
 // structs in internal/store and internal/api; change both together.
 
+import type { FormAnswer, QuestionAnswers } from './types.approvals'
+
 export interface Project {
   id: string
   name: string
@@ -251,7 +253,8 @@ export interface ThreadResponse {
 
 // 'session' is only in transcripts: the hub keeps it to itself instead of
 // sending it to the room.
-export type TurnEventKind = 'status' | 'text' | 'tool_call' | 'tool_result' | 'file_changed' | 'error' | 'approval_request' | 'session' | 'compaction'
+export type TurnEventKind =
+  'status' | 'text' | 'tool_call' | 'tool_result' | 'file_changed' | 'error' | 'approval_request' | 'notice' | 'session' | 'compaction'
 
 // One runtime event of a running turn; the fields present depend on kind.
 export interface TurnEvent {
@@ -265,6 +268,15 @@ export interface TurnEvent {
   // On 'compaction': 'start', 'end' or 'failed'.
   phase?: string
   approval_id?: string
+  // On 'approval_request': what is asked beyond permission ('question',
+  // 'form', 'link'), and for a request the runtime settled itself, who
+  // decided, the verdict and the reviewer's findings; text says why.
+  approval_kind?: string
+  reviewer?: string
+  verdict?: string
+  detail?: unknown
+  // On 'notice': 'info', 'warning' or 'error'.
+  level?: string
 }
 
 export interface TranscriptApproval {
@@ -324,6 +336,12 @@ export interface Approval {
   // The thread post that presents the request; the card replaces it.
   message_id?: string
   decided_by?: string
+  // Set when the runtime's own reviewer decided rather than a person, such
+  // as 'codex_auto_review'; nobody was asked (docs/design.md 4.6).
+  reviewer?: string
+  // What came with the decision: a question's answers, a form's content,
+  // or a reviewer's findings such as {risk, authorization}.
+  answer?: unknown
   created_at: string
   decided_at?: string
 }
@@ -351,6 +369,9 @@ export interface DecideApprovalRequest {
   user_id: string
   allow: boolean
   message: string
+  // With an allowed question: what the person answered; with a form, what
+  // they filled in.
+  answer?: QuestionAnswers | FormAnswer
 }
 
 // A message that mentions the current user, as the inbox lists it.
@@ -365,3 +386,4 @@ export interface InboxResponse {
 }
 
 export * from './types.agents'
+export * from './types.approvals'

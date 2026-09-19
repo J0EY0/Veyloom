@@ -1,5 +1,6 @@
 import type { StatusTone } from '@/components/shared/status-dot'
-import type { MemberStatus } from './useMemberStates'
+import { askKind, waitingKeys } from '@/features/approvals/kinds'
+import type { MemberState, MemberStatus } from './useMemberStates'
 
 // How a member's state reads and looks, shared by the island over the
 // feed and the members panel beside it (docs/webui.md §4.4).
@@ -10,6 +11,12 @@ export const statusKey = {
   working: 'member.working',
   idle: 'member.idle',
 } as const
+
+// statusLabelKey is statusKey for one member's state, saying what a waiting
+// member waits for: a permission, an answer, a form or a link.
+export function statusLabelKey(state: Pick<MemberState, 'status' | 'approval'>) {
+  return state.status === 'waiting' && state.approval ? waitingKeys[askKind(state.approval.kind)].member : statusKey[state.status]
+}
 
 export const statusTone: Record<MemberStatus, StatusTone> = {
   offline: 'idle',

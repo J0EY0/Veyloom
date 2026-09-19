@@ -6,6 +6,7 @@ import { AttachmentList } from '@/components/shared/attachment-list'
 import { UserAvatar } from '@/components/shared/user-avatar'
 import { Badge } from '@/components/ui/badge'
 import { approvalCommand } from '@/features/approvals/describe'
+import { askKind, waitingKeys } from '@/features/approvals/kinds'
 import { runtimeName } from '@/lib/runtimes'
 import { formatTime } from '@/lib/format'
 import { useLiveTurn } from '@/lib/liveTurns'
@@ -53,14 +54,14 @@ export const MessageRow = memo(function MessageRow({ message, sender, names, app
             {formatTime(message.created_at)}
           </time>
         </div>
-        <Body message={message} names={names} liveText={live?.text} />
+        <Body message={message} names={names} liveText={live?.text} waiting={approval} />
         <AttachmentList attachments={message.attachments} />
         {thread && onOpenThread ? (
           <TopicFooter
             summary={thread}
             liveTool={live?.tool}
             compacting={live?.compacting}
-            waitingFor={approval ? approvalCommand(approval) : undefined}
+            waiting={approval ? { what: approvalCommand(approval), kind: askKind(approval.kind) } : undefined}
             onOpen={() => onOpenThread(thread.id)}
           />
         ) : null}
@@ -70,9 +71,9 @@ export const MessageRow = memo(function MessageRow({ message, sender, names, app
 }, areEqual)
 
 // An empty body is a topic root the agent has not filled in yet: while its
-// turn runs, the text streaming in stands in for it. A person's empty body
-// means files alone, drawn below.
-function Body({ message, names, liveText }: { message: RoomMessage; names: Map<string, string>; liveText?: string }) {
+// turn runs, the text streaming in stands in for it, or what the turn waits
+// on a person for. A person's empty body means files alone, drawn below.
+function Body({ message, names, liveText, waiting }: { message: RoomMessage; names: Map<string, string>; liveText?: string; waiting?: Approval }) {
   if (message.sender_kind === 'user' && message.body === '') return null
   if (message.body !== '') {
     if (message.sender_kind === 'agent') {
@@ -88,7 +89,7 @@ function Body({ message, names, liveText }: { message: RoomMessage; names: Map<s
     return (
       <div className={bodyClass}>
         <Shimmer as="span" className="text-[0.90625rem]">
-          {t('message.typing')}
+          {waiting ? t(waitingKeys[askKind(waiting.kind)].turn) : t('message.typing')}
         </Shimmer>
       </div>
     )

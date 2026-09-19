@@ -45,7 +45,8 @@ export function applyTurnEvent(turnId: string, event: TurnEvent) {
       break
     case 'approval_request':
       next.text = ''
-      next.tool = event.tool
+      // A request the runtime's own reviewer settled waits for nobody.
+      if (!event.reviewer) next.tool = event.tool
       break
     case 'tool_result':
       next.tool = undefined
