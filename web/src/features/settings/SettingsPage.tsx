@@ -16,6 +16,7 @@ import { useDocumentTitle } from '@/lib/useDocumentTitle'
 import { cn } from '@/lib/utils'
 import { AccountSettings } from './AccountSettings'
 import { GeneralSettings } from './GeneralSettings'
+import { globalMemoryHref } from '@/features/wiki/links'
 import { settingsSections, type SectionId } from './sections'
 import { ShortcutsSettings } from './ShortcutsSettings'
 
@@ -34,6 +35,9 @@ export function SettingsPage() {
   useDocumentTitle(t('settings.title'))
   const { section } = useParams()
   const picked = settingsSections.find((candidate) => candidate.id === section)
+  // The global memory had a page of its own until it moved into General
+  // (docs/design.md 5.19); its old address opens it there.
+  if (section === 'memory') return <Navigate to={globalMemoryHref} replace />
   if (section && !picked) return <Navigate to="/settings" replace />
   const current = picked ?? settingsSections[0]
   const Section = content[current.id]

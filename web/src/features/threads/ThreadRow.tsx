@@ -9,13 +9,15 @@ import { runtimeName } from '@/lib/runtimes'
 export interface ThreadRowProps {
   sender: Sender
   time?: string
+  // A word on what the speaker is doing, after its runtime: a wiki upkeep.
+  label?: string
   children: ReactNode
 }
 
 // One speaker inside a topic, drawn as the chat draws a message: the face
 // on the left; the name, an agent's runtime and the time on top; what they
 // said below.
-export function ThreadRow({ sender, time, children }: ThreadRowProps) {
+export function ThreadRow({ sender, time, label, children }: ThreadRowProps) {
   return (
     <div className="mt-4 grid grid-cols-[1.25rem_minmax(0,1fr)] gap-x-2.5 first:mt-1">
       {sender.look ? <AgentAvatar look={sender.look} size="sm" /> : <UserAvatar name={sender.name} size="sm" />}
@@ -27,6 +29,7 @@ export function ThreadRow({ sender, time, children }: ThreadRowProps) {
               {runtimeName(sender.runtime)}
             </Badge>
           ) : null}
+          {label ? <span className="flex-none text-xs text-subtle">{label}</span> : null}
           {time ? (
             <time dateTime={time} className="flex-none text-xs text-subtle">
               {formatTime(time)}

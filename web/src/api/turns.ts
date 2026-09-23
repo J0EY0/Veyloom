@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { toast } from 'sonner'
 import { api } from './client'
+import { errorText } from './errorText'
+import { patchQuery } from './live'
 import type { Turn, TurnResponse, TurnsResponse } from './types'
 
 export const turnKeys = {
@@ -28,12 +31,12 @@ export function useRunningTurns(roomId: string) {
 // applyRunningTurn keeps the running list and the turn's own entry in
 // step with turn events.
 export function applyRunningTurn(client: QueryClient, turn: Turn) {
-  client.setQueryData<Turn[]>(turnKeys.running(turn.room_id), (old) => {
+  patchQuery<Turn[]>(client, turnKeys.running(turn.room_id), (old) => {
     if (!old) return old
     const rest = old.filter((t) => t.id !== turn.id)
     return turn.status === 'running' ? [turn, ...rest] : rest
   })
-  client.setQueryData<Turn>(turnKeys.one(turn.id), (old) => (old ? turn : old))
+  patchQuery<Turn>(client, turnKeys.one(turn.id), (old) => (old ? turn : old))
 }
 
 // Cancelling is asynchronous: the server answers 202 and the turn ends
@@ -43,6 +46,11 @@ export function useCancelTurn() {
   return useMutation({
     mutationFn: (turnId: string) => api.post<undefined>(`/turns/${turnId}/cancel`, {}),
     onSuccess: (_data, turnId) => {
+      void client.invalidateQueries({ queryKey: turnKeys.one(turnId) })
+    },
+    // Most often the turn ended meanwhile: say so, and show how it ended.
+    onError: (err, turnId) => {
+      toast.error(errorText(err))
       void client.invalidateQueries({ queryKey: turnKeys.one(turnId) })
     },
   })

@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button'
 import { formatDuration, formatTime } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { t, useT } from '@/lib/i18n'
+import { turnErrorText } from '@/features/turns/turnError'
 
 export interface TopicFooterProps {
   summary: ThreadSummary
@@ -70,7 +71,7 @@ export function topicState(summary: ThreadSummary, liveTool?: string, waiting?: 
       if (compacting) return { tone: 'run', text: t('turn.compacting') }
       return { tone: 'run', text: liveTool ? t('topic.running', { tool: liveTool }) : t('topic.working') }
     case 'failed':
-      return { tone: 'fail', text: t('topic.failed', { error: turn.error || t('topic.unknownError') }) }
+      return { tone: 'fail', text: t('topic.failed', { error: turn.error ? turnErrorText(turn.error) : t('topic.unknownError') }) }
     case 'cancelled':
       return { tone: 'idle', text: t('topic.cancelled') }
     default: {

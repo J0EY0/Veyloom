@@ -2,6 +2,7 @@
 // structs in internal/store and internal/api; change both together.
 
 import type { FormAnswer, QuestionAnswers } from './types.approvals'
+import type { UpkeepTrigger } from './types.wiki'
 
 export interface Project {
   id: string
@@ -14,6 +15,20 @@ export interface Project {
   description?: string
   // The project's group chat: a project is one chat (docs/webui.md §3).
   main_room_id: string
+  // The project's wiki topic in its chat, once there is one: where its
+  // wiki maintainer runs.
+  wiki_thread_id?: string
+  // The member a person chose to keep the wiki (docs/design.md 5.12), and
+  // when it runs.
+  wiki_maintainer_member_id?: string
+  wiki_maintainer_trigger?: UpkeepTrigger
+  // The note in the chat that offered a maintainer to a project without
+  // one, drawn as a card, and when a person said no to it (docs/design.md
+  // 5.16).
+  wiki_offer_message_id?: string
+  wiki_offer_declined_at?: string
+  // The folders of the OKF bundles the wiki mounts, read-only.
+  wiki_external_bundles?: string[]
   created_at: string
 }
 
@@ -76,6 +91,10 @@ export interface CreateProjectRequest {
   description?: string
   // The agents that join the chat as its first members.
   agent_ids: string[]
+  // One of them to keep the wiki from the start, daily unless said
+  // otherwise; without one the chat offers a maintainer later.
+  wiki_maintainer_agent_id?: string
+  wiki_maintainer_trigger?: UpkeepTrigger
 }
 
 // An absent field keeps its value. Moving the checkout moves the project's
@@ -84,6 +103,13 @@ export interface UpdateProjectRequest {
   name?: string
   repo_path?: string
   description?: string
+  // "" is none.
+  wiki_maintainer_member_id?: string
+  wiki_maintainer_trigger?: UpkeepTrigger
+  // All of them: an empty list mounts none.
+  wiki_external_bundles?: string[]
+  // A person said no to the maintainer the chat offered.
+  wiki_offer_declined?: boolean
 }
 
 export interface CreateRoomRequest {
@@ -188,9 +214,13 @@ export interface Turn {
   usage: TokenUsage
   // The files the turn wrote, each once, in the order first touched.
   files_changed?: string[]
+  // What the turn was for: the chat, or the wiki maintainer's upkeep.
+  kind?: TurnKind
   started_at: string
   ended_at?: string
 }
+
+export type TurnKind = 'chat' | 'upkeep'
 
 // A topic with a turn in flight (GET /topics?status=running).
 export interface RunningTopic {
@@ -299,6 +329,9 @@ export interface TranscriptLine {
   approval?: TranscriptApproval
   result?: { output: string; session_ref?: string; usage?: TokenUsage; failure?: string }
   error?: string
+  // On start and restart: the run's spec, prompt being the brief the hub
+  // composed for it.
+  spec?: { prompt?: string }
 }
 
 export interface TurnResponse {
@@ -316,6 +349,7 @@ export type RoomEvent =
   | (EventBase & { kind: 'turn_started' | 'turn_finished'; turn: Turn })
   | (EventBase & { kind: 'turn_event'; turn_id: string; turn_event: TurnEvent })
   | (EventBase & { kind: 'approval_requested' | 'approval_decided'; approval: Approval })
+  | (EventBase & { kind: 'wiki_changed'; project_id?: string; scope?: 'project' | 'library' })
 
 export type ApprovalStatus = 'pending' | 'allowed' | 'denied' | 'expired' | 'cancelled'
 
@@ -387,3 +421,4 @@ export interface InboxResponse {
 
 export * from './types.agents'
 export * from './types.approvals'
+export * from './types.wiki'

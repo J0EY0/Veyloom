@@ -14,6 +14,8 @@ import { runtimeName, runtimeRank } from '@/lib/runtimes'
 import { useT } from '@/lib/i18n'
 import { AvatarField } from './AvatarField'
 import { projectsInUse } from './inUse'
+import { SkillsField } from './SkillsField'
+import { errorText } from '@/api/errorText'
 
 export interface AgentDialogProps {
   // Absent when creating a new agent.
@@ -24,7 +26,8 @@ export interface AgentDialogProps {
 // Creates or edits one agent. An agent is set up on one machine's runtime:
 // the machine comes first and the runtime is one that machine found. An
 // agent still in a project stays on its machine, since its members run
-// there. The role card is the big field.
+// there. The role card is the big field; the skills of the library
+// installed for it follow.
 export function AgentDialog({ agent, onClose }: AgentDialogProps) {
   const machines = useMachines()
   const create = useCreateAgent()
@@ -34,6 +37,7 @@ export function AgentDialog({ agent, onClose }: AgentDialogProps) {
   const [pickedMachine, setPickedMachine] = useState(agent?.machine_id ?? '')
   const [pickedRuntime, setPickedRuntime] = useState(agent?.runtime ?? '')
   const [avatar, setAvatar] = useState(agent?.avatar ?? '')
+  const [skills, setSkills] = useState<string[]>(agent?.skills ?? [])
   const [uploading, setUploading] = useState(false)
   const pending = create.isPending || update.isPending
   const id = useId()
@@ -82,13 +86,14 @@ export function AgentDialog({ agent, onClose }: AgentDialogProps) {
       role_card: String(data.get('role_card') ?? ''),
       permission_preset: String(data.get('permission_preset') ?? 'read_only') as PermissionPreset,
       runtime_options: options,
+      skills,
     }
     const done = {
       onSuccess: onClose,
       // Moved while it was still in a project, since this dialog opened.
       onError: (err: Error) => {
         const projects = projectsInUse(err)
-        setError(projects.length > 0 ? t('agent.machineLocked', { projects: projects.join('、') }) : err.message)
+        setError(projects.length > 0 ? t('agent.machineLocked', { projects: projects.join('、') }) : errorText(err))
       },
     }
     if (agent) {
@@ -199,6 +204,7 @@ export function AgentDialog({ agent, onClose }: AgentDialogProps) {
                 className="min-h-40 leading-[1.55]"
               />
             </Field>
+            <SkillsField runtime={runtime} value={skills} onChange={setSkills} />
             <Field data-invalid={optionsError ? true : undefined}>
               <FieldLabel htmlFor={`${id}-options`}>{t('agent.options')}</FieldLabel>
               <Textarea

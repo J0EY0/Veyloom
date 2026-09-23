@@ -50,7 +50,7 @@ describe('Composer', () => {
     const box = screen.getByLabelText('消息')
 
     await userEvent.type(box, 'hello{Enter}')
-    expect(await screen.findByRole('alert')).toHaveTextContent('user u1: not found')
+    expect(await screen.findByRole('alert')).toHaveTextContent('找不到了，可能已经被删除。')
     expect(box).toHaveValue('hello')
   })
 })
@@ -152,7 +152,7 @@ describe('Composer attachments', () => {
     await screen.findByText('note.txt')
     await userEvent.click(screen.getByRole('button', { name: '发送' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('disk full')
+    expect(await screen.findByRole('alert')).toHaveTextContent('服务端出错了，详情在服务端的日志里。')
     expect(screen.getByText('note.txt')).toBeInTheDocument()
   })
 })

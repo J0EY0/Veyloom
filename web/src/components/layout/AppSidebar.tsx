@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { BotIcon, InboxIcon, SearchIcon, ServerIcon, SettingsIcon, SquarePenIcon } from 'lucide-react'
+import { BookOpenIcon, BotIcon, InboxIcon, LibraryBigIcon, SearchIcon, ServerIcon, SettingsIcon, SquarePenIcon } from 'lucide-react'
 import { Link, useLocation } from 'react-router'
 import { usePendingApprovalsAll } from '@/api/approvals'
 import { useInbox } from '@/api/inbox'
@@ -30,9 +30,9 @@ import { SidebarProjects } from './SidebarProjects'
 import { WorkspaceMenu } from './WorkspaceMenu'
 
 // The left column (docs/webui.md §0): the workspace, search and new at the
-// top; what needs you; the things to manage (agents, machines, settings)
-// under a heading; the projects, each of which is a group chat; then the
-// account.
+// top; what needs you; the things to manage (agents, machines, the
+// projects' wikis, the skill library, settings) under a heading; the
+// projects, each of which is a group chat; then the account.
 export function AppSidebar() {
   const t = useT()
   const location = useLocation()
@@ -100,6 +100,13 @@ export function AppSidebar() {
             <SidebarMenu aria-label={t('nav.manage')}>
               <NavItem to="/agents" label={t('nav.agents')} icon={<BotIcon />} active={location.pathname.startsWith('/agents')} />
               <NavItem to="/machines" label={t('nav.machines')} icon={<ServerIcon />} active={location.pathname.startsWith('/machines')} />
+              <NavItem
+                to="/wiki"
+                label={t('nav.wiki')}
+                icon={<BookOpenIcon />}
+                active={location.pathname === '/wiki' || location.pathname.startsWith('/wiki/')}
+              />
+              <NavItem to="/library" label={t('nav.library')} icon={<LibraryBigIcon />} active={location.pathname.startsWith('/library')} />
               <NavItem to="/settings" label={t('nav.settings')} icon={<SettingsIcon />} active={location.pathname.startsWith('/settings')} />
             </SidebarMenu>
           </SidebarGroupContent>

@@ -3,6 +3,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { locales, setLocale, useLocale, useT, type Locale } from '@/lib/i18n'
 import { setTheme, useTheme, type Theme } from '@/lib/theme'
 import { setUiSize, uiSizes, useUiSize, type UiSize } from '@/lib/uiSize'
+import { MemorySettings } from './MemorySettings'
 import { SettingRow, SettingsGroup, SettingsSection } from './SettingsLayout'
 
 const themeIcons = { system: MonitorIcon, light: SunIcon, dark: MoonIcon } as const
@@ -14,7 +15,8 @@ const languageNames: Record<Locale, string> = { 'zh-CN': '中文', en: 'English'
 
 // The general settings, how the app looks and reads: the colour scheme,
 // the interface size and the language. Each is few enough choices to show
-// at once, and each takes effect as it is picked.
+// at once, and each takes effect as it is picked. Then the memories the
+// members' turns use (docs/design.md 5.19).
 export function GeneralSettings() {
   const t = useT()
   const theme = useTheme()
@@ -61,6 +63,7 @@ export function GeneralSettings() {
           </Tabs>
         </SettingRow>
       </SettingsGroup>
+      <MemorySettings />
     </SettingsSection>
   )
 }

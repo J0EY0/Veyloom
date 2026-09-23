@@ -3,6 +3,7 @@ import { agentKeys, machineKeys } from './agents'
 import { approvalKeys } from './approvals'
 import { api, ApiError } from './client'
 import { topicKeys } from './topics'
+import { upkeepKeys } from './upkeep'
 import type { CreateProjectRequest, Project, ProjectResponse, ProjectsResponse, UpdateProjectRequest } from './types'
 
 export const projectKeys = {
@@ -51,6 +52,8 @@ export function useUpdateProject(projectId: string) {
     onSuccess: ({ project }) => {
       client.setQueryData<Project[]>(projectKeys.all, (old) => old?.map((p) => (p.id === project.id ? project : p)))
       refreshAfterProjectChange(client)
+      // The wiki maintainer may have changed.
+      void client.invalidateQueries({ queryKey: upkeepKeys.project(project.id) })
     },
   })
 }

@@ -1,6 +1,8 @@
 import { useState, type ReactNode } from 'react'
 import { Maximize2Icon, Minimize2Icon } from 'lucide-react'
 import { useMessage, useThread, useThreadMessages } from '@/api/messages'
+import { useProject } from '@/api/projects'
+import { useRoom } from '@/api/rooms'
 import { SidePanel } from '@/components/layout/SidePanel'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
@@ -13,6 +15,7 @@ import { MemberLooks } from '@/lib/agentLooks'
 import { ThreadTimeline } from './ThreadTimeline'
 import { ThreadTitle } from './ThreadTitle'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 export interface ThreadPanelProps {
   roomId: string
@@ -42,6 +45,9 @@ export function ThreadPanel({ roomId, roomName, threadId, wide, onToggleWide, on
   const trigger = useMessage(triggerId)
   const [showRoot, setShowRoot] = useState(false)
   const t = useT()
+  // The project's wiki topic is called by that name, not by its root's words.
+  const room = useRoom(roomId)
+  const wikiTopic = useProject(room.data?.project_id ?? '')?.wiki_thread_id === threadId
 
   const wideLabel = wide ? t('thread.collapse') : t('thread.expand')
   const wideButton = onToggleWide ? (
@@ -86,7 +92,7 @@ export function ThreadPanel({ roomId, roomName, threadId, wide, onToggleWide, on
         <Empty>
           <EmptyHeader>
             <EmptyTitle>{t('thread.failed')}</EmptyTitle>
-            <EmptyDescription>{thread.error.message}</EmptyDescription>
+            <EmptyDescription>{errorText(thread.error)}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       </SidePanel>
@@ -107,7 +113,14 @@ export function ThreadPanel({ roomId, roomName, threadId, wide, onToggleWide, on
       wide={wide}
       variant={variant}
       header={
-        <ThreadTitle number={thread.data.thread.number} root={root} fallback={trigger.data} open={showRoot} onToggle={() => setShowRoot((open) => !open)} />
+        wikiTopic ? (
+          <h2 className="min-w-0 truncate text-sm font-semibold">
+            <span className="mr-1 font-normal text-subtle">#{thread.data.thread.number}</span>
+            {t('wikiTopic.title')}
+          </h2>
+        ) : (
+          <ThreadTitle number={thread.data.thread.number} root={root} fallback={trigger.data} open={showRoot} onToggle={() => setShowRoot((open) => !open)} />
+        )
       }
       headerActions={
         <>

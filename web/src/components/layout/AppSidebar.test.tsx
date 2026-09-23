@@ -63,6 +63,16 @@ describe('AppSidebar', () => {
     expect(screen.queryByRole('link', { name: '全部项目' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/agents')
     expect(screen.getByRole('link', { name: '机器' })).toHaveAttribute('href', '/machines')
+    expect(screen.getByRole('link', { name: 'Wiki' })).toHaveAttribute('href', '/wiki')
+  })
+
+  it('marks the Wiki page on any of its addresses, not a chat’s Wiki tab', async () => {
+    stubSidebar()
+    const { unmount } = renderWithProviders(<AppSidebar />, { route: '/wiki/p1/facts/port.md' })
+    expect(await screen.findByRole('link', { name: 'Wiki' })).toHaveAttribute('aria-current', 'page')
+    unmount()
+    renderWithProviders(<AppSidebar />, { route: '/rooms/r1/wiki' })
+    expect(await screen.findByRole('link', { name: 'Wiki' })).not.toHaveAttribute('aria-current')
   })
 
   it('hangs the topics agents are working on under their project', async () => {
@@ -114,7 +124,7 @@ describe('AppSidebar', () => {
   })
 
   it('keeps a project while a member works in it', async () => {
-    stubSidebar({ '/projects/p1': () => Response.json({ error: 'project p1: store: conflict: a turn is still running' }, { status: 409 }) })
+    stubSidebar({ '/projects/p1': () => Response.json({ error: 'a turn is still running' }, { status: 409 }) })
     renderWithProviders(<AppSidebar />)
     await userEvent.click(await screen.findByRole('button', { name: 'Veyloom 的菜单' }))
     await userEvent.click(await screen.findByRole('menuitem', { name: '删除' }))

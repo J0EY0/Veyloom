@@ -10,6 +10,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { runtimeName } from '@/lib/runtimes'
 import { inheritPreset, presetFromForm, presetLabel, presets } from './presets'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 export interface AddMemberDialogProps {
   roomId: string
@@ -54,7 +55,7 @@ export function AddMemberDialog({ roomId, roomName, open, onClose }: AddMemberDi
           setAgentId('')
           onClose()
         },
-        onError: (err) => setError(err.message),
+        onError: (err) => setError(errorText(err)),
       },
     )
   }

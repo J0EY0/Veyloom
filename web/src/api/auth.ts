@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { setCurrentUser } from '@/lib/currentUser'
-import { api } from './client'
+import { ApiError, api } from './client'
 import type { AuthStatus, User, UserResponse } from './types'
 import { userKeys } from './users'
 
@@ -54,7 +54,12 @@ export function useLogout() {
   const client = useQueryClient()
   return useMutation({
     mutationFn: async () => {
-      await api.post<undefined>('/auth/logout', {})
+      try {
+        await api.post<undefined>('/auth/logout', {})
+      } catch (err) {
+        // A session that ended already is as good as signed out.
+        if (!(err instanceof ApiError && err.status === 401)) throw err
+      }
     },
     onSuccess: () => {
       // The status flips first so the gate swaps the app for the login

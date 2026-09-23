@@ -23,7 +23,11 @@ describe('ApprovalsPanel', () => {
   })
 
   it('says so when nothing waits', async () => {
-    stubApi({ '/rooms/r1/approvals': { approvals: [] }, '/rooms/r1/members': { members: [] }, '/users': { users: [] } })
+    stubApi({
+      '/rooms/r1/approvals': { approvals: [] },
+      '/rooms/r1/members': { members: [] },
+      '/users': { users: [] },
+    })
     renderWithProviders(<ApprovalsPanel roomId="r1" onClose={() => {}} onOpenThread={() => {}} />)
     expect(await screen.findByText('没有在等你的。')).toBeInTheDocument()
   })

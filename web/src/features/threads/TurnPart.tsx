@@ -50,7 +50,7 @@ export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, 
   const waiting = (approvals.data ?? []).find((a) => a.status === 'pending')
 
   return (
-    <ThreadRow sender={who} time={messages[0]?.created_at ?? turn.started_at}>
+    <ThreadRow sender={who} time={messages[0]?.created_at ?? turn.started_at} label={turn.kind === 'upkeep' ? t('upkeep.badge') : undefined}>
       {first ? <ActivityBlock items={items} duration={took} onOpen={onOpenTurn ? () => onOpenTurn(turn.id) : undefined} /> : null}
       {first ? <NoticeList notices={notices} /> : null}
       {messages.map((message) => (

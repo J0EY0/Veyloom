@@ -9,6 +9,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { inheritPreset, presetFromForm, presetLabel, presets } from './presets'
 import { formatAgo } from '@/lib/format'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 export interface EditMemberDialogProps {
   roomId: string
@@ -40,7 +41,7 @@ export function EditMemberDialog({ roomId, member, onClose }: EditMemberDialogPr
       model: String(data.get('model') ?? '').trim(),
     }
     setError(undefined)
-    update.mutate({ id: member.id, patch }, { onSuccess: onClose, onError: (err) => setError(err.message) })
+    update.mutate({ id: member.id, patch }, { onSuccess: onClose, onError: (err) => setError(errorText(err)) })
   }
 
   return (

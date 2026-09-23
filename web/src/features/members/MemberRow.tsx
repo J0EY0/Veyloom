@@ -14,6 +14,7 @@ import type { MemberState } from '@/features/rooms/useMemberStates'
 import { useT } from '@/lib/i18n'
 import { useLiveTurn } from '@/lib/liveTurns'
 import { cn } from '@/lib/utils'
+import { errorText } from '@/api/errorText'
 
 // One member of the chat's info panel: what it is doing right now, and what
 // you do to it: edit, switch off, start a new session, take out.
@@ -91,7 +92,10 @@ export function MemberRow({
         <DropdownMenuContent align="end" className="w-44">
           <DropdownMenuItem onSelect={() => onEdit(member)}>{t('common.edit')}</DropdownMenuItem>
           {threadId ? <DropdownMenuItem onSelect={() => onOpenThread(threadId)}>{t('approvals.openTopic')}</DropdownMenuItem> : null}
-          <DropdownMenuItem disabled={update.isPending} onSelect={() => update.mutate({ id: member.id, patch: { enabled: !member.enabled } })}>
+          <DropdownMenuItem
+            disabled={update.isPending}
+            onSelect={() => update.mutate({ id: member.id, patch: { enabled: !member.enabled } }, { onError: (err) => toast.error(errorText(err)) })}
+          >
             {member.enabled ? t('member.disable') : t('member.enable')}
           </DropdownMenuItem>
           {/* Sessions renew themselves; this is for the one that went wrong
@@ -102,7 +106,7 @@ export function MemberRow({
             onSelect={() =>
               reset.mutate(member.id, {
                 onSuccess: () => toast.success(t('member.newSessionDone', { name: member.display_name })),
-                onError: (err) => toast.error(err.message),
+                onError: (err) => toast.error(errorText(err)),
               })
             }
           >

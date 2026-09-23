@@ -1,8 +1,8 @@
 import type { InboxItem, PendingApproval } from '@/api/types'
 import { approvalCommand } from '@/features/approvals/describe'
 
-// One row of the inbox: a request waiting for a decision, or a
-// message that mentioned you. Either way it leads to a topic.
+// One row of the inbox: a request waiting for a decision, or a message that
+// mentioned you. Each leads to a topic.
 export interface InboxEntry {
   kind: 'approval' | 'mention'
   id: string
@@ -20,8 +20,8 @@ export interface InboxEntry {
   message?: InboxItem
 }
 
-// toEntries lists what waits for a decision first, then the mentions,
-// each in the order the server sent them.
+// toEntries lists what waits for a decision first, the runtimes' requests,
+// then the mentions, each in the order the server sent them.
 export function toEntries(approvals: PendingApproval[], items: InboxItem[], me: string): InboxEntry[] {
   return [
     ...approvals.map((approval): InboxEntry => ({
@@ -55,7 +55,7 @@ export function toEntries(approvals: PendingApproval[], items: InboxItem[], me: 
 export function filterEntries(entries: InboxEntry[], query: string, approvalsOnly: boolean): InboxEntry[] {
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   return entries.filter((entry) => {
-    if (approvalsOnly && entry.kind !== 'approval') return false
+    if (approvalsOnly && entry.kind === 'mention') return false
     if (words.length === 0) return true
     const text = `${entry.sender} ${entry.project} ${entry.excerpt}`.toLowerCase()
     return words.every((word) => text.includes(word))

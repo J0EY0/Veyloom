@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useSetup } from '@/api/auth'
-import { ApiError } from '@/api/client'
 import { LoginForm, type LoginFormValues } from '@/components/login-form'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
 import { useT } from '@/lib/i18n'
 import { AuthPage } from './AuthPage'
+import { errorText } from '@/api/errorText'
 
 const minPassword = 8
 
@@ -21,7 +21,8 @@ export function SetupPage() {
       setError(t('user.nameRequired'))
       return
     }
-    if (password.length < minPassword) {
+    // Counted in characters, as the server counts them.
+    if ([...password].length < minPassword) {
       setError(t('user.passwordTooShort'))
       return
     }
@@ -33,7 +34,7 @@ export function SetupPage() {
     setup.mutate(
       { name, password },
       {
-        onError: (err) => setError(err instanceof ApiError && err.status === 409 ? t('auth.setupDone') : err.message),
+        onError: (err) => setError(errorText(err, { 409: t('auth.setupDone') })),
       },
     )
   }

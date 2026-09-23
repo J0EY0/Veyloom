@@ -26,6 +26,7 @@ import { MentionPicker } from './MentionPicker'
 import { useMentionInput } from './useMentionInput'
 import { detectMentions, useMentionTargets } from './useMentionTargets'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 export interface ComposerProps {
   roomId: string
@@ -107,7 +108,7 @@ export function Composer({ roomId, roomName, threadId, hint, compact }: Composer
     } catch (err) {
       // The form was cleared on submit; put the words back to retry.
       if (el.value === '') el.value = text
-      setError(err instanceof Error ? err.message : String(err))
+      setError(errorText(err))
       throw err
     } finally {
       setUploading(false)

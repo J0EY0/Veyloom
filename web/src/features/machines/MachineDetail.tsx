@@ -201,7 +201,7 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
 function NothingDetected() {
   const t = useT()
   return (
-    <Empty className="gap-3 rounded-xl border p-4 md:p-5">
+    <Empty className="gap-3 p-4 md:p-5">
       <EmptyHeader className="max-w-none">
         <EmptyTitle className="text-[0.8125rem] font-normal tracking-normal text-muted-foreground">{t('machines.noneDetected')}</EmptyTitle>
       </EmptyHeader>

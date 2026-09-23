@@ -20,6 +20,7 @@ import { EditMemberDialog } from './EditMemberDialog'
 import { MemberRow } from './MemberRow'
 import { RemoveMemberDialog } from './RemoveMemberDialog'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 // From this many members on the list gets a search box; fewer are read at
 // a glance.
@@ -61,9 +62,11 @@ export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: Member
       onClose={onClose}
       closeLabel={t('room.infoClose')}
     >
-      <div className="flex flex-col gap-5">
+      {/* At least as tall as the panel, so a note in place of the members
+          takes the rest of it and sits in the middle. */}
+      <div className="flex min-h-full flex-col gap-5">
         {project ? <ProjectCard project={project} onEdit={() => setEditingProject(true)} /> : null}
-        <section aria-label={t('members.title')} className="flex flex-col gap-1.5">
+        <section aria-label={t('members.title')} className="flex flex-1 flex-col gap-1.5">
           <div className="flex h-7 items-center gap-1.5">
             <h3 className="text-xs font-medium text-subtle">{t('members.title')}</h3>
             {states.length > 0 ? <span className="text-xs text-subtle tabular-nums">{states.length}</span> : null}
@@ -107,11 +110,11 @@ export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: Member
             <Empty>
               <EmptyHeader>
                 <EmptyTitle>{t('members.failed')}</EmptyTitle>
-                <EmptyDescription>{members.error.message}</EmptyDescription>
+                <EmptyDescription>{errorText(members.error)}</EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : sorted.length === 0 ? (
-            <Empty className="gap-4 py-8">
+            <Empty className="gap-4 px-0 md:px-0">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
                   <BotIcon />

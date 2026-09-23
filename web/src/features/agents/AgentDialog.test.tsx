@@ -1,6 +1,7 @@
 import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
+import type { WikiCatalog, WikiPageInfo } from '@/api/types'
 import { stubApi } from '@/test/fetch'
 import { renderWithProviders } from '@/test/render'
 import { pickOption } from '@/test/select'
@@ -14,6 +15,41 @@ vi.mock('@/lib/avatarImage', async (importOriginal) => ({
 }))
 
 const picture = '0123456789abcdef0123456789abcdef.webp'
+
+// The skill library: one skill for every runtime, one kept for Claude
+// Code, and a retired one.
+function skillPage(name: string, title: string, overrides: Partial<WikiPageInfo> = {}): WikiPageInfo {
+  return {
+    path: `/skills/${name}/SKILL.md`,
+    type: 'Skill',
+    title,
+    description: `Use for ${title}.`,
+    tags: [],
+    status: 'stable',
+    tier: 'human-reviewed',
+    modified: '2026-09-22T00:00:00Z',
+    resident: false,
+    ...overrides,
+  }
+}
+const library: WikiCatalog = {
+  pages: [
+    skillPage('go-table-tests', 'Go table tests'),
+    skillPage('claude-only', 'Claude only', { tags: ['runtime-claude'] }),
+    skillPage('old-habit', 'Old habit', { status: 'deprecated' }),
+    { ...skillPage('copy-paste', 'Copy-pasted tests'), path: '/patterns/copy-paste.md', type: 'Pattern' },
+  ],
+  dirs: [],
+  folder: '/state/wiki/library',
+  history: true,
+}
+
+// skillBoxes are the skills offered, by title, and which are ticked.
+function skillBoxes() {
+  return screen
+    .getAllByRole('checkbox')
+    .map((box) => `${box.closest('li')?.querySelector('label')?.firstChild?.textContent}${box.getAttribute('aria-checked') === 'true' ? ' ✓' : ''}`)
+}
 
 // Two machines: Claude Code on the laptop with Codex missing, Pi and the
 // test runtime on the build box.
@@ -32,6 +68,7 @@ const existing = {
   role_card: 'Be brief.',
   permission_preset: 'read_only' as const,
   runtime_options: { tool: true },
+  skills: [] as string[],
   created_at: '2026-09-14T00:00:00Z',
   updated_at: '2026-09-14T00:00:00Z',
 }
@@ -48,6 +85,7 @@ describe('AgentDialog', () => {
     let posted: unknown
     stubApi({
       '/machines': machines,
+      '/library': { wiki: library },
       '/agents': async (req) => {
         if (req.method === 'POST') {
           posted = await req.json()
@@ -69,6 +107,9 @@ describe('AgentDialog', () => {
     await pickOption('权限', '全自动')
     await userEvent.type(screen.getByLabelText('角色卡'), 'Review carefully.')
     await userEvent.type(screen.getByLabelText('运行时选项'), '{{"approval": true}')
+    // Pi is offered the skills for every runtime, not the retired one.
+    await waitFor(() => expect(skillBoxes()).toEqual(['Go table tests']))
+    await userEvent.click(screen.getByRole('checkbox', { name: /Go table tests/ }))
     await userEvent.click(screen.getByRole('button', { name: '创建 Agent' }))
 
     await waitFor(() => expect(onClose).toHaveBeenCalled())
@@ -81,7 +122,30 @@ describe('AgentDialog', () => {
       role_card: 'Review carefully.',
       permission_preset: 'full_auto',
       runtime_options: { approval: true },
+      skills: ['go-table-tests'],
     })
+  })
+
+  it('shows the skills an agent has that it is given no longer, to take off', async () => {
+    let put: { skills?: string[] } = {}
+    stubApi({
+      '/machines': machines,
+      '/library': { wiki: library },
+      '/agents/t1': async (req) => {
+        put = (await req.json()) as typeof put
+        return { agent: { ...existing, ...put } }
+      },
+    })
+    renderWithProviders(<AgentDialog agent={{ ...existing, skills: ['claude-only', 'gone-one', 'old-habit'] }} onClose={vi.fn()} />)
+    await waitFor(() => expect(skillBoxes()).toEqual(['Claude only ✓', 'Go table tests', 'gone-one ✓', 'Old habit ✓']))
+    expect(screen.getByText('只给 Claude Code 用，取消勾选就会卸下。')).toBeInTheDocument()
+    expect(screen.getByText('技能库里已经没有它了，取消勾选就会卸下。')).toBeInTheDocument()
+    expect(screen.getByText('已停用，不会再给出，取消勾选就会卸下。')).toBeInTheDocument()
+
+    await userEvent.click(screen.getByRole('checkbox', { name: /gone-one/ }))
+    await userEvent.click(screen.getByRole('checkbox', { name: /Go table tests/ }))
+    await userEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(put.skills).toEqual(['claude-only', 'old-habit', 'go-table-tests']))
   })
 
   it('offers only what the picked machine found, not what it lacks nor the test runtime', async () => {
@@ -167,7 +231,7 @@ describe('AgentDialog', () => {
   it('says so when the agent joined a project while the dialog was open', async () => {
     stubApi({
       '/machines': machines,
-      '/agents/t1': () => Response.json({ error: 'agent t1: store: conflict', projects: ['Veyloom'] }, { status: 409 }),
+      '/agents/t1': () => Response.json({ error: 'still a member of Veyloom', projects: ['Veyloom'] }, { status: 409 }),
     })
     renderWithProviders(<AgentDialog agent={existing} onClose={vi.fn()} />)
     await waitFor(() => expect(screen.getByLabelText('机器')).toHaveTextContent('laptop'))

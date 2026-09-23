@@ -96,8 +96,18 @@ describe('AuthGate', () => {
       },
     })
     renderGate('/')
-    expect(await screen.findByText('连不上服务：db down')).toBeInTheDocument()
+    expect(await screen.findByText('服务端出错了，详情在服务端的日志里。')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '重试' }))
     expect(await screen.findByText('the app')).toBeInTheDocument()
+  })
+
+  it('says when nothing answers at all', async () => {
+    stubApi({
+      '/auth/status': () => {
+        throw new TypeError('Failed to fetch')
+      },
+    })
+    renderGate('/')
+    expect(await screen.findByText('连不上服务端，看看 veyloom serve 是否在运行。')).toBeInTheDocument()
   })
 })

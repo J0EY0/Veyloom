@@ -10,6 +10,7 @@ import { onSignedOut } from '@/lib/authEvents'
 import { setCurrentUser } from '@/lib/currentUser'
 import { useT } from '@/lib/i18n'
 import { AuthPage } from './AuthPage'
+import { errorText } from '@/api/errorText'
 
 // Decides what the URL may show (docs/webui.md §4.8): the setup page
 // until the account exists, the login page until someone is signed in,
@@ -42,7 +43,7 @@ export function AuthGate() {
       <AuthPage>
         <Card>
           <CardHeader>
-            <CardTitle>{t('auth.unreachable', { error: status.error.message })}</CardTitle>
+            <CardTitle>{errorText(status.error)}</CardTitle>
           </CardHeader>
           <CardContent>
             <Button size="sm" onClick={() => void status.refetch()}>

@@ -16,6 +16,9 @@ import { Item, ItemContent, ItemDescription, ItemTitle } from '@/components/ui/i
 import { Spinner } from '@/components/ui/spinner'
 import { useT } from '@/lib/i18n'
 import { runtimeName } from '@/lib/runtimes'
+import { errorText } from '@/api/errorText'
+import { noMaintainer } from './MaintainerFields'
+import { NewProjectMaintainer } from './NewProjectMaintainer'
 
 export interface NewProjectDialogProps {
   open: boolean
@@ -34,8 +37,13 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
   const [nameError, setNameError] = useState<string>()
   const [error, setError] = useState<string>()
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set())
+  const [maintainer, setMaintainer] = useState(noMaintainer)
   const id = useId()
   const t = useT()
+  // In the order the list shows them, which is the order they join.
+  const joining = (agents.data ?? []).filter((agent) => picked.has(agent.id))
+  // One taken off the list keeps the wiki no more.
+  const keeper = picked.has(maintainer) ? maintainer : noMaintainer
 
   function toggle(agentId: string, on: boolean) {
     setPicked((current) => {
@@ -61,22 +69,22 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
       {
         name,
         repo_path: String(data.get('repo_path') ?? '').trim(),
-        // In the order the list shows them, which is the order they join.
-        agent_ids: (agents.data ?? []).filter((agent) => picked.has(agent.id)).map((agent) => agent.id),
+        agent_ids: joining.map((agent) => agent.id),
+        ...(keeper !== noMaintainer ? { wiki_maintainer_agent_id: keeper } : {}),
       },
       {
         onSuccess: ({ rooms }) => {
           onClose()
           void navigate(`/rooms/${rooms[0].id}`)
         },
-        onError: (err) => setError(err.message),
+        onError: (err) => setError(errorText(err)),
       },
     )
   }
 
   return (
     <Dialog open={open} onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent aria-describedby={undefined}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto" aria-describedby={undefined}>
         <form onSubmit={onSubmit}>
           <DialogHeader>
             <DialogTitle>{t('projects.new')}</DialogTitle>
@@ -108,6 +116,7 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
               </FieldLegend>
               <AgentPicker id={id} agents={agents} picked={picked} onToggle={toggle} onLeave={onClose} />
             </FieldSet>
+            {joining.length > 0 ? <NewProjectMaintainer id={id} agents={joining} value={keeper} onChange={setMaintainer} /> : null}
             {error ? <FieldError>{error}</FieldError> : null}
           </FieldGroup>
           <DialogFooter>
@@ -158,7 +167,7 @@ function AgentPicker({ id, agents, picked, onToggle, onLeave }: AgentPickerProps
   if (agents.isError) return <FieldError>{t('project.agentsFailed')}</FieldError>
   if (agents.data.length === 0) {
     return (
-      <Empty className="gap-3 rounded-md border p-4 md:p-5">
+      <Empty className="gap-3 p-4 md:p-5">
         <EmptyHeader>
           <EmptyTitle className="text-[0.8125rem] font-normal tracking-normal text-subtle">{t('project.noAgents')}</EmptyTitle>
         </EmptyHeader>

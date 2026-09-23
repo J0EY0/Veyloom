@@ -2,7 +2,7 @@ import { Children, Fragment, type ReactNode } from 'react'
 import { ChevronLeftIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
-import { Item, ItemActions, ItemContent, ItemGroup, ItemSeparator, ItemTitle } from '@/components/ui/item'
+import { Item, ItemActions, ItemContent, ItemDescription, ItemGroup, ItemSeparator, ItemTitle } from '@/components/ui/item'
 import { useT } from '@/lib/i18n'
 
 // One kind of setting on the right of the settings column: a large title,
@@ -49,14 +49,16 @@ export function SettingsGroup({ title, children }: { title?: string; children: R
   )
 }
 
-// One setting: its name on the left, the control on the right, no
-// explanation under the name. The name never breaks; when the two do not
-// fit side by side the control moves under it, still on the right.
-export function SettingRow({ label, children }: { label: ReactNode; children: ReactNode }) {
+// One setting: its name on the left, the control on the right. A setting
+// whose name does not say enough has one short line under it, no more.
+// The name never breaks; when the two do not fit side by side the control
+// moves under it, still on the right.
+export function SettingRow({ label, description, children }: { label: ReactNode; description?: ReactNode; children: ReactNode }) {
   return (
     <Item role="listitem" size="sm" className="min-h-14 gap-x-4 gap-y-2 py-3">
-      <ItemContent className="flex-none">
+      <ItemContent className={description ? 'min-w-0 gap-0.5' : 'flex-none'}>
         <ItemTitle className="text-[0.8125rem] whitespace-nowrap">{label}</ItemTitle>
+        {description ? <ItemDescription className="text-xs">{description}</ItemDescription> : null}
       </ItemContent>
       <ItemActions className="ml-auto">{children}</ItemActions>
     </Item>

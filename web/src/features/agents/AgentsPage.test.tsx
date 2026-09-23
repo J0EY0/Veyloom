@@ -119,7 +119,7 @@ describe('AgentsPage', () => {
   it('treats an agent someone else already deleted as deleted', async () => {
     stubApi({
       '/agents': { agents },
-      '/agents/t2': () => Response.json({ error: 'agent t2: store: not found' }, { status: 404 }),
+      '/agents/t2': () => Response.json({ error: 'agent t2: not found' }, { status: 404 }),
     })
     renderWithProviders(<AgentsPage />)
     const card = (await screen.findByRole('button', { name: /Fake Implementer/ })).parentElement!
@@ -134,8 +134,7 @@ describe('AgentsPage', () => {
   it('keeps an agent that is still in a project, and says where', async () => {
     stubApi({
       '/agents': { agents },
-      '/agents/t1': () =>
-        Response.json({ error: 'agent t1: store: conflict: still a member of Veyloom, docs-site', projects: ['Veyloom', 'docs-site'] }, { status: 409 }),
+      '/agents/t1': () => Response.json({ error: 'still a member of Veyloom, docs-site', projects: ['Veyloom', 'docs-site'] }, { status: 409 }),
     })
     renderWithProviders(<AgentsPage />)
     const card = (await screen.findByRole('button', { name: /Claude Architect/ })).parentElement!

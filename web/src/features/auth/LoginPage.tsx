@@ -1,10 +1,10 @@
 import { useState } from 'react'
 import { useLogin } from '@/api/auth'
-import { ApiError } from '@/api/client'
 import { LoginForm, type LoginFormValues } from '@/components/login-form'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
 import { useT } from '@/lib/i18n'
 import { AuthPage } from './AuthPage'
+import { errorText } from '@/api/errorText'
 
 // Every visit after the first: the account exists, say the password.
 export function LoginPage() {
@@ -22,7 +22,7 @@ export function LoginPage() {
     login.mutate(
       { name, password },
       {
-        onError: (err) => setError(err instanceof ApiError && err.status === 401 ? t('auth.badCredentials') : err.message),
+        onError: (err) => setError(errorText(err, { 401: t('auth.badCredentials') })),
       },
     )
   }

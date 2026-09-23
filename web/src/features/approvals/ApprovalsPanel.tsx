@@ -7,6 +7,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { useMentionTargets } from '@/features/rooms/useMentionTargets'
 import { RequestCard } from './RequestCard'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 export interface ApprovalsPanelProps {
   roomId: string
@@ -14,12 +15,13 @@ export interface ApprovalsPanelProps {
   onOpenThread: (threadId: string) => void
 }
 
-// Everything in the room waiting for a person, oldest first, each with a
-// way into the topic it belongs to.
+// Everything in the room waiting for a person, the runtimes' requests,
+// oldest first, each with a way into the topic it belongs to.
 export function ApprovalsPanel({ roomId, onClose, onOpenThread }: ApprovalsPanelProps) {
   const pending = usePendingApprovals(roomId)
   const { names } = useMentionTargets(roomId)
   const t = useT()
+  const count = pending.data?.length ?? 0
 
   return (
     <SidePanel
@@ -27,7 +29,7 @@ export function ApprovalsPanel({ roomId, onClose, onOpenThread }: ApprovalsPanel
       header={
         <>
           <h2 className="text-sm font-semibold">{t('approvals.title')}</h2>
-          {pending.data?.length ? <span className="text-xs text-status-wait tabular-nums">{pending.data.length}</span> : null}
+          {count > 0 ? <span className="text-xs text-status-wait tabular-nums">{count}</span> : null}
         </>
       }
       onClose={onClose}
@@ -42,10 +44,10 @@ export function ApprovalsPanel({ roomId, onClose, onOpenThread }: ApprovalsPanel
         <Empty>
           <EmptyHeader>
             <EmptyTitle>{t('approvals.failed')}</EmptyTitle>
-            <EmptyDescription>{pending.error.message}</EmptyDescription>
+            <EmptyDescription>{errorText(pending.error)}</EmptyDescription>
           </EmptyHeader>
         </Empty>
-      ) : pending.data.length === 0 ? (
+      ) : count === 0 ? (
         <Empty className="h-full">
           <EmptyHeader>
             <EmptyMedia variant="icon">
@@ -55,14 +57,16 @@ export function ApprovalsPanel({ roomId, onClose, onOpenThread }: ApprovalsPanel
           </EmptyHeader>
         </Empty>
       ) : (
-        pending.data.map((approval) => (
-          <div key={approval.id}>
-            <RequestCard approval={approval} memberName={names.get(approval.member_id) ?? 'agent'} names={names} />
-            <Button variant="ghost" size="xs" onClick={() => onOpenThread(approval.thread_id)} className="mt-1 text-subtle hover:text-foreground">
-              {t('approvals.openTopic')}
-            </Button>
-          </div>
-        ))
+        <>
+          {pending.data.map((approval) => (
+            <div key={approval.id}>
+              <RequestCard approval={approval} memberName={names.get(approval.member_id) ?? 'agent'} names={names} />
+              <Button variant="ghost" size="xs" onClick={() => onOpenThread(approval.thread_id)} className="mt-1 text-subtle hover:text-foreground">
+                {t('approvals.openTopic')}
+              </Button>
+            </div>
+          ))}
+        </>
       )}
     </SidePanel>
   )

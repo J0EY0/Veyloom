@@ -38,6 +38,14 @@ export function InboxList({ entries, selectedId, loading, error, hasMore, loadin
   const [query, setQuery] = useState('')
   const shown = useMemo(() => filterEntries(entries, query, approvalsOnly), [entries, query, approvalsOnly])
   const filtering = approvalsOnly || query.trim() !== ''
+  const more =
+    hasMore && !loading && !approvalsOnly ? (
+      <div className="border-t p-3">
+        <Button variant="ghost" size="sm" className="w-full text-muted-foreground" onClick={onLoadMore} disabled={loadingMore}>
+          {loadingMore ? t('common.loading') : t('inbox.older')}
+        </Button>
+      </div>
+    ) : null
 
   return (
     <Sidebar collapsible="none" aria-label={t('inbox.title')} className={cn('w-full md:w-85 md:flex-none md:border-r', className)}>
@@ -65,42 +73,44 @@ export function InboxList({ entries, selectedId, loading, error, hasMore, loadin
         </div>
       </SidebarHeader>
       <SidebarContent>
-        <SidebarGroup className="p-0">
-          <SidebarGroupContent>
-            {loading ? (
-              <ListSkeleton />
-            ) : error !== undefined ? (
+        {/* A note instead of rows sits in the middle of the column. */}
+        {!loading && (error !== undefined || shown.length === 0) ? (
+          <>
+            {error !== undefined ? (
               <Empty className="px-4">
                 <EmptyHeader>
                   <EmptyTitle>{t('inbox.failed')}</EmptyTitle>
                   <EmptyDescription>{error}</EmptyDescription>
                 </EmptyHeader>
               </Empty>
-            ) : shown.length === 0 ? (
+            ) : (
               <Empty className="px-4">
                 <EmptyHeader>
                   <EmptyMedia variant="icon">{filtering && entries.length > 0 ? <SearchXIcon /> : <InboxIcon />}</EmptyMedia>
                   <EmptyTitle>{entries.length === 0 ? t('inbox.empty') : query.trim() !== '' ? t('inbox.noMatch') : t('inbox.noApprovals')}</EmptyTitle>
                 </EmptyHeader>
               </Empty>
-            ) : (
-              <ul>
-                {shown.map((entry) => (
-                  <li key={entry.id} className="border-b last:border-b-0">
-                    <EntryRow entry={entry} active={entry.id === selectedId} />
-                  </li>
-                ))}
-              </ul>
             )}
-            {hasMore && !loading && !approvalsOnly ? (
-              <div className="border-t p-3">
-                <Button variant="ghost" size="sm" className="w-full text-muted-foreground" onClick={onLoadMore} disabled={loadingMore}>
-                  {loadingMore ? t('common.loading') : t('inbox.older')}
-                </Button>
-              </div>
-            ) : null}
-          </SidebarGroupContent>
-        </SidebarGroup>
+            {more}
+          </>
+        ) : (
+          <SidebarGroup className="p-0">
+            <SidebarGroupContent>
+              {loading ? (
+                <ListSkeleton />
+              ) : (
+                <ul>
+                  {shown.map((entry) => (
+                    <li key={entry.id} className="border-b last:border-b-0">
+                      <EntryRow entry={entry} active={entry.id === selectedId} />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              {more}
+            </SidebarGroupContent>
+          </SidebarGroup>
+        )}
       </SidebarContent>
     </Sidebar>
   )

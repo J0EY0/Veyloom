@@ -1,5 +1,4 @@
 import { useId, useState } from 'react'
-import { ApiError } from '@/api/client'
 import { useDecideApproval } from '@/api/approvals'
 import type { Approval, Question, QuestionAnswers } from '@/api/types'
 import { StatusDot, type StatusTone } from '@/components/shared/status-dot'
@@ -13,6 +12,7 @@ import type { ApprovalCardProps } from './ApprovalCard'
 import { QuestionField } from './QuestionField'
 import { answerOf, questionsOf } from './questions'
 import { decisionNote } from './describe'
+import { errorText } from '@/api/errorText'
 
 const heads = {
   pending: { tone: 'wait', key: 'question.asking' },
@@ -45,7 +45,7 @@ export function QuestionCard({ approval, memberName, names }: ApprovalCardProps)
     if (!user) return
     decide.mutate(
       { id: approval.id, user_id: user.id, allow, message: '', ...(allow ? { answer: { answers } } : {}) },
-      { onError: (err) => setError(err instanceof ApiError && err.status === 409 ? t('approval.raced') : err.message) },
+      { onError: (err) => setError(errorText(err, { 409: t('approval.raced') })) },
     )
   }
 

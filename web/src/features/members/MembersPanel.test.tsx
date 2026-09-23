@@ -193,7 +193,7 @@ describe('MembersPanel', () => {
 
   it('says so when the hub finds it busy after all', async () => {
     stubPanel({
-      '/members/a1': () => Response.json({ error: 'member a1: store: conflict: a turn is still running' }, { status: 409 }),
+      '/members/a1': () => Response.json({ error: 'a turn is still running' }, { status: 409 }),
     })
     renderPanel()
     await userEvent.click(await screen.findByRole('button', { name: '更多' }))

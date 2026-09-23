@@ -68,6 +68,7 @@ describe('machineAgents', () => {
     role_card: '',
     permission_preset: 'read_only',
     runtime_options: null,
+    skills: [],
     created_at: '2026-09-16T00:00:00Z',
     updated_at: '2026-09-16T00:00:00Z',
   })

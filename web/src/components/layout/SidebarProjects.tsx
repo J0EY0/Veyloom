@@ -27,6 +27,7 @@ import { DeleteProjectDialog } from '@/features/projects/DeleteProjectDialog'
 import { EditProjectDialog } from '@/features/projects/EditProjectDialog'
 import { NewProjectDialog } from '@/features/projects/NewProjectDialog'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 // The projects, one row each. A project is its group chat, so a row opens
 // the chat; the one whose chat is on screen is marked. Under a project
@@ -70,7 +71,7 @@ export function SidebarProjects() {
           </SidebarMenu>
         ) : projects.isError ? (
           <p role="alert" className="px-2 py-1 text-xs text-status-fail">
-            {t('nav.projectsFailed', { error: projects.error.message })}
+            {t('nav.projectsFailed', { error: errorText(projects.error) })}
           </p>
         ) : projects.data.length === 0 ? (
           // No projects yet: the way to the first one, in plain sight.
@@ -149,7 +150,7 @@ function ProjectItem({ project, active, topics, openThread, onRename, onDelete }
       {topics.length > 0 ? (
         <SidebarMenuSub className="mr-0 gap-0 border-l-0 pl-4">
           {topics.map((topic) => (
-            <TopicItem key={topic.thread_id} topic={topic} active={topic.thread_id === openThread} />
+            <TopicItem key={topic.thread_id} topic={topic} active={topic.thread_id === openThread} wiki={topic.thread_id === project.wiki_thread_id} />
           ))}
         </SidebarMenuSub>
       ) : null}
@@ -158,9 +159,10 @@ function ProjectItem({ project, active, topics, openThread, onRename, onDelete }
 }
 
 // A topic being worked on: a breathing dot and what was asked, opening
-// the topic in its chat.
-function TopicItem({ topic, active }: { topic: RunningTopic; active: boolean }) {
-  const label = topic.root_body.trim() || topic.members.join('、')
+// the topic in its chat. The project's wiki topic goes by its name.
+function TopicItem({ topic, active, wiki }: { topic: RunningTopic; active: boolean; wiki: boolean }) {
+  const t = useT()
+  const label = wiki ? t('wikiTopic.title') : topic.root_body.trim() || topic.members.join('、')
   return (
     <SidebarMenuSubItem>
       <SidebarMenuSubButton asChild isActive={active} size="sm" className="h-6 gap-2 text-[0.78125rem] text-muted-foreground">

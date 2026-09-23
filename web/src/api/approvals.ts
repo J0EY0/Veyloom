@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { api } from './client'
+import { patchQuery } from './live'
 import type { Approval, ApprovalResponse, ApprovalsResponse, DecideApprovalRequest, PendingApproval, PendingApprovalsResponse } from './types'
 
 export const approvalKeys = {
@@ -50,7 +51,7 @@ export function useDecideApproval() {
 // pending list while pending, out of it afterwards, and in its turn's list
 // either way. A decision and its event both call it; the second is a no-op.
 export function applyApproval(client: QueryClient, approval: Approval) {
-  client.setQueryData<Approval[]>(approvalKeys.pending(approval.room_id), (old) => {
+  patchQuery<Approval[]>(client, approvalKeys.pending(approval.room_id), (old) => {
     if (!old) return old
     const rest = old.filter((a) => a.id !== approval.id)
     if (approval.status !== 'pending') return rest
@@ -58,13 +59,13 @@ export function applyApproval(client: QueryClient, approval: Approval) {
   })
   // The cross-project list learns of a settled request at once; a new one
   // needs the names only the server has, so it is refetched.
-  client.setQueryData<PendingApproval[]>(approvalKeys.all, (old) => {
+  patchQuery<PendingApproval[]>(client, approvalKeys.all, (old) => {
     if (!old) return old
     const rest = old.filter((a) => a.id !== approval.id)
     return approval.status === 'pending' ? old : rest
   })
   if (approval.status === 'pending') void client.invalidateQueries({ queryKey: approvalKeys.all })
-  client.setQueryData<Approval[]>(approvalKeys.turn(approval.turn_id), (old) => {
+  patchQuery<Approval[]>(client, approvalKeys.turn(approval.turn_id), (old) => {
     if (!old) return old
     const index = old.findIndex((a) => a.id === approval.id)
     if (index === -1) return [...old, approval]

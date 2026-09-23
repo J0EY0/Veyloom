@@ -90,6 +90,9 @@ export interface Agent {
   role_card: string
   permission_preset: PermissionPreset
   runtime_options: Record<string, unknown> | null
+  // The skills of the library installed for it, by name: what its turns
+  // are given (docs/design.md 5.15).
+  skills: string[]
   created_at: string
   updated_at: string
 }
@@ -183,4 +186,6 @@ export interface AgentRequest {
   role_card: string
   permission_preset: PermissionPreset
   runtime_options: Record<string, unknown>
+  // Absent keeps the skills the agent has.
+  skills?: string[]
 }

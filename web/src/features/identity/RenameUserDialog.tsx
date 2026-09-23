@@ -5,6 +5,7 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 export interface RenameUserDialogProps {
   name: string
@@ -26,7 +27,7 @@ export function RenameUserDialog({ name, onClose }: RenameUserDialogProps) {
       return
     }
     setError(undefined)
-    rename.mutate(next, { onSuccess: onClose, onError: (err) => setError(err.message) })
+    rename.mutate(next, { onSuccess: onClose, onError: (err) => setError(errorText(err)) })
   }
 
   return (

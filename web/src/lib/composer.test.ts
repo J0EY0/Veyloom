@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest'
-import { insertIntoComposer, registerComposer } from './composer'
+import { insertIntoComposer, queueForComposer, registerComposer } from './composer'
 
 describe('composer channel', () => {
   it('delivers to the target composer, or the room one, or nobody', () => {
@@ -16,5 +16,20 @@ describe('composer channel', () => {
     offThread()
     offRoom()
     expect(insertIntoComposer('t1', '@C ')).toBe(false)
+  })
+
+  it('keeps text for a composer that is not open yet until it opens', () => {
+    queueForComposer('t9', '@Keeper 有疑问：')
+    const later = vi.fn()
+    const off = registerComposer('t9', later)
+    expect(later).toHaveBeenCalledOnce()
+    expect(later).toHaveBeenCalledWith('@Keeper 有疑问：')
+    // Handed over once; one that is open takes it at once.
+    queueForComposer('t9', 'again')
+    expect(later).toHaveBeenLastCalledWith('again')
+    off()
+    const next = vi.fn()
+    registerComposer('t9', next)()
+    expect(next).not.toHaveBeenCalled()
   })
 })

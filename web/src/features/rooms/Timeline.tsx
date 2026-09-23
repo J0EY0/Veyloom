@@ -15,10 +15,16 @@ import { useMentionTargets } from './useMentionTargets'
 import { useSenderNames } from './useSenderNames'
 import { useT } from '@/lib/i18n'
 import { MemberLooks } from '@/lib/agentLooks'
+import { errorText } from '@/api/errorText'
 
 export interface TimelineProps {
   roomId: string
   onOpenThread?: (threadId: string) => void
+  // The project's wiki topic, drawn by name rather than by its root's words.
+  wikiThreadId?: string
+  // The project, and its note offering a wiki maintainer, drawn as a card.
+  projectId?: string
+  offerMessageId?: string
   // Leaves room at the top for the status island floating over the feed.
   inset?: boolean
 }
@@ -27,7 +33,7 @@ export interface TimelineProps {
 // as the reader scrolls up. AI Elements' conversation keeps the view
 // pinned to the bottom while the reader is there, and offers the way back
 // once they have scrolled up.
-export function Timeline({ roomId, onOpenThread, inset }: TimelineProps) {
+export function Timeline({ roomId, onOpenThread, wikiThreadId, projectId, offerMessageId, inset }: TimelineProps) {
   const messages = useRoomMessages(roomId)
   const t = useT()
   const sender = useSenderNames(roomId)
@@ -41,6 +47,7 @@ export function Timeline({ roomId, onOpenThread, inset }: TimelineProps) {
     return map
   }, [pending.data])
   const list = useMemo(() => messages.data?.pages.flat() ?? [], [messages.data])
+  const nothing = messages.isError || (messages.isSuccess && list.length === 0)
 
   const topSentinel = useTopSentinel(() => {
     if (messages.hasPreviousPage && !messages.isFetchingPreviousPage) {
@@ -50,22 +57,24 @@ export function Timeline({ roomId, onOpenThread, inset }: TimelineProps) {
 
   return (
     <Conversation className="min-h-0 flex-1" initial="instant" resize="smooth">
-      <ConversationContent className={cn('gap-0 p-0 pb-2', inset ? 'pt-12' : 'pt-2')}>
+      {/* With nothing to show, the content is as tall as the view, so the
+          note takes the rest of it and sits in the middle. */}
+      <ConversationContent className={cn('gap-0 p-0 pb-2', inset ? 'pt-12' : 'pt-2', nothing && 'min-h-full')}>
         {messages.isPending ? (
           <p role="status" className="flex items-center gap-2 px-6 py-3 text-sm text-subtle">
             <Spinner className="size-3.5" />
             {t('common.loading')}
           </p>
         ) : messages.isError ? (
-          <Empty className="h-full">
+          <Empty>
             <EmptyHeader>
               <EmptyTitle>{t('timeline.failed')}</EmptyTitle>
-              <EmptyDescription>{messages.error.message}</EmptyDescription>
+              <EmptyDescription>{errorText(messages.error)}</EmptyDescription>
             </EmptyHeader>
           </Empty>
         ) : list.length === 0 ? (
           <ConversationEmptyState
-            className="h-full"
+            className="flex-1"
             icon={<MessageSquareDashedIcon className="size-5" />}
             title={t('timeline.empty')}
             // Empty states are one line (docs/webui.md); this drops the
@@ -90,6 +99,8 @@ export function Timeline({ roomId, onOpenThread, inset }: TimelineProps) {
                     sender={sender(message)}
                     names={names}
                     approval={message.thread ? waitingByThread.get(message.thread.id) : undefined}
+                    wikiTopic={message.thread !== undefined && message.thread.id === wikiThreadId}
+                    offerProjectId={offerMessageId !== undefined && message.id === offerMessageId ? projectId : undefined}
                     onOpenThread={onOpenThread}
                   />
                 ))}

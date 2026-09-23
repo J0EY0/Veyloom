@@ -8,6 +8,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { avatarInputTypes, squareAvatar } from '@/lib/avatarImage'
 import { useT } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
+import { errorText } from '@/api/errorText'
 
 export interface AvatarFieldProps {
   avatar: string
@@ -38,9 +39,12 @@ export function AvatarField({ avatar, runtime, onChange, onBusyChange }: AvatarF
     setBusy(true)
     onBusyChange(true)
     try {
-      onChange(await uploadAvatar(await squareAvatar(file)))
+      // What the browser says of a picture it cannot read or draw is its
+      // own; the person is told it could not be read.
+      const square = await squareAvatar(file).catch(() => Promise.reject(new Error(t('error.avatarUnreadable'))))
+      onChange(await uploadAvatar(square))
     } catch (err) {
-      setError(t('agent.avatarFailed', { error: err instanceof Error ? err.message : String(err) }))
+      setError(t('agent.avatarFailed', { error: errorText(err) }))
     } finally {
       setBusy(false)
       onBusyChange(false)

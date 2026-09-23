@@ -1,5 +1,6 @@
 import { useInfiniteQuery, useMutation, useQuery, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 import { api } from './client'
+import { patchQuery } from './live'
 import type {
   Message,
   MessageResponse,
@@ -77,7 +78,7 @@ export function applyRoomMessage(client: QueryClient, message: Message, thread?:
     // A root getting its text says which topic it heads; an open topic
     // shows the root too, so it gets the text as well.
     if (thread) {
-      client.setQueryData<ThreadResponse>(threadKeys.one(thread.id), (old) =>
+      patchQuery<ThreadResponse>(client, threadKeys.one(thread.id), (old) =>
         old && old.root.id === message.id ? { ...old, root: { ...old.root, ...message } } : old,
       )
     }
@@ -97,28 +98,23 @@ export function applyRoomMessage(client: QueryClient, message: Message, thread?:
   }
 
   const threadId = message.thread_id
-  let appended = false
-  client.setQueryData<Message[]>(threadKeys.messages(threadId), (old) => {
+  // A reply the open topic shows already is being rewritten (an approval
+  // note settled), not added, and is not counted again.
+  const seen = client.getQueryData<Message[]>(threadKeys.messages(threadId))?.some((m) => m.id === message.id) ?? false
+  patchQuery<Message[]>(client, threadKeys.messages(threadId), (old) => {
     if (!old) return old
     const index = old.findIndex((m) => m.id === message.id)
-    if (index !== -1) {
-      // The same id again is a rewrite: an approval note settled.
-      const next = old.slice()
-      next[index] = message
-      return next
-    }
-    appended = true
-    return [...old, message]
+    if (index === -1) return [...old, message]
+    const next = old.slice()
+    next[index] = message
+    return next
   })
+  if (seen) return
   updateRoom(client, message.room_id, (pages) => {
     const found = locate(pages, (m) => m.thread?.id === threadId)
     if (!found) return pages
     const root = pages[found.page][found.index]
     const summary = root.thread as ThreadSummary
-    // Only count replies we could not see already: when the topic is open
-    // the list above is the source of truth for the count.
-    const wasLoaded = client.getQueryData<Message[]>(threadKeys.messages(threadId)) !== undefined
-    if (wasLoaded && !appended) return pages
     return replaceAt(pages, found, {
       ...root,
       thread: { ...summary, reply_count: summary.reply_count + 1, last_reply_at: message.created_at },
@@ -150,7 +146,7 @@ export function applyTurn(client: QueryClient, turn: Turn) {
       },
     })
   })
-  client.setQueryData<ThreadResponse>(threadKeys.one(turn.thread_id), (old) => {
+  patchQuery<ThreadResponse>(client, threadKeys.one(turn.thread_id), (old) => {
     if (!old) return old
     const index = old.turns.findIndex((t) => t.id === turn.id)
     const turns = old.turns.slice()
@@ -172,9 +168,9 @@ export function usePostMessage(roomId: string) {
 }
 
 function updateRoom(client: QueryClient, roomId: string, fn: (pages: RoomMessage[][]) => RoomMessage[][]) {
-  client.setQueryData<RoomPages>(messageKeys.room(roomId), (data) => {
+  patchQuery<RoomPages>(client, messageKeys.room(roomId), (data) => {
     if (!data || data.pages.length === 0) {
-      // Nothing loaded yet: the fetch that is coming will include it.
+      // Nothing loaded: the room is read whole when it opens.
       return data
     }
     const pages = fn(data.pages)

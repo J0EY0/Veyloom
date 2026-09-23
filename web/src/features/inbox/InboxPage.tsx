@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useState } from 'react'
+import { InboxIcon } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { usePendingApprovalsAll } from '@/api/approvals'
 import { useInbox } from '@/api/inbox'
 import { Panel } from '@/components/layout/Panel'
 import { PanelHeader } from '@/components/layout/PanelHeader'
-import { Empty, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
+import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { useCurrentUser } from '@/lib/currentUser'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
 import { useEscape } from '@/lib/useEscape'
@@ -12,6 +13,7 @@ import { useT } from '@/lib/i18n'
 import { toEntries, type InboxEntry } from './entries'
 import { InboxDetail } from './InboxDetail'
 import { InboxList } from './InboxList'
+import { errorText } from '@/api/errorText'
 
 // What waits for you, across every project: requests to approve first,
 // then everything that mentioned you, newest first. A list on the left and
@@ -45,13 +47,22 @@ export function InboxPage() {
   }, [setParams])
   useEscape(close, itemId !== '')
 
-  if (!user) {
+  const loading = inbox.isPending || approvals.isPending
+  // Nothing waits, and nothing is open: no list to search or narrow, only
+  // the note, in the middle of the page.
+  const nothing = user && !loading && !inbox.isError && entries.length === 0 && !selected
+  if (!user || nothing) {
     return (
       <Panel>
         <PanelHeader title={t('inbox.title')} />
         <Empty>
           <EmptyHeader>
-            <EmptyTitle>{t('common.identifying')}</EmptyTitle>
+            {nothing ? (
+              <EmptyMedia variant="icon">
+                <InboxIcon />
+              </EmptyMedia>
+            ) : null}
+            <EmptyTitle>{nothing ? t('inbox.empty') : t('common.identifying')}</EmptyTitle>
           </EmptyHeader>
         </Empty>
       </Panel>
@@ -62,8 +73,8 @@ export function InboxPage() {
       <InboxList
         entries={entries}
         selectedId={itemId}
-        loading={inbox.isPending || approvals.isPending}
-        error={inbox.isError ? inbox.error.message : undefined}
+        loading={loading}
+        error={inbox.isError ? errorText(inbox.error) : undefined}
         hasMore={inbox.hasNextPage}
         loadingMore={inbox.isFetchingNextPage}
         onLoadMore={() => void inbox.fetchNextPage()}

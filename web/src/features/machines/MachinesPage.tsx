@@ -9,6 +9,7 @@ import { useDocumentTitle } from '@/lib/useDocumentTitle'
 import { useNow } from '@/lib/useNow'
 import { MachineDetail, MachineGone, MachinePick } from './MachineDetail'
 import { MachineList } from './MachineList'
+import { errorText } from '@/api/errorText'
 
 // The machines page (docs/webui.md §4.7): every machine connected to the
 // hub. One bar across the top, then the machines on the left and
@@ -38,7 +39,7 @@ export function MachinesPage() {
               </EmptyMedia>
             )}
             <EmptyTitle>{machines.isError ? t('machines.failed') : t('machines.empty')}</EmptyTitle>
-            {machines.isError ? <EmptyDescription>{machines.error.message}</EmptyDescription> : null}
+            {machines.isError ? <EmptyDescription>{errorText(machines.error)}</EmptyDescription> : null}
           </EmptyHeader>
         </Empty>
       </Panel>

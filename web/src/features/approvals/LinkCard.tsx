@@ -1,6 +1,5 @@
 import { ExternalLinkIcon } from 'lucide-react'
 import { useState } from 'react'
-import { ApiError } from '@/api/client'
 import { useDecideApproval } from '@/api/approvals'
 import { StatusDot, type StatusTone } from '@/components/shared/status-dot'
 import { Button } from '@/components/ui/button'
@@ -12,6 +11,7 @@ import { cn } from '@/lib/utils'
 import type { ApprovalCardProps } from './ApprovalCard'
 import { isWebLink, linkOf } from './forms'
 import { decisionNote } from './describe'
+import { errorText } from '@/api/errorText'
 
 const heads = {
   pending: { tone: 'wait', key: 'link.asking' },
@@ -39,10 +39,7 @@ export function LinkCard({ approval, memberName, names }: ApprovalCardProps) {
 
   function send(allow: boolean) {
     if (!user) return
-    decide.mutate(
-      { id: approval.id, user_id: user.id, allow, message: '' },
-      { onError: (err) => setError(err instanceof ApiError && err.status === 409 ? t('approval.raced') : err.message) },
-    )
+    decide.mutate({ id: approval.id, user_id: user.id, allow, message: '' }, { onError: (err) => setError(errorText(err, { 409: t('approval.raced') })) })
   }
 
   return (

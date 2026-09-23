@@ -1,5 +1,4 @@
 import { useId, useRef, useState } from 'react'
-import { ApiError } from '@/api/client'
 import { useDecideApproval } from '@/api/approvals'
 import type { Approval } from '@/api/types'
 import {
@@ -19,6 +18,7 @@ import { cn } from '@/lib/utils'
 import { approvalCommand, decisionNote } from './describe'
 import { useT } from '@/lib/i18n'
 import type { MessageKey } from '@/i18n/zh-CN'
+import { errorText } from '@/api/errorText'
 
 export interface ApprovalCardProps {
   approval: Approval
@@ -69,7 +69,7 @@ export function ApprovalCard({ approval, memberName, names }: ApprovalCardProps)
       { id: approval.id, user_id: user.id, allow, message: note.current?.value.trim() ?? '' },
       {
         onError: (err) => {
-          setError(err instanceof ApiError && err.status === 409 ? t('approval.raced') : err.message)
+          setError(errorText(err, { 409: t('approval.raced') }))
         },
       },
     )

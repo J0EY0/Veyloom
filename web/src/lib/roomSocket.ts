@@ -4,8 +4,10 @@ import type { ConnectionStatus } from './connection'
 
 export interface RoomSocketHandlers {
   onEvent: (event: RoomEvent) => void
-  // Called after every reconnection: events were missed in between, and
-  // the stream has no cursor, so the caller refetches (docs/webui.md §5.3).
+  // Called each time the stream opens, the first time too: the page read
+  // the room before the stream was listening, or while it was down, and
+  // the stream has no cursor, so the caller refetches what events would
+  // have kept current (docs/webui.md §5.3).
   onResync: () => void
   onStatus?: (status: ConnectionStatus) => void
 }
@@ -35,8 +37,8 @@ export function connectRoomEvents(roomId: string, handlers: RoomSocketHandlers):
     socket = new WebSocket(url)
     socket.onopen = () => {
       attempt = 0
-      if (everOpened) handlers.onResync()
       everOpened = true
+      handlers.onResync()
       handlers.onStatus?.('open')
     }
     socket.onmessage = (frame: MessageEvent<string>) => {

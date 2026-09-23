@@ -11,6 +11,7 @@ import { formatCount, formatSpan } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import { totalTokens } from '@/lib/tokens'
 import { ActivityChart } from './ActivityChart'
+import { errorText } from '@/api/errorText'
 
 const ranges: ActivityRange[] = ['24h', '7d', '30d']
 
@@ -50,7 +51,7 @@ function TurnsCard({ machineId, runtimes }: ActivitySectionProps) {
       title={title}
       loading={activity.isPending}
       summary={activity.data ? turnSummary(activity.data, t) : null}
-      error={activity.error?.message}
+      error={activity.error ? errorText(activity.error) : undefined}
       actions={
         <>
           <Select value={runtime} onValueChange={setRuntime}>
@@ -94,7 +95,7 @@ function TokensCard({ machineId }: { machineId: string }) {
       title={title}
       loading={activity.isPending}
       summary={activity.data ? tokenSummary(activity.data) : null}
-      error={activity.error?.message}
+      error={activity.error ? errorText(activity.error) : undefined}
       actions={<RangeTabs value={range} onChange={setRange} />}
     >
       {activity.data ? (

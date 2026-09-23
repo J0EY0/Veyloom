@@ -10,6 +10,7 @@ import { runtimeName } from '@/lib/runtimes'
 import { useT } from '@/lib/i18n'
 import { Rows, RowsSkeleton } from './Rows'
 import { machineAgents, type MachineAgent } from './machines'
+import { errorText } from '@/api/errorText'
 
 export interface MachineAgentsProps {
   machineId: string
@@ -35,10 +36,10 @@ export function MachineAgents({ machineId, agents, members }: MachineAgentsProps
 
   if (agents.isPending || members.isPending) return <RowsSkeleton label={t('common.loading')} />
   const error = agents.error ?? members.error
-  if (error) return <p className="text-[0.8125rem] text-subtle">{t('machines.agentsFailed', { error: error.message })}</p>
+  if (error) return <p className="text-[0.8125rem] text-subtle">{t('machines.agentsFailed', { error: errorText(error) })}</p>
   if (rows.length === 0) {
     return (
-      <Empty className="rounded-xl border p-4 md:p-5">
+      <Empty className="p-4 md:p-5">
         <EmptyHeader>
           <EmptyTitle className="text-[0.8125rem] font-normal tracking-normal text-subtle">{t('machines.agentsEmpty')}</EmptyTitle>
         </EmptyHeader>

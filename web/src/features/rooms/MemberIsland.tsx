@@ -16,6 +16,8 @@ import { cn } from '@/lib/utils'
 import { statusLabelKey, statusTone } from './memberStatus'
 import type { MemberState } from './useMemberStates'
 import { useT } from '@/lib/i18n'
+import { toast } from 'sonner'
+import { errorText } from '@/api/errorText'
 
 export interface MemberIslandProps {
   states: MemberState[]
@@ -36,6 +38,7 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
   const user = useCurrentUser()
   const decide = useDecideApproval()
   const t = useT()
+  const decideFailed = (err: Error) => toast.error(errorText(err, { 409: t('approval.raced') }))
 
   return (
     <div
@@ -84,7 +87,7 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
             size="xs"
             variant="ghost"
             disabled={!user || decide.isPending}
-            onClick={() => user && decide.mutate({ id: waiting.approval!.id, user_id: user.id, allow: false, message: '' })}
+            onClick={() => user && decide.mutate({ id: waiting.approval!.id, user_id: user.id, allow: false, message: '' }, { onError: decideFailed })}
           >
             {t('common.deny')}
           </Button>
@@ -92,7 +95,7 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
             size="xs"
             className="rounded-full px-3"
             disabled={!user || decide.isPending}
-            onClick={() => user && decide.mutate({ id: waiting.approval!.id, user_id: user.id, allow: true, message: '' })}
+            onClick={() => user && decide.mutate({ id: waiting.approval!.id, user_id: user.id, allow: true, message: '' }, { onError: decideFailed })}
           >
             {t('common.allow')}
           </Button>

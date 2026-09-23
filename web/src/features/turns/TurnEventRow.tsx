@@ -8,6 +8,8 @@ import { cn } from '@/lib/utils'
 import { describeTool } from './activity'
 import { useT } from '@/lib/i18n'
 import { decisionNote } from '@/features/approvals/describe'
+import { turnErrorText } from './turnError'
+import { BriefFold } from './BriefFold'
 
 // One line of a turn's record. Long tool output is folded to three lines
 // until asked for.
@@ -26,10 +28,24 @@ function Detail({ line }: { line: TranscriptLine }) {
   const t = useT()
   switch (line.kind) {
     case 'start':
-      return <span className="text-muted-foreground">{t('event.start', { runtime: line.runtime ? runtimeName(line.runtime) : '' })}</span>
+      return (
+        <div className="min-w-0">
+          <span className="text-muted-foreground">{t('event.start', { runtime: line.runtime ? runtimeName(line.runtime) : '' })}</span>
+          {line.spec?.prompt ? <BriefFold prompt={line.spec.prompt} /> : null}
+        </div>
+      )
+    case 'restart':
+      // The session would not resume: the turn ran again in a new one, with
+      // a brief of its own.
+      return (
+        <div className="min-w-0">
+          <span className="text-muted-foreground">{t('event.restart', { error: turnErrorText(line.error ?? '') })}</span>
+          {line.spec?.prompt ? <BriefFold prompt={line.spec.prompt} /> : null}
+        </div>
+      )
     case 'done':
       return line.error ? (
-        <span className="text-status-fail">{t('event.endError', { error: line.error })}</span>
+        <span className="text-status-fail">{t('event.endError', { error: turnErrorText(line.error) })}</span>
       ) : (
         <span className="text-muted-foreground">{t('event.end')}</span>
       )

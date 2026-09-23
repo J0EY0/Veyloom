@@ -60,6 +60,30 @@ describe('NewProjectDialog', () => {
     expect(onClose).toHaveBeenCalledOnce()
   })
 
+  it('may start with one of the agents picked keeping the wiki, none by default', async () => {
+    const posted: unknown[] = []
+    stub({
+      '/projects': async (req: Request) => {
+        posted.push(await req.json())
+        return Response.json({ project: project('p9', 'New'), rooms: [room('r9', 'p9', 'main')] }, { status: 201 })
+      },
+    })
+    renderWithProviders(<NewProjectDialog open onClose={() => {}} />)
+    await userEvent.type(screen.getByLabelText('名称'), 'New')
+    // Nothing to choose from before an agent is picked.
+    const tester = await screen.findByRole('checkbox', { name: /Pi Tester/ })
+    expect(screen.queryByRole('combobox', { name: 'Wiki 维护员' })).toBeNull()
+    await userEvent.click(tester)
+    await userEvent.click(screen.getByRole('checkbox', { name: /Claude Architect/ }))
+    const keeper = screen.getByRole('combobox', { name: 'Wiki 维护员' })
+    expect(keeper).toHaveTextContent('暂不选')
+    await userEvent.click(keeper)
+    expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['暂不选', 'Claude Architect', 'Pi Tester'])
+    await userEvent.click(screen.getByRole('option', { name: 'Pi Tester' }))
+    await userEvent.click(screen.getByRole('button', { name: '创建项目' }))
+    await waitFor(() => expect(posted[0]).toMatchObject({ agent_ids: ['ag1', 'ag2'], wiki_maintainer_agent_id: 'ag2' }))
+  })
+
   it('picks the way an IM starts a group chat: chips in the search box, Enter and Backspace', async () => {
     const calls = stub()
     renderWithProviders(<NewProjectDialog open onClose={() => {}} />)
@@ -141,12 +165,12 @@ describe('NewProjectDialog', () => {
   })
 
   it('shows the server error inline', async () => {
-    stub({ '/projects': Response.json({ error: 'add agent ag2 to "x": agent ag2: store: not found' }, { status: 404 }) })
+    stub({ '/projects': Response.json({ error: 'add agent ag2 to "x": agent ag2: not found' }, { status: 404 }) })
     renderWithProviders(<NewProjectDialog open onClose={() => {}} />)
 
     await userEvent.type(screen.getByLabelText('名称'), 'x')
     await userEvent.click(await screen.findByRole('checkbox', { name: /Pi Tester/ }))
     await userEvent.click(screen.getByRole('button', { name: '创建项目' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('agent ag2: store: not found')
+    expect(await screen.findByRole('alert')).toHaveTextContent('找不到了，可能已经被删除。')
   })
 })

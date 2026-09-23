@@ -1,11 +1,11 @@
 import { useId, useState, type FormEvent } from 'react'
 import { useChangePassword } from '@/api/auth'
-import { ApiError } from '@/api/client'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 const minPassword = 8
 
@@ -26,7 +26,8 @@ export function PasswordDialog({ onClose }: PasswordDialogProps) {
     const current = String(data.get('current') ?? '')
     const next = String(data.get('next') ?? '')
     const confirm = String(data.get('confirm') ?? '')
-    if (next.length < minPassword) {
+    // Counted in characters, as the server counts them.
+    if ([...next].length < minPassword) {
       setError(t('user.passwordTooShort'))
       return
     }
@@ -39,7 +40,7 @@ export function PasswordDialog({ onClose }: PasswordDialogProps) {
       { current, new: next },
       {
         onSuccess: onClose,
-        onError: (err) => setError(err instanceof ApiError && err.status === 403 ? t('user.currentPasswordWrong') : err.message),
+        onError: (err) => setError(errorText(err, { 403: t('user.currentPasswordWrong') })),
       },
     )
   }

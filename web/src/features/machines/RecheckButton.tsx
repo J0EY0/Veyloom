@@ -5,6 +5,7 @@ import type { Machine } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Spinner } from '@/components/ui/spinner'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 // "Check again": after installing or updating something, the machines
 // look for their runtimes again. The button spins until they have answered.
@@ -16,7 +17,7 @@ export function RecheckButton({ machines }: { machines: Machine[] }) {
     probe.mutate(machines, {
       onError: (err) => {
         toast.error(
-          err instanceof ProbeTimeout ? t('machines.recheckTimeout', { names: err.names.join('、') }) : t('machines.recheckFailed', { error: err.message }),
+          err instanceof ProbeTimeout ? t('machines.recheckTimeout', { names: err.names.join('、') }) : t('machines.recheckFailed', { error: errorText(err) }),
         )
       },
     })

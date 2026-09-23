@@ -10,6 +10,9 @@ import { defineConfig } from '@playwright/test'
 const apiPort = 7797
 const webPort = 4197
 const databaseUrl = process.env.E2E_DATABASE_URL ?? 'postgres://veyloom:veyloom@localhost:5432/veyloom_test?sslmode=disable'
+// The hub to run: the one `make web-e2e` builds, or with E2E_VEYLOOM_BIN
+// another, so a hub someone is running from bin/ need not be rebuilt.
+const hub = process.env.E2E_VEYLOOM_BIN ?? '../bin/veyloom'
 
 export default defineConfig({
   testDir: './e2e',
@@ -27,7 +30,7 @@ export default defineConfig({
     {
       // --env-file= keeps the test server off any .env around and stops it
       // writing one.
-      command: `../bin/veyloom serve --env-file= --addr 127.0.0.1:${apiPort} --state-dir ${join(tmpdir(), 'veyloom-e2e')} --database-url "${databaseUrl}"`,
+      command: `${hub} serve --env-file= --addr 127.0.0.1:${apiPort} --state-dir ${join(tmpdir(), 'veyloom-e2e')} --database-url "${databaseUrl}"`,
       url: `http://127.0.0.1:${apiPort}/api/v1/projects`,
       timeout: 30_000,
       reuseExistingServer: false,

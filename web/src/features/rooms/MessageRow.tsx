@@ -1,4 +1,5 @@
 import { memo } from 'react'
+import { BookHeartIcon, LibraryBigIcon } from 'lucide-react'
 import type { Approval, RoomMessage } from '@/api/types'
 import { Shimmer } from '@/components/ai-elements/shimmer'
 import { AgentAvatar } from '@/components/shared/agent-avatar'
@@ -7,6 +8,7 @@ import { UserAvatar } from '@/components/shared/user-avatar'
 import { Badge } from '@/components/ui/badge'
 import { approvalCommand } from '@/features/approvals/describe'
 import { askKind, waitingKeys } from '@/features/approvals/kinds'
+import { MaintainerOfferNote } from '@/features/wiki/MaintainerOfferNote'
 import { runtimeName } from '@/lib/runtimes'
 import { formatTime } from '@/lib/format'
 import { useLiveTurn } from '@/lib/liveTurns'
@@ -23,6 +25,11 @@ export interface MessageRowProps {
   names: Map<string, string>
   // The topic's request waiting for a person, if any.
   approval?: Approval
+  // The message heads the project's wiki topic.
+  wikiTopic?: boolean
+  // The project whose wiki maintainer this note offers (docs/design.md
+  // 5.16); set on that note only, which is drawn as a card.
+  offerProjectId?: string
   onOpenThread?: (threadId: string) => void
 }
 
@@ -32,10 +39,36 @@ const bodyClass = 'text-[0.90625rem] leading-[1.6] break-words text-body'
 // the topic's footer. System notes are a single muted line. Rows are
 // memoised so a new message at the bottom does not re-render the fifty
 // above it.
-export const MessageRow = memo(function MessageRow({ message, sender, names, approval, onOpenThread }: MessageRowProps) {
+export const MessageRow = memo(function MessageRow({ message, sender, names, approval, wikiTopic, offerProjectId, onOpenThread }: MessageRowProps) {
   const thread = message.thread
   const runningTurnId = thread?.last_turn?.status === 'running' ? thread.last_turn.id : undefined
   const live = useLiveTurn(runningTurnId)
+  if (message.sender_kind === 'system' && thread && onOpenThread) {
+    // A topic the system opened, the project's wiki topic: what waits in it
+    // for a person is read there.
+    return (
+      <li className="mx-auto grid max-w-215 grid-cols-[24px_minmax(0,1fr)] gap-x-3 px-6 py-[0.6875rem] [contain-intrinsic-size:auto_64px] [content-visibility:auto]">
+        <span className="flex size-6 items-center justify-center rounded-md bg-muted text-subtle">
+          <LibraryBigIcon className="size-3.5" aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <div className="mb-1 text-[0.8125rem] leading-tight font-medium text-foreground">{wikiTopic ? t('wikiTopic.title') : message.body}</div>
+          {wikiTopic ? <p className="text-[0.8125rem] text-muted-foreground">{t('wikiTopic.hint')}</p> : null}
+          <TopicFooter summary={thread} onOpen={() => onOpenThread(thread.id)} />
+        </div>
+      </li>
+    )
+  }
+  if (message.sender_kind === 'system' && offerProjectId) {
+    return (
+      <li className="mx-auto grid max-w-215 grid-cols-[24px_minmax(0,1fr)] gap-x-3 px-6 py-[0.6875rem]">
+        <span className="flex size-6 items-center justify-center rounded-md bg-muted text-subtle">
+          <BookHeartIcon className="size-3.5" aria-hidden="true" />
+        </span>
+        <MaintainerOfferNote projectId={offerProjectId} roomId={message.room_id} />
+      </li>
+    )
+  }
   if (message.sender_kind === 'system') {
     return <li className="mx-auto max-w-215 px-6 py-1.5 text-xs text-subtle [contain-intrinsic-size:auto_28px] [content-visibility:auto]">{message.body}</li>
   }
@@ -106,6 +139,7 @@ function areEqual(prev: MessageRowProps, next: MessageRowProps) {
     prev.sender.look?.avatar === next.sender.look?.avatar &&
     prev.names === next.names &&
     prev.approval === next.approval &&
+    prev.wikiTopic === next.wikiTopic &&
     prev.onOpenThread === next.onOpenThread
   )
 }

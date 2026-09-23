@@ -12,6 +12,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { useT } from '@/lib/i18n'
 import { projectsInUse } from './inUse'
+import { errorText } from '@/api/errorText'
 
 export interface DeleteAgentDialogProps {
   agent: Agent
@@ -36,7 +37,7 @@ export function DeleteAgentDialog({ agent, onClose }: DeleteAgentDialogProps) {
         </AlertDialogHeader>
         {remove.error ? (
           <p role="alert" className="text-center text-[0.8125rem] leading-relaxed text-status-fail">
-            {!inUse ? remove.error.message : projects.length > 0 ? t('agents.deleteInProjects', { projects: projects.join('、') }) : t('agents.deleteInUse')}
+            {!inUse ? errorText(remove.error) : projects.length > 0 ? t('agents.deleteInProjects', { projects: projects.join('、') }) : t('agents.deleteInUse')}
           </p>
         ) : null}
         <AlertDialogFooter>

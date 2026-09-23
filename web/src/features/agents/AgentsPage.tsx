@@ -16,6 +16,7 @@ import { DeleteAgentDialog } from './DeleteAgentDialog'
 import { AgentCard, AgentCardSkeleton } from './AgentCard'
 import { AgentDialog } from './AgentDialog'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 type Order = 'added' | 'name' | 'recent'
 
@@ -147,7 +148,7 @@ export function AgentsPage() {
         <Empty>
           <EmptyHeader>
             <EmptyTitle>{t('agents.failed')}</EmptyTitle>
-            <EmptyDescription>{agents.error.message}</EmptyDescription>
+            <EmptyDescription>{errorText(agents.error)}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       ) : all.length === 0 ? (

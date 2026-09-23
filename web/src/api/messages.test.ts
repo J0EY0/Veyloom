@@ -1,5 +1,5 @@
 import { QueryClient } from '@tanstack/react-query'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { message, summary, turn } from '@/test/fixtures'
 import { applyRoomMessage, applyTurn, messageKeys, threadKeys } from './messages'
 import type { Message, RoomMessage, ThreadResponse } from './types'
@@ -66,6 +66,27 @@ describe('applyRoomMessage', () => {
     const client = new QueryClient()
     applyRoomMessage(client, message('m1', 1))
     expect(client.getQueryData(messageKeys.room('r1'))).toBeUndefined()
+  })
+
+  it('does not lose a reply that comes while the topic is being read', async () => {
+    // The topic is opened just as a turn posts its note: the server reads
+    // the replies before the note, and the note's event beats the answer.
+    const client = seed([{ ...message('m2', 2), thread: summary('t1') }])
+    const note = message('m3', 3, { thread_id: 't1', sender_kind: 'system' })
+    let asked = 0
+    let release = () => {}
+    const read = client.fetchQuery({
+      queryKey: threadKeys.messages('t1'),
+      queryFn: () => {
+        asked++
+        return asked === 1 ? new Promise<Message[]>((resolve) => (release = () => resolve([]))) : Promise.resolve([note])
+      },
+    })
+    applyRoomMessage(client, note)
+    release()
+    await read
+    await vi.waitFor(() => expect(client.getQueryData<Message[]>(threadKeys.messages('t1'))).toEqual([note]))
+    expect(rows(client)[0].thread?.reply_count).toBe(1)
   })
 })
 

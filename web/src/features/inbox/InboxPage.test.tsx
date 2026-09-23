@@ -72,8 +72,10 @@ describe('InboxPage', () => {
     stubApi({ '/approvals': { approvals: [] }, '/users/u1/inbox': { items: [] } })
     renderWithProviders(<InboxPage />)
     expect(await screen.findByText('没有等你的。')).toBeInTheDocument()
-    // Nothing to pick, so no "pick one" either.
+    // Nothing to pick, search or narrow: the note alone, no list around it.
     expect(screen.queryByText('选一条查看。')).not.toBeInTheDocument()
+    expect(screen.queryByRole('searchbox')).not.toBeInTheDocument()
+    expect(screen.queryByRole('switch')).not.toBeInTheDocument()
   })
 
   it('narrows to approvals with the switch and by words with the search', async () => {

@@ -10,7 +10,8 @@ import { RoomPage } from './RoomPage'
 
 const agent = { member_id: 'a1', user_id: undefined }
 
-function stubRoom(members: object[] = [{ id: 'a1', display_name: 'Codex Implementer' }]) {
+// stubRoom serves room r1; later are messages said after the first two.
+function stubRoom(members: object[] = [{ id: 'a1', display_name: 'Codex Implementer' }], later: object[] = []) {
   stubApi({
     '/rooms/r1': { room: room('r1', 'p1', 'main') },
     '/users': { users: [user('u1', 'alice')] },
@@ -26,6 +27,7 @@ function stubRoom(members: object[] = [{ id: 'a1', display_name: 'Codex Implemen
             last_turn: { id: 'x1', status: 'done', started_at: '2026-09-14T02:00:00Z', ended_at: '2026-09-14T02:00:42Z' },
           }),
         },
+        ...later,
       ],
     },
     '/threads/t1': {
@@ -61,12 +63,25 @@ describe('RoomPage', () => {
     await waitFor(() => expect(screen.queryByRole('complementary', { name: '话题' })).not.toBeInTheDocument())
   })
 
-  it('shows live messages and turn state from the socket', async () => {
+  it('reads the room again once its stream opens: what was said while the page loaded shows', async () => {
     stubRoom()
     renderWithProviders(<RoomPage />, { route: '/rooms/r1', path: '/rooms/:roomId' })
     await screen.findByText('好。')
+    // Said before the stream listened: no event will bring it.
+    stubRoom(undefined, [message('m3', 3, { body: '部署好了吗？' })])
+    FakeWebSocket.last().open()
+    expect(await screen.findByText('部署好了吗？')).toBeInTheDocument()
+  })
+
+  it('shows live messages and turn state from the socket', async () => {
+    stubRoom()
+    const { client } = renderWithProviders(<RoomPage />, { route: '/rooms/r1', path: '/rooms/:roomId' })
+    await screen.findByText('好。')
     const ws = FakeWebSocket.last()
     ws.open()
+    // Opening reads the room again, for what came before the stream
+    // listened; the live events follow.
+    await waitFor(() => expect(client.isFetching()).toBe(0))
 
     ws.frame({ kind: 'message', room_id: 'r1', at: '', message: message('m5', 5, { ...agent, body: '' }), thread: summary('t2') })
     ws.frame({ kind: 'turn_started', room_id: 'r1', at: '', turn: turn('x2', 't2', { status: 'running', ended_at: undefined }) })
@@ -84,12 +99,13 @@ describe('RoomPage approvals', () => {
 
   it('opens the pending panel from the URL and counts in the title', async () => {
     stubRoom()
-    renderWithProviders(<RoomPage />, { route: '/rooms/r1?panel=approvals', path: '/rooms/:roomId' })
+    const { client } = renderWithProviders(<RoomPage />, { route: '/rooms/r1?panel=approvals', path: '/rooms/:roomId' })
     expect(await screen.findByRole('complementary', { name: '待审批' })).toBeInTheDocument()
     expect(await screen.findByText('没有在等你的。')).toBeInTheDocument()
 
     const ws = FakeWebSocket.last()
     ws.open()
+    await waitFor(() => expect(client.isFetching()).toBe(0))
     ws.frame({ kind: 'approval_requested', room_id: 'r1', at: '', approval: approval('ap1', { thread_id: 't1' }) })
     expect(await screen.findByText('make test')).toBeInTheDocument()
     await waitFor(() => expect(document.title).toBe('(1) main · Veyloom'))

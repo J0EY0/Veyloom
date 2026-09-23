@@ -1,12 +1,13 @@
-import { useCallback, useEffect, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { ViewTransition } from 'react'
 import { SearchIcon, UsersIcon } from 'lucide-react'
-import { useParams, useSearchParams } from 'react-router'
+import { useMatch, useParams, useSearchParams } from 'react-router'
 import { ApiError } from '@/api/client'
 import { usePendingApprovals } from '@/api/approvals'
 import { useRoomEvents } from '@/api/events'
-import { useProjectName } from '@/api/projects'
+import { useProject } from '@/api/projects'
 import { useRoom } from '@/api/rooms'
+import type { WikiSpace } from '@/api/wiki'
 import { Panel } from '@/components/layout/Panel'
 import { PanelHeader } from '@/components/layout/PanelHeader'
 import { Button } from '@/components/ui/button'
@@ -15,6 +16,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { MembersPanel } from '@/features/members/MembersPanel'
 import { ApprovalsPanel } from '@/features/approvals/ApprovalsPanel'
 import { ThreadPanel } from '@/features/threads/ThreadPanel'
+import { WikiView } from '@/features/wiki/WikiView'
 import { TurnDrawer } from '@/features/turns/TurnDrawer'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
 import { useEscape } from '@/lib/useEscape'
@@ -26,9 +28,11 @@ import { NARROW_PANEL_REM, PANEL_REM, panelLayout, useWidthRem } from './panelLa
 import { Composer } from './Composer'
 import { ConnectionHint } from './ConnectionHint'
 import { RoomMenu } from './RoomMenu'
+import { RoomTabs } from './RoomTabs'
 import { Timeline } from './Timeline'
 import { useMemberStates } from './useMemberStates'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 export function RoomPage() {
   const { roomId = '' } = useParams()
@@ -40,9 +44,14 @@ export function RoomPage() {
   // an @ goes to it (docs/design.md §4.2), and the box says so.
   const soloMember = memberStates.length === 1 && memberStates[0].member.enabled ? memberStates[0].member.display_name : undefined
   const pending = usePendingApprovals(roomId)
+  // The Wiki tab is this page too: its part of the address picks the page.
+  const wikiMatch = useMatch('/rooms/:roomId/wiki/*')
+  const projectId = room.data?.project_id ?? ''
+  const wikiSpace = useMemo<WikiSpace>(() => ({ kind: 'project', projectId, roomId }), [projectId, roomId])
   const pendingCount = pending.data?.length ?? 0
   // A project is its chat: the chat is titled after the project.
-  const projectName = useProjectName(room.data?.project_id ?? '')
+  const project = useProject(projectId)
+  const projectName = project?.name
   const chatName = projectName ?? room.data?.name ?? ''
   useDocumentTitle(room.data ? `${pendingCount > 0 ? `(${pendingCount}) ` : ''}${chatName}` : '')
   // Opening Veyloom comes back here (see HomeRedirect).
@@ -148,7 +157,7 @@ export function RoomPage() {
         <Empty>
           <EmptyHeader>
             <EmptyTitle>{missing ? t('room.missing') : t('room.failed')}</EmptyTitle>
-            <EmptyDescription>{room.error.message}</EmptyDescription>
+            <EmptyDescription>{errorText(room.error)}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       </Panel>
@@ -161,6 +170,7 @@ export function RoomPage() {
         actions={
           <>
             <RoomMenu roomId={roomId} />
+            <RoomTabs roomId={roomId} wiki={wikiMatch !== null} />
           </>
         }
         trailing={
@@ -200,11 +210,25 @@ export function RoomPage() {
           className="flex min-h-0 flex-1 flex-col transition-[padding] duration-200"
           style={padRem > 0 ? { paddingRight: `${padRem}rem` } : undefined}
         >
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            {memberStates.length > 0 ? <MemberIsland states={memberStates} onOpenThread={openThread} onOpenMembers={() => openPanel('members')} /> : null}
-            <Timeline key={roomId} roomId={roomId} onOpenThread={openThread} inset={memberStates.length > 0} />
-          </div>
-          <Composer roomId={roomId} roomName={chatName} hint={soloMember ? t('composer.replyHint', { name: soloMember }) : undefined} />
+          {wikiMatch ? (
+            <WikiView space={wikiSpace} rest={wikiMatch.params['*'] ?? ''} onOpenThread={openThread} />
+          ) : (
+            <>
+              <div className="relative flex min-h-0 flex-1 flex-col">
+                {memberStates.length > 0 ? <MemberIsland states={memberStates} onOpenThread={openThread} onOpenMembers={() => openPanel('members')} /> : null}
+                <Timeline
+                  key={roomId}
+                  roomId={roomId}
+                  onOpenThread={openThread}
+                  wikiThreadId={project?.wiki_thread_id}
+                  projectId={project?.id}
+                  offerMessageId={project?.wiki_offer_message_id}
+                  inset={memberStates.length > 0}
+                />
+              </div>
+              <Composer roomId={roomId} roomName={chatName} hint={soloMember ? t('composer.replyHint', { name: soloMember }) : undefined} />
+            </>
+          )}
         </div>
         {/* React's tree, not the DOM's: what a panel opens in portals is still inside it. */}
         <div className="contents" onPointerDownCapture={pressedInside}>

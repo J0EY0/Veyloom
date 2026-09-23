@@ -39,6 +39,19 @@ describe('SettingsPage', () => {
     expect(screen.getByRole('heading', { name: '通用' })).toBeInTheDocument()
   })
 
+  it('opens the global memory in General at the address its page had', async () => {
+    stubApi({
+      '/settings/memory': { memory: { enabled: true, personal: true, project: true } },
+      '/memory': { memory: { entries: [{ text: '回复用中文。', date: '2026-09-20', source: 'jinghao' }], chars: 30, budget: 2000, hash: 'h1' } },
+      '/memory/history': { commits: [] },
+    })
+    const { router } = open('memory')
+    await waitFor(() => expect(router.state.location.pathname).toBe('/settings/general'))
+    const dialog = await screen.findByRole('dialog', { name: '全局记忆' })
+    expect(await within(dialog).findByText('回复用中文。')).toBeInTheDocument()
+    expect(within(dialog).getByText('1 条')).toBeInTheDocument()
+  })
+
   it('goes back to the column for a kind it does not know', async () => {
     stubApi({})
     const { router } = open('nope')

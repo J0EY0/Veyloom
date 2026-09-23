@@ -4,19 +4,29 @@
 import { signedOut } from '@/lib/authEvents'
 import { apiBase as base } from './base'
 
-// ApiError carries the status and the server's `error` text. Callers
-// branch on status (404 → "没有这个房间") and show the message as-is. body
-// is the whole JSON error, for the few answers that say more than a line.
+// ApiError carries the status and the server's `error` text, its reason
+// in English. Callers branch on status (404 → "没有这个房间") and tell a
+// person the rest with errorText, in their language. code and params name
+// a failure a person can run into (error.<code> in src/i18n); body is the
+// whole JSON error, for the few answers that say more than a line.
 export class ApiError extends Error {
   readonly status: number
   readonly body: Record<string, unknown>
+  readonly code?: string
+  readonly params?: Record<string, string>
 
   constructor(status: number, message: string, body: Record<string, unknown> = {}) {
     super(message)
     this.name = 'ApiError'
     this.status = status
     this.body = body
+    if (typeof body.code === 'string' && body.code !== '') this.code = body.code
+    if (isStrings(body.params)) this.params = body.params
   }
+}
+
+function isStrings(value: unknown): value is Record<string, string> {
+  return value !== null && typeof value === 'object' && !Array.isArray(value) && Object.values(value).every((v) => typeof v === 'string')
 }
 
 export interface RequestOptions extends Omit<RequestInit, 'body'> {

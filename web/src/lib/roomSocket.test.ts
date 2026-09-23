@@ -25,12 +25,13 @@ describe('connectRoomEvents', () => {
     expect(onEvent).toHaveBeenCalledWith(expect.objectContaining({ kind: 'turn_started' }))
   })
 
-  it('reconnects with backoff and asks for a resync once back', () => {
+  it('asks for a resync on opening, since what came before it was missed, and again once back', () => {
     const onResync = vi.fn()
     const onStatus = vi.fn()
     connectRoomEvents('r1', { onEvent: vi.fn(), onResync, onStatus })
-    FakeWebSocket.last().open()
     expect(onResync).not.toHaveBeenCalled()
+    FakeWebSocket.last().open()
+    expect(onResync).toHaveBeenCalledOnce()
 
     FakeWebSocket.last().drop(1008)
     expect(onStatus).toHaveBeenLastCalledWith('reconnecting')
@@ -45,7 +46,7 @@ describe('connectRoomEvents', () => {
     expect(FakeWebSocket.instances).toHaveLength(3)
 
     FakeWebSocket.last().open()
-    expect(onResync).toHaveBeenCalledOnce()
+    expect(onResync).toHaveBeenCalledTimes(2)
     expect(onStatus).toHaveBeenLastCalledWith('open')
   })
 

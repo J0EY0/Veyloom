@@ -12,6 +12,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 export interface DeleteProjectDialogProps {
   project: Project
@@ -37,7 +38,7 @@ export function DeleteProjectDialog({ project, onClose }: DeleteProjectDialogPro
         </AlertDialogHeader>
         {remove.error ? (
           <p role="alert" className="text-center text-[0.8125rem] leading-relaxed text-status-fail">
-            {busy ? t('project.deleteBusy') : remove.error.message}
+            {busy ? t('project.deleteBusy') : errorText(remove.error)}
           </p>
         ) : null}
         <AlertDialogFooter>

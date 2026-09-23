@@ -11,6 +11,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { useT } from '@/lib/i18n'
+import { errorText } from '@/api/errorText'
 
 export interface RemoveMemberDialogProps {
   roomId: string
@@ -35,7 +36,7 @@ export function RemoveMemberDialog({ roomId, roomName, member, onClose }: Remove
         </AlertDialogHeader>
         {remove.error ? (
           <p role="alert" className="text-center text-[0.8125rem] leading-relaxed text-status-fail">
-            {busy ? t('member.removeBusyError') : remove.error.message}
+            {busy ? t('member.removeBusyError') : errorText(remove.error)}
           </p>
         ) : null}
         <AlertDialogFooter>

@@ -1,5 +1,4 @@
 import { type ReactNode, useId, useRef, useState } from 'react'
-import { ApiError } from '@/api/client'
 import { useDecideApproval } from '@/api/approvals'
 import { StatusDot, type StatusTone } from '@/components/shared/status-dot'
 import { Button } from '@/components/ui/button'
@@ -12,6 +11,7 @@ import { useT } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import type { ApprovalCardProps } from './ApprovalCard'
 import { decisionNote } from './describe'
+import { errorText } from '@/api/errorText'
 
 type Status = 'pending' | 'allowed' | 'denied' | 'expired' | 'cancelled'
 
@@ -48,7 +48,7 @@ export function DecisionCard({ approval, memberName, names, words, children }: A
     if (!user) return
     decide.mutate(
       { id: approval.id, user_id: user.id, allow, message: note.current?.value.trim() ?? '' },
-      { onError: (err) => setError(err instanceof ApiError && err.status === 409 ? t('approval.raced') : err.message) },
+      { onError: (err) => setError(errorText(err, { 409: t('approval.raced') })) },
     )
   }
 

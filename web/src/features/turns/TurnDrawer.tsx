@@ -14,6 +14,8 @@ import { totalTokens } from '@/lib/tokens'
 import { TurnEventRow } from './TurnEventRow'
 import { useT } from '@/lib/i18n'
 import type { MessageKey } from '@/i18n/zh-CN'
+import { errorText } from '@/api/errorText'
+import { turnErrorText } from './turnError'
 
 export interface TurnDrawerProps {
   roomId: string
@@ -71,7 +73,7 @@ function DrawerBody({ roomId, turnId }: { roomId: string; turnId: string }) {
         <Empty>
           <EmptyHeader>
             <EmptyTitle>{t('drawer.failed')}</EmptyTitle>
-            <EmptyDescription>{turn.error.message}</EmptyDescription>
+            <EmptyDescription>{errorText(turn.error)}</EmptyDescription>
           </EmptyHeader>
         </Empty>
       </>
@@ -82,7 +84,10 @@ function DrawerBody({ roomId, turnId }: { roomId: string; turnId: string }) {
   const member = members.data?.find((m) => m.id === record.member_id)
   const known = record.status in statusKey ? statusKey[record.status as keyof typeof statusKey] : undefined
   const status = { tone: known?.tone ?? ('idle' as StatusTone), text: known ? t(known.key) : record.status }
-  const lines: TranscriptLine[] = running ? (live?.events ?? []).map((event) => ({ kind: 'event', at: event.at, event })) : (transcript.data ?? [])
+  // The session a run used says nothing to a person reading the record.
+  const lines: TranscriptLine[] = (
+    running ? (live?.events ?? []).map((event) => ({ kind: 'event' as const, at: event.at, event })) : (transcript.data ?? [])
+  ).filter((line) => line.event?.kind !== 'session')
 
   return (
     <>
@@ -105,7 +110,7 @@ function DrawerBody({ roomId, turnId }: { roomId: string; turnId: string }) {
           </Button>
         ) : null}
       </div>
-      {record.error ? <p className="px-4 pb-2 text-[0.78125rem] text-status-fail">{record.error}</p> : null}
+      {record.error ? <p className="px-4 pb-2 text-[0.78125rem] text-status-fail">{turnErrorText(record.error)}</p> : null}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">
         {transcript.isPending && !running ? (
           <p role="status" className="flex items-center gap-2 py-2 text-xs text-subtle">
@@ -114,7 +119,7 @@ function DrawerBody({ roomId, turnId }: { roomId: string; turnId: string }) {
           </p>
         ) : transcript.isError ? (
           <p role="alert" className="py-2 text-xs text-status-fail">
-            {t('drawer.transcriptFailed', { error: transcript.error.message })}
+            {t('drawer.transcriptFailed', { error: errorText(transcript.error) })}
           </p>
         ) : lines.length === 0 ? (
           <p className="py-2 text-xs text-subtle">{running ? t('drawer.noEventsYet') : t('drawer.noRecord')}</p>
