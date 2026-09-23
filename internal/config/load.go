@@ -110,6 +110,11 @@ func (l *Loader) Load(path string) (Config, error) {
 	} else {
 		cfg.Hub.AvatarDir = expandHome(cfg.Hub.AvatarDir)
 	}
+	if cfg.Hub.WikiDir == "" {
+		cfg.Hub.WikiDir = filepath.Join(cfg.State.Dir, "wiki")
+	} else {
+		cfg.Hub.WikiDir = expandHome(cfg.Hub.WikiDir)
+	}
 	// The machine's session files as well.
 	if cfg.Machine.SessionDir == "" {
 		cfg.Machine.SessionDir = filepath.Join(cfg.State.Dir, "sessions")
@@ -146,11 +151,22 @@ func setDefaults(v *viper.Viper, def Config) {
 	v.SetDefault("hub.transcript_dir", def.Hub.TranscriptDir)
 	v.SetDefault("hub.attachment_dir", def.Hub.AttachmentDir)
 	v.SetDefault("hub.avatar_dir", def.Hub.AvatarDir)
+	v.SetDefault("hub.wiki_dir", def.Hub.WikiDir)
 	v.SetDefault("hub.brief_messages", def.Hub.BriefMessages)
 	v.SetDefault("hub.brief_room_messages", def.Hub.BriefRoomMessages)
 	v.SetDefault("hub.brief_topics", def.Hub.BriefTopics)
+	v.SetDefault("hub.brief_wiki_pages", def.Hub.BriefWikiPages)
+	v.SetDefault("hub.brief_resident_chars", def.Hub.BriefResidentChars)
+	v.SetDefault("hub.memory_personal_chars", def.Hub.MemoryPersonalChars)
+	v.SetDefault("hub.memory_project_chars", def.Hub.MemoryProjectChars)
 	v.SetDefault("hub.approval_timeout", def.Hub.ApprovalTimeout)
 	v.SetDefault("hub.relay_budget", def.Hub.RelayBudget)
+	v.SetDefault("hub.upkeep_idle", def.Hub.UpkeepIdle)
+	v.SetDefault("hub.upkeep_check", def.Hub.UpkeepCheck)
+	v.SetDefault("hub.upkeep_turns", def.Hub.UpkeepTurns)
+	v.SetDefault("hub.upkeep_runs_per_day", def.Hub.UpkeepRunsPerDay)
+	v.SetDefault("hub.upkeep_offer_topics", def.Hub.UpkeepOfferTopics)
+	v.SetDefault("hub.skill_trial_uses", def.Hub.SkillTrialUses)
 	v.SetDefault(KeyMachineName, def.Machine.Name)
 	v.SetDefault(KeyMachineDetectTimeout, def.Machine.DetectTimeout)
 	v.SetDefault("machine.handshake_timeout", def.Machine.HandshakeTimeout)

@@ -62,7 +62,7 @@ func (h *handlers) getApproval(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) decideApproval(w http.ResponseWriter, r *http.Request) {
 	var req DecideApprovalRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	if user, ok := userFrom(r.Context()); ok {

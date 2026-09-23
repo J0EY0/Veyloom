@@ -125,17 +125,20 @@ func (r *ClaudeRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, erro
 	// reaches through the proxy; without one the turn runs without them.
 	var toolArgs []string
 	if spec.Host != nil && r.cfg.ProxyBinary != "" {
-		ep, err := r.tools.register(spec.Host, nil)
+		ep, err := r.tools.register(spec.Host, spec.ExtraTools, nil)
 		if err != nil {
 			cancel()
 			return nil, fmt.Errorf("claude: tool endpoint: %w", err)
 		}
 		t.token = ep.token
-		// Allowed up front, in every preset: they only read the room.
-		// Marked read-only, they also pass plan mode, which turns down
-		// tools that change things.
-		allowed := make([]string, 0, len(RoomToolNames))
-		for _, name := range RoomToolNames {
+		// Allowed up front, in every preset: they are Veyloom's own, the
+		// room tools only read and the hub decides which wiki changes wait
+		// for a person. The read-only ones also pass plan mode; the wiki
+		// writes, should plan mode ask about them, are let through in
+		// canUseTool.
+		names := turnToolNames(spec.ExtraTools)
+		allowed := make([]string, 0, len(names))
+		for _, name := range names {
 			allowed = append(allowed, claudeToolName(name))
 		}
 		toolArgs = append(toolArgs, "--mcp-config", claudeMCPConfig(r.cfg.ProxyBinary, ep.MCP), "--allowedTools", strings.Join(allowed, ","))
@@ -188,6 +191,10 @@ func (r *ClaudeRunner) args(spec TurnSpec) []string {
 		args = append(args, "--permission-mode", mode)
 	}
 	args = append(args, "--permission-prompt-tool", "stdio")
+	// The skill library's skills, as a plugin for this run only.
+	if spec.SkillDir != "" {
+		args = append(args, "--plugin-dir", spec.SkillDir)
+	}
 	if budget := optFloat(spec.Options, "max_budget_usd"); budget > 0 {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(budget, 'f', -1, 64))
 	}

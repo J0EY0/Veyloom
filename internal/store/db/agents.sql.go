@@ -11,6 +11,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const clearWikiMaintainer = `-- name: ClearWikiMaintainer :exec
+UPDATE projects SET wiki_maintainer_member_id = NULL WHERE wiki_maintainer_member_id = $1
+`
+
+// A member taken out of its project keeps its wiki no longer.
+func (q *Queries) ClearWikiMaintainer(ctx context.Context, wikiMaintainerMemberID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearWikiMaintainer, wikiMaintainerMemberID)
+	return err
+}
+
 const countAgentsWithAvatar = `-- name: CountAgentsWithAvatar :one
 SELECT count(*) FROM agents WHERE avatar = $1
 `
@@ -24,8 +34,8 @@ func (q *Queries) CountAgentsWithAvatar(ctx context.Context, avatar string) (int
 }
 
 const createAgent = `-- name: CreateAgent :one
-INSERT INTO agents (name, avatar, machine_id, runtime, model, role_card, permission_preset, runtime_options)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO agents (name, avatar, machine_id, runtime, model, role_card, permission_preset, runtime_options, skills)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id
 `
 
@@ -38,6 +48,7 @@ type CreateAgentParams struct {
 	RoleCard         string
 	PermissionPreset string
 	RuntimeOptions   []byte
+	Skills           []string
 }
 
 func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (pgtype.UUID, error) {
@@ -50,6 +61,7 @@ func (q *Queries) CreateAgent(ctx context.Context, arg CreateAgentParams) (pgtyp
 		arg.RoleCard,
 		arg.PermissionPreset,
 		arg.RuntimeOptions,
+		arg.Skills,
 	)
 	var id pgtype.UUID
 	err := row.Scan(&id)
@@ -121,7 +133,7 @@ func (q *Queries) DeleteAgent(ctx context.Context, id pgtype.UUID) (int64, error
 }
 
 const getAgent = `-- name: GetAgent :one
-SELECT ag.id, ag.name, ag.avatar, ag.machine_id, ag.runtime, ag.model, ag.role_card, ag.permission_preset, ag.runtime_options, ag.created_at, ag.updated_at, m.name AS machine_name,
+SELECT ag.id, ag.name, ag.avatar, ag.machine_id, ag.runtime, ag.model, ag.role_card, ag.permission_preset, ag.runtime_options, ag.skills, ag.created_at, ag.updated_at, m.name AS machine_name,
        coalesce(array_agg(DISTINCT p.name ORDER BY p.name) FILTER (WHERE p.name IS NOT NULL), '{}')::text[] AS projects
 FROM agents ag
 JOIN machines m ON m.id = ag.machine_id
@@ -153,6 +165,7 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (GetAgentRow, er
 		&i.Agent.RoleCard,
 		&i.Agent.PermissionPreset,
 		&i.Agent.RuntimeOptions,
+		&i.Agent.Skills,
 		&i.Agent.CreatedAt,
 		&i.Agent.UpdatedAt,
 		&i.MachineName,
@@ -217,7 +230,7 @@ func (q *Queries) ListAgentProjects(ctx context.Context, agentID pgtype.UUID) ([
 }
 
 const listAgents = `-- name: ListAgents :many
-SELECT ag.id, ag.name, ag.avatar, ag.machine_id, ag.runtime, ag.model, ag.role_card, ag.permission_preset, ag.runtime_options, ag.created_at, ag.updated_at, m.name AS machine_name,
+SELECT ag.id, ag.name, ag.avatar, ag.machine_id, ag.runtime, ag.model, ag.role_card, ag.permission_preset, ag.runtime_options, ag.skills, ag.created_at, ag.updated_at, m.name AS machine_name,
        coalesce(array_agg(DISTINCT p.name ORDER BY p.name) FILTER (WHERE p.name IS NOT NULL), '{}')::text[] AS projects
 FROM agents ag
 JOIN machines m ON m.id = ag.machine_id
@@ -256,6 +269,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]ListAgentsRow, error) {
 			&i.Agent.RoleCard,
 			&i.Agent.PermissionPreset,
 			&i.Agent.RuntimeOptions,
+			&i.Agent.Skills,
 			&i.Agent.CreatedAt,
 			&i.Agent.UpdatedAt,
 			&i.MachineName,
@@ -395,6 +409,36 @@ func (q *Queries) ListRoomMembers(ctx context.Context, roomID pgtype.UUID) ([]Me
 	return items, nil
 }
 
+const listSkillAgents = `-- name: ListSkillAgents :many
+SELECT id, name FROM agents WHERE $1::text = ANY(skills) ORDER BY name
+`
+
+type ListSkillAgentsRow struct {
+	ID   pgtype.UUID
+	Name string
+}
+
+// The agents a skill is installed for, by name.
+func (q *Queries) ListSkillAgents(ctx context.Context, skill string) ([]ListSkillAgentsRow, error) {
+	rows, err := q.db.Query(ctx, listSkillAgents, skill)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSkillAgentsRow
+	for rows.Next() {
+		var i ListSkillAgentsRow
+		if err := rows.Scan(&i.ID, &i.Name); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const removeMember = `-- name: RemoveMember :one
 UPDATE members AS mb
 SET removed_at = now()
@@ -426,6 +470,32 @@ func (q *Queries) RemoveMember(ctx context.Context, id pgtype.UUID) (Member, err
 	return i, err
 }
 
+const setAgentSkill = `-- name: SetAgentSkill :execrows
+UPDATE agents SET
+    skills = CASE
+        WHEN NOT $1::boolean THEN array_remove(skills, $2::text)
+        WHEN $2::text = ANY(skills) THEN skills
+        ELSE array_append(skills, $2::text)
+    END,
+    updated_at = now()
+WHERE id = $3
+`
+
+type SetAgentSkillParams struct {
+	Installed bool
+	Skill     string
+	ID        pgtype.UUID
+}
+
+// Installs a skill for an agent, once, or takes it off.
+func (q *Queries) SetAgentSkill(ctx context.Context, arg SetAgentSkillParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setAgentSkill, arg.Installed, arg.Skill, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateAgent = `-- name: UpdateAgent :one
 UPDATE agents AS ag SET
     name              = $1,
@@ -436,8 +506,9 @@ UPDATE agents AS ag SET
     role_card         = $6,
     permission_preset = $7,
     runtime_options   = $8,
+    skills            = $9::text[],
     updated_at        = now()
-WHERE ag.id = $9
+WHERE ag.id = $10
   AND (ag.machine_id = $3
        OR NOT EXISTS (SELECT 1 FROM members AS mb WHERE mb.agent_id = ag.id AND mb.removed_at IS NULL))
 RETURNING ag.id
@@ -452,6 +523,7 @@ type UpdateAgentParams struct {
 	RoleCard         string
 	PermissionPreset string
 	RuntimeOptions   []byte
+	Skills           []string
 	ID               pgtype.UUID
 }
 
@@ -468,6 +540,7 @@ func (q *Queries) UpdateAgent(ctx context.Context, arg UpdateAgentParams) (pgtyp
 		arg.RoleCard,
 		arg.PermissionPreset,
 		arg.RuntimeOptions,
+		arg.Skills,
 		arg.ID,
 	)
 	var id pgtype.UUID

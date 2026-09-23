@@ -84,8 +84,8 @@ func fakeClaudeMain() {
 
 // fakeClaudeExchanges are the requests the fake can make, by the keyword
 // that asks for them in the prompt: a command, a question, a plan, an MCP
-// server's form and link, and a request of a kind the runner does not
-// answer. [withdraw] asks about rm -rf build and takes the request back;
+// server's form and link, a write to the wiki, and a request of a kind
+// the runner does not answer. [withdraw] asks about rm -rf build and takes the request back;
 // [both] asks [bash] and [rm] at once; [wait] holds the turn open until the
 // file named by VEYLOOM_FAKE_CLAUDE_GO appears.
 var fakeClaudeExchanges = map[string]string{
@@ -96,6 +96,7 @@ var fakeClaudeExchanges = map[string]string{
 	"[form]":   `{"subtype":"elicitation","mcp_server_name":"deploy","message":"Where to?","mode":"form","requested_schema":{"type":"object","properties":{"region":{"type":"string","enum":["eu","us"]},"count":{"type":"integer"}},"required":["region"]}}`,
 	"[link]":   `{"subtype":"elicitation","mcp_server_name":"deploy","message":"Sign in","mode":"url","url":"https://example.com/device","elicitation_id":"e1"}`,
 	"[hookcb]": `{"subtype":"hook_callback","callback_id":"hook_0","input":{}}`,
+	"[wiki]":   `{"subtype":"can_use_tool","tool_name":"mcp__veyloom__write_wiki","input":{"type":"Fact","slug":"go-version","title":"Go","description":"d","body":"b"},"tool_use_id":"tu-wiki"}`,
 }
 
 type claudeScript struct {

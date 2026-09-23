@@ -25,13 +25,19 @@ import (
 //
 // otherwise plays the extension dialogs the prompt names, in order
 // (piScriptDialogs), and ends with a reply whose text is every answer it
-// got, as JSON by keyword.
+// got, as JSON by keyword; or, when the prompt names one, with what pi
+// does after the agent's run (piScriptEndings).
 //
-// Like pi, once the agent is done it waits for its input to close.
+// Like pi, once the agent is done it waits for its input to close,
+// answering get_state as it goes.
 func fakePiMain() {
 	if path := os.Getenv("VEYLOOM_FAKE_PI_ARGS"); path != "" {
 		os.WriteFile(path+".tmp", []byte(strings.Join(os.Args[1:], "\n")+"\n"), 0o600)
 		os.Rename(path+".tmp", path)
+		// The optional tools the extension is to register, beside them.
+		if extra := os.Getenv(piExtraToolsEnv); extra != "" {
+			os.WriteFile(path+".extra", []byte(extra), 0o600)
+		}
 	}
 	var record io.Writer = io.Discard
 	if path := os.Getenv("VEYLOOM_FAKE_PI_RECORD"); path != "" {
@@ -56,7 +62,6 @@ func fakePiMain() {
 		}
 	}()
 
-	s := &piScript{in: lines, answers: map[string]any{}}
 	session, output := "pi-sess-1", ""
 	if path := os.Getenv("VEYLOOM_FAKE_PI_OUTPUT"); path != "" {
 		data, _ := os.ReadFile(path)
@@ -69,6 +74,7 @@ func fakePiMain() {
 			session, output = header.ID, rest
 		}
 	}
+	s := &piScript{in: lines, answers: map[string]any{}, session: session}
 	// The two commands the runner sends before anything happens.
 	var prompt string
 	for got := 0; got < 2; {
@@ -130,6 +136,7 @@ type piScript struct {
 	in      chan []byte
 	answers map[string]any
 	n       int
+	session string
 }
 
 func (s *piScript) send(v any) {
@@ -210,15 +217,105 @@ func (s *piScript) play(prompt string) {
 		}
 		break
 	}
+	for keyword, end := range piScriptEndings {
+		if strings.Contains(prompt, keyword) {
+			end(s)
+			return
+		}
+	}
 	text, _ := json.Marshal(s.answers)
-	s.send(map[string]any{"type": "message_end", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": string(text)}}, "stopReason": "stop"}})
+	s.reply(string(text))
 	s.send(map[string]any{"type": "agent_end", "messages": []any{}})
 	s.drain()
 }
 
-// drain waits for the input to close.
+// piScriptEndings are what pi can do once the agent's run is over, by the
+// keyword that asks for them, each as pi 0.73.1 does it: what the end sets
+// off is announced before pi reads another command, and a turn whose input
+// closes too early loses the rest.
+var piScriptEndings = map[string]func(s *piScript){
+	// The session has grown past the threshold: pi compacts it.
+	"[compact]": func(s *piScript) {
+		s.reply("done")
+		s.send(map[string]any{"type": "agent_end", "messages": []any{}})
+		s.send(map[string]any{"type": "compaction_start", "reason": "threshold"})
+		if !s.state(true) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+		s.send(map[string]any{"type": "compaction_end", "reason": "threshold", "aborted": false, "willRetry": false,
+			"result": map[string]any{"summary": "## Goal\n...", "firstKeptEntryId": "e9", "tokensBefore": 180000}})
+		s.drain()
+	},
+	// The answer failed in a way worth another try: pi waits, then runs the
+	// agent again, and this time it answers.
+	"[retry-ok]": func(s *piScript) {
+		s.failed("529 overloaded_error: Overloaded")
+		s.send(map[string]any{"type": "agent_end", "messages": []any{}})
+		s.send(map[string]any{"type": "auto_retry_start", "attempt": 1, "maxAttempts": 3, "delayMs": 50, "errorMessage": "529 overloaded_error: Overloaded"})
+		if !s.state(false) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+		s.send(map[string]any{"type": "agent_start"})
+		s.reply("answered on the second try")
+		s.send(map[string]any{"type": "auto_retry_end", "success": true, "attempt": 1})
+		s.send(map[string]any{"type": "agent_end", "messages": []any{}})
+		s.drain()
+	},
+	// The prompt overflowed the window: pi compacts, then runs the agent
+	// again on the smaller session.
+	"[overflow]": func(s *piScript) {
+		s.failed("prompt is too long: 1048577 tokens > 1000000 maximum")
+		s.send(map[string]any{"type": "agent_end", "messages": []any{}})
+		s.send(map[string]any{"type": "compaction_start", "reason": "overflow"})
+		if !s.state(true) {
+			return
+		}
+		s.send(map[string]any{"type": "compaction_end", "reason": "overflow", "aborted": false, "willRetry": true,
+			"result": map[string]any{"summary": "## Goal\n...", "firstKeptEntryId": "e9", "tokensBefore": 1048577}})
+		// Between the compaction and the run it sets off, pi is idle.
+		if !s.state(false) {
+			return
+		}
+		time.Sleep(50 * time.Millisecond)
+		s.send(map[string]any{"type": "agent_start"})
+		s.reply("answered after the compaction")
+		s.send(map[string]any{"type": "agent_end", "messages": []any{}})
+		s.drain()
+	},
+}
+
+// reply ends the agent's answer with text.
+func (s *piScript) reply(text string) {
+	s.send(map[string]any{"type": "message_end", "message": map[string]any{"role": "assistant", "content": []any{map[string]any{"type": "text", "text": text}}, "stopReason": "stop"}})
+}
+
+// failed ends the agent's answer with an error.
+func (s *piScript) failed(reason string) {
+	s.send(map[string]any{"type": "message_end", "message": map[string]any{"role": "assistant", "content": []any{}, "stopReason": "error", "errorMessage": reason}})
+}
+
+// state waits for get_state and answers it, compacting or not. It reports
+// false if the input closed first.
+func (s *piScript) state(compacting bool) bool {
+	for raw := range s.in {
+		var cmd struct {
+			ID   string `json:"id"`
+			Type string `json:"type"`
+		}
+		if json.Unmarshal(raw, &cmd) == nil && cmd.Type == "get_state" {
+			s.send(map[string]any{"id": cmd.ID, "type": "response", "command": "get_state", "success": true,
+				"data": map[string]any{"sessionId": s.session, "isStreaming": false, "isCompacting": compacting}})
+			return true
+		}
+	}
+	return false
+}
+
+// drain waits for the input to close, answering get_state as an idle pi.
 func (s *piScript) drain() {
-	for range s.in {
+	for s.state(false) {
 	}
 }
 

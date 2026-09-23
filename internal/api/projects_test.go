@@ -179,6 +179,26 @@ func TestCreateProject(t *testing.T) {
 	}
 }
 
+func TestCreateProject_TooLarge(t *testing.T) {
+	handler, _ := projectsHandler()
+	body := `{"name":"x","description":"` + strings.Repeat("长", maxBodyBytes/3+1) + `"}`
+	rec := do(t, handler, http.MethodPost, "/api/v1/projects", body, nil)
+	var refused ErrorResponse
+	if json.Unmarshal(rec.Body.Bytes(), &refused); rec.Code != http.StatusBadRequest || refused.Code != "requestTooLarge" || refused.Params["mb"] != "1" {
+		t.Errorf("a body over the limit: %d %s", rec.Code, rec.Body)
+	}
+	// Within it, a description is counted in characters, as the web client
+	// counts it: 4000 Chinese ones are 12000 bytes.
+	var created ProjectResponse
+	if rec := do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"x","description":"`+strings.Repeat("长", maxProjectDescription)+`"}`, &created); rec.Code != http.StatusCreated {
+		t.Errorf("a description of %d characters: %d %s", maxProjectDescription, rec.Code, rec.Body)
+	}
+	rec = do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"x","description":"`+strings.Repeat("长", maxProjectDescription+1)+`"}`, nil)
+	if json.Unmarshal(rec.Body.Bytes(), &refused); rec.Code != http.StatusBadRequest || refused.Code != "descriptionTooLong" || refused.Params["max"] != "4000" {
+		t.Errorf("a description over it: %d %s", rec.Code, rec.Body)
+	}
+}
+
 func TestCreateProject_BadRequests(t *testing.T) {
 	handler, _ := projectsHandler()
 

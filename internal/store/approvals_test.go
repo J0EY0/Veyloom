@@ -75,8 +75,9 @@ func TestApprovals_CreateDecideGet(t *testing.T) {
 
 	// The first decision wins.
 	_, err = f.s.DecideApproval(ctx, a.ID, store.ApprovalOutcome{Status: store.ApprovalDenied, DecidedBy: f.user.ID})
-	if !errors.Is(err, store.ErrConflict) {
-		t.Errorf("second decision: got %v, want ErrConflict", err)
+	var settled *store.Problem
+	if !errors.Is(err, store.ErrConflict) || !errors.As(err, &settled) || settled.Code != "approvalAllowed" || store.Reason(err) != "already allowed" {
+		t.Errorf("second decision: got %v, want ErrConflict saying how it was settled", err)
 	}
 	// A system decision has no user.
 	b, _ := f.s.CreateApproval(ctx, f.newApproval("r2"))

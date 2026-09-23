@@ -230,6 +230,9 @@ func TestLoad_TranscriptDirDerivedFromStateDir(t *testing.T) {
 	if cfg.Hub.AvatarDir != filepath.Join(home, "state", "avatars") {
 		t.Errorf("AvatarDir = %q, want it under the state dir", cfg.Hub.AvatarDir)
 	}
+	if cfg.Hub.WikiDir != filepath.Join(home, "state", "wiki") {
+		t.Errorf("WikiDir = %q, want it under the state dir", cfg.Hub.WikiDir)
+	}
 	if cfg.Machine.SessionDir != filepath.Join(home, "state", "sessions") {
 		t.Errorf("SessionDir = %q, want it under the state dir", cfg.Machine.SessionDir)
 	}

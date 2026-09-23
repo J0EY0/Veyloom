@@ -23,6 +23,9 @@ CREATE TABLE agents (
     permission_preset text        NOT NULL CHECK (permission_preset IN ('read_only', 'edit_with_approval', 'full_auto')),
     -- Runtime-specific settings the machine passes through untouched.
     runtime_options   jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    -- The skills of the skill library a person installed for the agent, by
+    -- name: its turns are given these and no others (docs/design.md 5.15).
+    skills            text[]      NOT NULL DEFAULT '{}',
     created_at        timestamptz NOT NULL DEFAULT now(),
     updated_at        timestamptz NOT NULL DEFAULT now()
 );
@@ -97,6 +100,9 @@ CREATE TABLE member_sessions (
     -- detail, so it also empties thread_seen: topics are shown in full
     -- again the next time the session is briefed in them.
     compactions integer     NOT NULL DEFAULT 0,
+    -- When the session was last shown the project wiki's catalog: the next
+    -- brief lists only the pages changed since. NULL until the first.
+    wiki_seen   timestamptz,
     started_at  timestamptz NOT NULL DEFAULT now(),
     ended_at    timestamptz,
     -- Why it ended; empty while open.
@@ -109,7 +115,13 @@ CREATE TABLE member_sessions (
 CREATE UNIQUE INDEX member_sessions_one_open ON member_sessions (member_id) WHERE ended_at IS NULL;
 CREATE INDEX member_sessions_by_member ON member_sessions (member_id, started_at DESC);
 
+-- The member a person chose to keep the project's wiki (design.md 5.12):
+-- it runs turns of its own, in the project's wiki topic. NULL is none, as
+-- every project starts; taking the member out of the project clears it.
+ALTER TABLE projects ADD COLUMN wiki_maintainer_member_id uuid REFERENCES members (id) ON DELETE SET NULL;
+
 -- +goose Down
+ALTER TABLE projects DROP COLUMN wiki_maintainer_member_id;
 DROP TABLE member_sessions;
 DROP TABLE members;
 DROP TABLE agents;

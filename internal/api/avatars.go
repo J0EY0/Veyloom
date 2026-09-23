@@ -12,6 +12,9 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
+
+	"github.com/J0EY0/veyloom/internal/store"
 )
 
 // Avatars are the pictures people pick for their agents. The browser
@@ -52,16 +55,16 @@ func (h *handlers) uploadAvatar(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
-			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("image too large (max %d MB)", MaxAvatarSize>>20))
+			writeCoded(w, http.StatusRequestEntityTooLarge, "avatarTooLarge", store.Params{"mb": strconv.Itoa(MaxAvatarSize >> 20)}, fmt.Sprintf("image too large (max %d MB)", MaxAvatarSize>>20))
 			return
 		}
-		writeError(w, http.StatusBadRequest, "could not read the image")
+		writeCoded(w, http.StatusBadRequest, "avatarUnreadable", nil, "could not read the image")
 		return
 	}
 	mediaType, _, _ := mime.ParseMediaType(http.DetectContentType(data))
 	ext, ok := avatarTypes[mediaType]
 	if !ok {
-		writeError(w, http.StatusUnsupportedMediaType, "an avatar must be a PNG, JPEG or WebP image")
+		writeCoded(w, http.StatusUnsupportedMediaType, "avatarType", nil, "an avatar must be a PNG, JPEG or WebP image")
 		return
 	}
 	sum := sha256.Sum256(data)

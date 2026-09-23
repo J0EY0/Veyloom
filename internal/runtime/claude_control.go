@@ -130,7 +130,7 @@ func (t *claudeTurn) replyError(id, message string) {
 // hub, except in the read-only preset: there the member may read and plan
 // but nothing more, as with the other runtimes, so a request to do more is
 // turned down on the spot, and people are shown what was asked. Questions
-// and plans always reach a person.
+// and plans always reach a person; Veyloom's own tools never need one.
 func (t *claudeTurn) canUseTool(ctx context.Context, req claudeControlRequest) any {
 	input := req.Input
 	if len(input) == 0 || string(input) == "null" {
@@ -141,6 +141,11 @@ func (t *claudeTurn) canUseTool(ctx context.Context, req claudeControlRequest) a
 		return t.answerQuestions(ctx, req.ToolUseID, input)
 	case req.ToolName == claudePlanTool:
 		return t.reviewPlan(ctx, req.ToolUseID, input)
+	case isVeyloomTool(req.ToolName):
+		// Veyloom's own tools, asked about in plan mode: the wiki is not
+		// the project, a read-only member may record what it found, and
+		// the hub decides which changes wait for a person.
+		return claudeAllowed(input, req.ToolUseID)
 	case t.preset == PermissionReadOnly && !req.RequiresUserInteraction:
 		t.notice(t.ctx, NoticeWarning, fmt.Sprintf("Claude Code asked to run %s; the member is read-only, so it was turned down without asking anyone",
 			describeClaudeUse(req.ToolName, input, t.maxEventBytes)))
@@ -154,6 +159,18 @@ func (t *claudeTurn) canUseTool(ctx context.Context, req claudeControlRequest) a
 		return claudeAllowed(input, req.ToolUseID)
 	}
 	return claudeDenied(orDefault(d.Message, "denied by a Veyloom user"), req.ToolUseID)
+}
+
+// isVeyloomTool reports whether a tool name is one of the turn's own tools
+// on Veyloom's MCP server: every turn's or an optional one, which is there
+// only for the turns given it.
+func isVeyloomTool(name string) bool {
+	for _, tool := range append(append(append([]string(nil), AgentToolNames...), MemoryToolNames...), UpkeepToolNames...) {
+		if name == claudeToolName(tool) {
+			return true
+		}
+	}
+	return false
 }
 
 // claudeReadOnlyRefusal is what Claude Code hears when the read-only

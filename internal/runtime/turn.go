@@ -29,6 +29,16 @@ type TurnSpec struct {
 	// tools go through it. The machine sets it as the spec arrives; it is
 	// no part of the spec on the wire. Nil leaves the turn without them.
 	Host TurnHost `json:"-"`
+	// Skills are the skill library's skills the turn is given, the ones
+	// its runtime may load (docs/design.md 5.11). Nil gives none.
+	Skills *SkillSet `json:"skills,omitempty"`
+	// SkillDir is where the machine wrote Skills (see WriteSkills), for the
+	// runtime to load them from. Like Host, the machine sets it.
+	SkillDir string `json:"-"`
+	// ExtraTools names the tools of Veyloom's the turn gets beyond every
+	// turn's: MemoryToolNames while the person uses a memory, and
+	// UpkeepToolNames for a wiki maintainer's upkeep turn.
+	ExtraTools []string `json:"extra_tools,omitempty"`
 }
 
 // Session tells a runtime which conversation a turn belongs to. The hub

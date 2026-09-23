@@ -49,7 +49,7 @@ func (f *fakeAgents) CreateAgent(_ context.Context, t store.NewAgent) (store.Age
 	if !f.machines[t.MachineID] {
 		return store.Agent{}, fmt.Errorf("machine %s: %w", t.MachineID, store.ErrNotFound)
 	}
-	agent := store.Agent{ID: fmt.Sprintf("ag%d", len(f.agents)+1), Name: t.Name, Avatar: t.Avatar, MachineID: t.MachineID, MachineName: t.MachineID, Projects: []string{}, Runtime: t.Runtime, Model: t.Model, RoleCard: t.RoleCard, PermissionPreset: t.PermissionPreset, RuntimeOptions: t.RuntimeOptions}
+	agent := store.Agent{ID: fmt.Sprintf("ag%d", len(f.agents)+1), Name: t.Name, Avatar: t.Avatar, MachineID: t.MachineID, MachineName: t.MachineID, Projects: []string{}, Runtime: t.Runtime, Model: t.Model, RoleCard: t.RoleCard, PermissionPreset: t.PermissionPreset, RuntimeOptions: t.RuntimeOptions, Skills: t.Skills}
 	f.agents[agent.ID] = agent
 	return agent, nil
 }
@@ -62,7 +62,7 @@ func (f *fakeAgents) UpdateAgent(ctx context.Context, id string, t store.NewAgen
 	if projects := f.projectsOf(id); t.MachineID != agent.MachineID && len(projects) > 0 {
 		return store.Agent{}, &store.AgentInUseError{ID: id, Projects: projects}
 	}
-	agent.Name, agent.Avatar, agent.MachineID, agent.Runtime, agent.Model, agent.RoleCard, agent.PermissionPreset = t.Name, t.Avatar, t.MachineID, t.Runtime, t.Model, t.RoleCard, t.PermissionPreset
+	agent.Name, agent.Avatar, agent.MachineID, agent.Runtime, agent.Model, agent.RoleCard, agent.PermissionPreset, agent.Skills = t.Name, t.Avatar, t.MachineID, t.Runtime, t.Model, t.RoleCard, t.PermissionPreset, t.Skills
 	f.agents[id] = agent
 	return agent, nil
 }
@@ -570,5 +570,69 @@ func TestMembers_Session(t *testing.T) {
 		if rec := do(t, handler, method, "/api/v1/members/mb404/session", "", nil); rec.Code != http.StatusNotFound {
 			t.Errorf("%s for an unknown member: status %d, want 404", method, rec.Code)
 		}
+	}
+}
+
+// What an edit keeps is not checked again: a runtime taken off the machine
+// since, or an avatar file gone, stands in the way only of choosing it.
+func TestAgents_EditsCheckWhatTheyChange(t *testing.T) {
+	agents := newFakeAgents(newFakeProjects(), "w1")
+	laptop := hub.MachineInfo{ID: "w1", Name: "laptop", Runtimes: []runtime.Info{{Name: "claude", Status: runtime.StatusReady}}}
+	var created AgentResponse
+	if rec := do(t, NewHandler(Deps{Agents: agents, Machines: stubMachines{laptop}}), http.MethodPost, "/api/v1/agents",
+		`{"name":"Reviewer","machine_id":"w1","runtime":"claude","permission_preset":"read_only"}`, &created); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	// Claude Code is uninstalled from the laptop afterwards.
+	laptop.Runtimes = []runtime.Info{{Name: "claude", Status: runtime.StatusNotInstalled}}
+	handler := NewHandler(Deps{Agents: agents, Machines: stubMachines{laptop}})
+	path := "/api/v1/agents/" + created.Agent.ID
+	if rec := do(t, handler, http.MethodPut, path, `{"name":"Reviewer 2","machine_id":"w1","runtime":"claude","permission_preset":"read_only"}`, nil); rec.Code != http.StatusOK {
+		t.Errorf("a rename keeping the runtime: %d %s", rec.Code, rec.Body)
+	}
+	rec := do(t, handler, http.MethodPut, path, `{"name":"Reviewer 2","machine_id":"w1","runtime":"codex","permission_preset":"read_only"}`, nil)
+	var refused ErrorResponse
+	if json.Unmarshal(rec.Body.Bytes(), &refused); rec.Code != http.StatusBadRequest || refused.Code != "runtimeMissing" || refused.Params["runtime"] != "codex" || refused.Params["machine"] != "laptop" {
+		t.Errorf("choosing a runtime the machine lacks: %d %s", rec.Code, rec.Body)
+	}
+	rec = do(t, handler, http.MethodPut, path, `{"name":"Reviewer 2","machine_id":"w1","runtime":"claude","permission_preset":"read_only","avatar":"0123456789abcdef0123456789abcdef.png"}`, nil)
+	if json.Unmarshal(rec.Body.Bytes(), &refused); rec.Code != http.StatusBadRequest || refused.Code != "avatarMissing" {
+		t.Errorf("choosing an avatar never uploaded: %d %s", rec.Code, rec.Body)
+	}
+}
+
+func TestAgentSkills(t *testing.T) {
+	projects := newFakeProjects()
+	agents := newFakeAgents(projects, "m1")
+	wikis := &fakeWikis{}
+	handler := NewHandler(Deps{Projects: projects, Agents: agents, Wikis: wikis})
+	var created AgentResponse
+	if rec := do(t, handler, http.MethodPost, "/api/v1/agents", `{"name":"Coder","machine_id":"m1","runtime":"codex","permission_preset":"read_only","skills":["go"," go ",""]}`, &created); rec.Code != http.StatusCreated {
+		t.Fatalf("create: %d %s", rec.Code, rec.Body)
+	}
+	if !slices.Equal(created.Agent.Skills, []string{"go"}) {
+		t.Errorf("installed once each: %v", created.Agent.Skills)
+	}
+	id := created.Agent.ID
+	// Absent, the agent keeps its skills; a retired one it has stays.
+	var updated AgentResponse
+	do(t, handler, http.MethodPut, "/api/v1/agents/"+id, `{"name":"Coder","machine_id":"m1","runtime":"codex","permission_preset":"read_only"}`, &updated)
+	if !slices.Equal(updated.Agent.Skills, []string{"go"}) {
+		t.Errorf("kept when absent: %v", updated.Agent.Skills)
+	}
+	wikis.retired = []string{"go"}
+	do(t, handler, http.MethodPut, "/api/v1/agents/"+id, `{"name":"Coder","machine_id":"m1","runtime":"codex","permission_preset":"read_only","skills":["go","docs"]}`, &updated)
+	if !slices.Equal(updated.Agent.Skills, []string{"go", "docs"}) {
+		t.Errorf("a retired skill it had stays: %v", updated.Agent.Skills)
+	}
+	// One newly installed must be in the library.
+	rec := do(t, handler, http.MethodPut, "/api/v1/agents/"+id, `{"name":"Coder","machine_id":"m1","runtime":"codex","permission_preset":"read_only","skills":["nope"]}`, nil)
+	var refused ErrorResponse
+	if json.Unmarshal(rec.Body.Bytes(), &refused); rec.Code != http.StatusBadRequest || refused.Code != "skillUnknown" || refused.Params["name"] != "nope" {
+		t.Errorf("an unknown skill: %d %s", rec.Code, rec.Body)
+	}
+	do(t, handler, http.MethodPut, "/api/v1/agents/"+id, `{"name":"Coder","machine_id":"m1","runtime":"codex","permission_preset":"read_only","skills":[]}`, &updated)
+	if len(updated.Agent.Skills) != 0 {
+		t.Errorf("all taken off: %v", updated.Agent.Skills)
 	}
 }

@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -35,7 +36,9 @@ type Turn struct {
 	// that failed before it had one.
 	SessionID string `json:"session_id,omitempty"`
 	// Runtime is the runtime that ran the turn.
-	Runtime        string     `json:"runtime"`
+	Runtime string `json:"runtime"`
+	// Kind says what the turn was for: the chat, or the wiki's upkeep.
+	Kind           TurnKind   `json:"kind"`
 	Status         TurnStatus `json:"status"`
 	Error          string     `json:"error,omitempty"`
 	ReplyMessageID string     `json:"reply_message_id,omitempty"`
@@ -44,9 +47,12 @@ type Turn struct {
 	Usage runtime.Usage `json:"usage"`
 	// FilesChanged are the files the turn wrote, each once, in the order
 	// first touched; known once it ends.
-	FilesChanged []string   `json:"files_changed,omitempty"`
-	StartedAt    time.Time  `json:"started_at"`
-	EndedAt      *time.Time `json:"ended_at,omitempty"`
+	FilesChanged []string `json:"files_changed,omitempty"`
+	// SkillsUsed are the library's skills the turn used, by name, each
+	// once; known once it ends.
+	SkillsUsed []string   `json:"skills_used,omitempty"`
+	StartedAt  time.Time  `json:"started_at"`
+	EndedAt    *time.Time `json:"ended_at,omitempty"`
 }
 
 // NewTurn is the input to CreateTurn.
@@ -61,7 +67,20 @@ type NewTurn struct {
 	TranscriptPath string
 	// SessionID is the member's session the turn runs in, when it has one.
 	SessionID string
+	// Kind is what the turn is for; empty is TurnChat.
+	Kind TurnKind
 }
+
+// TurnKind says what a turn was for.
+type TurnKind string
+
+const (
+	// TurnChat answers the chat: someone asked the member for something.
+	TurnChat TurnKind = "chat"
+	// TurnUpkeep is the project's wiki maintainer going over what the chat
+	// did (docs/design.md 5.12), in a session of its own.
+	TurnUpkeep TurnKind = "upkeep"
+)
 
 // TurnOutcome is the input to FinishTurn.
 type TurnOutcome struct {
@@ -75,6 +94,8 @@ type TurnOutcome struct {
 	Usage runtime.Usage
 	// FilesChanged are the files the turn wrote.
 	FilesChanged []string
+	// SkillsUsed are the skills it used.
+	SkillsUsed []string
 }
 
 // CreateTurn records a turn that is starting, in status running.
@@ -118,6 +139,7 @@ func (s *Store) CreateTurn(ctx context.Context, t NewTurn) (Turn, error) {
 		Runtime:          t.Runtime,
 		TranscriptPath:   t.TranscriptPath,
 		SessionID:        sessionID,
+		Kind:             string(cmp.Or(t.Kind, TurnChat)),
 	})
 	if err != nil {
 		return Turn{}, mapPGError("create turn", err)
@@ -148,6 +170,7 @@ func (s *Store) FinishTurn(ctx context.Context, id string, out TurnOutcome) (Tur
 		CacheWriteTokens: out.Usage.CacheWriteTokens,
 		OutputTokens:     out.Usage.OutputTokens,
 		FilesChanged:     nonNil(out.FilesChanged),
+		SkillsUsed:       nonNil(out.SkillsUsed),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Turn{}, fmt.Errorf("turn %s: %w", id, ErrNotFound)
@@ -330,12 +353,14 @@ func toTurn(row db.Turn) Turn {
 		MachineID:        uuidString(row.MachineID),
 		SessionID:        uuidString(row.SessionID),
 		Runtime:          row.Runtime,
+		Kind:             TurnKind(row.Kind),
 		Status:           TurnStatus(row.Status),
 		Error:            row.Error,
 		ReplyMessageID:   uuidString(row.ReplyMessageID),
 		TranscriptPath:   row.TranscriptPath,
 		Usage:            usageOf(row.InputTokens, row.CacheReadTokens, row.CacheWriteTokens, row.OutputTokens),
 		FilesChanged:     row.FilesChanged,
+		SkillsUsed:       row.SkillsUsed,
 		StartedAt:        row.StartedAt.Time,
 	}
 	if row.EndedAt.Valid {
@@ -356,4 +381,41 @@ func nonNil(s []string) []string {
 // usageOf is a turn's token columns as one Usage.
 func usageOf(input, cacheRead, cacheWrite, output int64) runtime.Usage {
 	return runtime.Usage{InputTokens: input, CacheReadTokens: cacheRead, CacheWriteTokens: cacheWrite, OutputTokens: output}
+}
+
+// SkillUse is a turn that used a skill, with where it ran.
+type SkillUse struct {
+	TurnID      string     `json:"turn_id"`
+	Status      TurnStatus `json:"status"`
+	Runtime     string     `json:"runtime"`
+	StartedAt   time.Time  `json:"started_at"`
+	EndedAt     *time.Time `json:"ended_at,omitempty"`
+	RoomID      string     `json:"room_id"`
+	ThreadID    string     `json:"thread_id"`
+	TopicNumber int        `json:"topic_number"`
+	MemberName  string     `json:"member_name"`
+	ProjectID   string     `json:"project_id"`
+	ProjectName string     `json:"project_name"`
+}
+
+// ListSkillUses returns the turns that used a skill, newest first.
+func (s *Store) ListSkillUses(ctx context.Context, skill string, limit int) ([]SkillUse, error) {
+	rows, err := s.q.ListSkillUses(ctx, db.ListSkillUsesParams{Skill: skill, Lim: clampLimit(limit)})
+	if err != nil {
+		return nil, fmt.Errorf("list uses of skill %s: %w", skill, err)
+	}
+	out := make([]SkillUse, 0, len(rows))
+	for _, row := range rows {
+		use := SkillUse{
+			TurnID: uuidString(row.ID), Status: TurnStatus(row.Status), Runtime: row.Runtime, StartedAt: row.StartedAt.Time,
+			RoomID: uuidString(row.RoomID), ThreadID: uuidString(row.ThreadID), TopicNumber: int(row.TopicNumber),
+			MemberName: row.MemberName, ProjectID: uuidString(row.ProjectID), ProjectName: row.ProjectName,
+		}
+		if row.EndedAt.Valid {
+			ended := row.EndedAt.Time
+			use.EndedAt = &ended
+		}
+		out = append(out, use)
+	}
+	return out, nil
 }

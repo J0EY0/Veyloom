@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/J0EY0/veyloom/internal/store/db"
 )
@@ -55,6 +56,11 @@ type MemberSession struct {
 	// brief the whole story.
 	RoomSeen   int64            `json:"room_seen"`
 	ThreadSeen map[string]int64 `json:"thread_seen,omitempty"`
+	// WikiSeen is where the project wiki stood when the session was last
+	// shown its catalog (see Reading.Wiki): the next brief lists only the
+	// pages changed since. Nil until the first, and again after a
+	// compaction, so that the next brief lists them all.
+	WikiSeen *time.Time `json:"wiki_seen,omitempty"`
 	// Compactions counts the times the runtime compacted the session.
 	Compactions int              `json:"compactions"`
 	StartedAt   time.Time        `json:"started_at"`
@@ -212,18 +218,35 @@ func (s *Store) ListMemberSessions(ctx context.Context, memberID string) ([]Memb
 	return out, nil
 }
 
-// AdvanceSession moves a session's reading positions forward to where the
-// room stood when the brief of a turn was put together: the room's own, and
-// that of the one topic the turn was in. Positions never move back.
-func (s *Store) AdvanceSession(ctx context.Context, id string, position int64, threadID string) error {
+// Reading is how far a turn's brief took its session, recorded once the
+// session has taken the brief in.
+type Reading struct {
+	// Position is where the room stood when the brief was put together, as
+	// messages.seq; the room's position and that of the topic ThreadID,
+	// the one the turn was in, move up to it.
+	Position int64
+	ThreadID string
+	// Wiki is where the project wiki stood: its newest change the brief
+	// knew of. Zero when the brief showed no wiki, which leaves the
+	// session's position in it as it was.
+	Wiki time.Time
+}
+
+// AdvanceSession moves a session's reading positions forward to where
+// things stood when the brief of a turn was put together. Positions never
+// move back.
+func (s *Store) AdvanceSession(ctx context.Context, id string, r Reading) error {
 	uid, err := parseUUID(id)
 	if err != nil {
 		return err
 	}
-	if _, err := parseUUID(threadID); err != nil {
+	if _, err := parseUUID(r.ThreadID); err != nil {
 		return err
 	}
-	n, err := s.q.AdvanceSession(ctx, db.AdvanceSessionParams{ID: uid, RoomSeen: position, ThreadID: threadID, ThreadSeen: position})
+	n, err := s.q.AdvanceSession(ctx, db.AdvanceSessionParams{
+		ID: uid, RoomSeen: r.Position, ThreadID: r.ThreadID, ThreadSeen: r.Position,
+		WikiSeen: pgtype.Timestamptz{Time: r.Wiki, Valid: !r.Wiki.IsZero()},
+	})
 	if err != nil {
 		return fmt.Errorf("advance session %s: %w", id, err)
 	}
@@ -236,7 +259,8 @@ func (s *Store) AdvanceSession(ctx context.Context, id string, position int64, t
 // NoteSessionCompactions counts compactions the runtime reported. A
 // compaction forgets detail, so what the session had read of each topic is
 // forgotten with it: topics are shown in full again the next time the
-// session is briefed in them. Its place in the room stays.
+// session is briefed in them, and so is the wiki's catalog. Its place in
+// the room stays.
 func (s *Store) NoteSessionCompactions(ctx context.Context, id string, count int) error {
 	if count <= 0 {
 		return nil
@@ -303,7 +327,7 @@ func (s *Store) ResetSession(ctx context.Context, memberID string) error {
 		return fmt.Errorf("reset session of member %s: %w", memberID, err)
 	}
 	if busy {
-		return fmt.Errorf("member %s: %w: a turn is still running", memberID, ErrConflict)
+		return fmt.Errorf("member %s: %w", memberID, stillRunning())
 	}
 	if _, err := q.EndOpenSession(ctx, db.EndOpenSessionParams{MemberID: mid, EndReason: string(SessionManual)}); err != nil {
 		return mapPGError("reset session", err)
@@ -327,6 +351,10 @@ func toMemberSession(row db.MemberSession) MemberSession {
 	// The column is written by this package alone; should it ever hold
 	// something else, the session has simply read no topic.
 	_ = json.Unmarshal(row.ThreadSeen, &out.ThreadSeen)
+	if row.WikiSeen.Valid {
+		seen := row.WikiSeen.Time
+		out.WikiSeen = &seen
+	}
 	if row.EndedAt.Valid {
 		ended := row.EndedAt.Time
 		out.EndedAt = &ended

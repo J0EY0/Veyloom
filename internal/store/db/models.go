@@ -18,6 +18,7 @@ type Agent struct {
 	RoleCard         string
 	PermissionPreset string
 	RuntimeOptions   []byte
+	Skills           []string
 	CreatedAt        pgtype.Timestamptz
 	UpdatedAt        pgtype.Timestamptz
 }
@@ -86,6 +87,7 @@ type MemberSession struct {
 	RoomSeen    int64
 	ThreadSeen  []byte
 	Compactions int32
+	WikiSeen    pgtype.Timestamptz
 	StartedAt   pgtype.Timestamptz
 	EndedAt     pgtype.Timestamptz
 	EndReason   string
@@ -106,11 +108,19 @@ type Message struct {
 }
 
 type Project struct {
-	ID          pgtype.UUID
-	Name        string
-	RepoPath    string
-	Description string
-	CreatedAt   pgtype.Timestamptz
+	ID                     pgtype.UUID
+	Name                   string
+	RepoPath               string
+	Description            string
+	WikiSlug               string
+	WikiMaintainerTrigger  string
+	WikiOfferDeclinedAt    pgtype.Timestamptz
+	WikiSeenSeq            int64
+	WikiExternalBundles    []string
+	CreatedAt              pgtype.Timestamptz
+	WikiMaintainerMemberID pgtype.UUID
+	WikiThreadID           pgtype.UUID
+	WikiOfferMessageID     pgtype.UUID
 }
 
 type Room struct {
@@ -120,6 +130,22 @@ type Room struct {
 	Kind             string
 	LastThreadNumber int32
 	CreatedAt        pgtype.Timestamptz
+}
+
+type SkillTrial struct {
+	ID          pgtype.UUID
+	Skill       string
+	BaseSha     string
+	StartedAt   pgtype.Timestamptz
+	ChangedAt   pgtype.Timestamptz
+	TurnID      pgtype.UUID
+	ChangedBy   string
+	ProjectName string
+	Changes     int32
+	Status      string
+	EndedBy     string
+	EndedAt     pgtype.Timestamptz
+	Reason      string
 }
 
 type Thread struct {
@@ -139,6 +165,7 @@ type Turn struct {
 	MachineID        pgtype.UUID
 	SessionID        pgtype.UUID
 	Runtime          string
+	Kind             string
 	Status           string
 	Error            string
 	ReplyMessageID   pgtype.UUID
@@ -148,6 +175,7 @@ type Turn struct {
 	CacheWriteTokens int64
 	OutputTokens     int64
 	FilesChanged     []string
+	SkillsUsed       []string
 	StartedAt        pgtype.Timestamptz
 	EndedAt          pgtype.Timestamptz
 }
@@ -156,4 +184,11 @@ type User struct {
 	ID        pgtype.UUID
 	Name      string
 	CreatedAt pgtype.Timestamptz
+}
+
+type WikiReview struct {
+	ProjectID    pgtype.UUID
+	TurnID       pgtype.UUID
+	UpkeepTurnID pgtype.UUID
+	ReviewedAt   pgtype.Timestamptz
 }

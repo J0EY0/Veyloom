@@ -38,12 +38,12 @@ type UsersResponse struct {
 func (h *handlers) createUser(w http.ResponseWriter, r *http.Request) {
 	var req CreateUserRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	name, err := requireName("name", req.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -91,12 +91,12 @@ func (h *handlers) renameMe(w http.ResponseWriter, r *http.Request) {
 	}
 	var req RenameRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	name, err := requireName("name", req.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	renamed, err := h.deps.Users.RenameUser(r.Context(), user.ID, name)

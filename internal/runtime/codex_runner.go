@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,7 +134,7 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 	var mcpServer map[string]any
 	var token string
 	if spec.Host != nil && r.cfg.ProxyBinary != "" {
-		ep, err := r.tools.register(spec.Host, nil)
+		ep, err := r.tools.register(spec.Host, spec.ExtraTools, nil)
 		if err != nil {
 			return nil, fmt.Errorf("codex: tool endpoint: %w", err)
 		}
@@ -141,7 +143,8 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 		mcpServer = map[string]any{
 			"command": command,
 			"args":    args,
-			// They only read the turn's own room: nothing to ask about.
+			// Veyloom's own tools: the room tools only read the turn's
+			// room, and the hub decides which wiki changes wait for a person.
 			"default_tools_approval_mode": "approve",
 		}
 	}
@@ -183,6 +186,7 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 		completed: make(chan codexTurnEnd, 1),
 		items:     make(map[string]codexItem),
 		mcpFailed: make(map[string]bool),
+		tokens:    make(map[string]*codexThreadTokens),
 	}
 	go t.run(spec)
 	return t, nil
@@ -238,13 +242,13 @@ type codexTurn struct {
 	text      strings.Builder
 	final     string
 	malformed int
-	// The app-server reports the thread's running token total after each
-	// model response. base is that total before this turn, found from the
-	// first report (its total less its own response); total is the latest.
-	// The turn spent the difference, however many responses it took.
-	tokensBase  codexTokens
-	tokensTotal codexTokens
-	tokensSeen  bool
+	// thread is the turn's thread. Codex runs the subagents it starts in
+	// threads of their own on the same app-server, which tells of their
+	// items and turns as well: what they do is part of the turn, but what
+	// they say is not its reply, and their turns ending is not its end.
+	thread string
+	// tokens is what each thread's token reports came to.
+	tokens map[string]*codexThreadTokens
 	// reviewing counts Codex's automatic reviews under way; the warning it
 	// sends a person during one is that review's reasoning, held in
 	// reviewNote until the review completes. mcpFailed remembers the MCP
@@ -287,6 +291,15 @@ func (t *codexTurn) converse(spec TurnSpec) (Result, error) {
 	}
 	if err := t.write(codexMessage{Method: "initialized"}); err != nil {
 		return Result{}, err
+	}
+	// The skill library's skills, as one more folder of skills for this
+	// app-server; the person's own configuration is left as it is. A Codex
+	// that cannot take them runs the turn without.
+	if spec.SkillDir != "" {
+		roots := map[string]any{"extraRoots": []string{filepath.Join(spec.SkillDir, "skills")}}
+		if _, err := t.call(setupCtx, "skills/extraRoots/set", roots); err != nil {
+			t.emit(t.ctx, Event{Kind: EventNotice, Level: NoticeWarning, Text: "Codex did not take the skill library's skills: " + err.Error()})
+		}
 	}
 
 	policy := t.policy(spec)
@@ -337,6 +350,9 @@ func (t *codexTurn) converse(spec TurnSpec) (Result, error) {
 	if err := json.Unmarshal(raw, &thread); err != nil || thread.Thread.ID == "" {
 		return Result{}, fmt.Errorf("codex: %s returned no thread id: %s", method, raw)
 	}
+	t.mu.Lock()
+	t.thread = thread.Thread.ID
+	t.mu.Unlock()
 	t.emit(t.ctx, Event{Kind: EventSession, SessionRef: thread.Thread.ID})
 	status := "session started"
 	if thread.Model != "" {
@@ -534,6 +550,23 @@ type codexItemView struct {
 	Changes          []struct {
 		Path string `json:"path"`
 	} `json:"changes"`
+	// A subagent's coming and going: started, interacted, completed.
+	Kind      string `json:"kind"`
+	AgentPath string `json:"agentPath"`
+}
+
+// ours reports whether a notification is about the turn's own thread
+// rather than a subagent's. One that names no thread is taken as ours.
+func (t *codexTurn) ours(params json.RawMessage) bool {
+	var p struct {
+		ThreadID string `json:"threadId"`
+	}
+	if json.Unmarshal(params, &p) != nil || p.ThreadID == "" {
+		return true
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.thread == "" || p.ThreadID == t.thread
 }
 
 // notification turns a server notification into events and state.
@@ -543,7 +576,7 @@ func (t *codexTurn) notification(msg codexMessage) {
 		var p struct {
 			Delta string `json:"delta"`
 		}
-		if json.Unmarshal(msg.Params, &p) == nil && p.Delta != "" {
+		if json.Unmarshal(msg.Params, &p) == nil && p.Delta != "" && t.ours(msg.Params) {
 			t.mu.Lock()
 			t.text.WriteString(p.Delta)
 			t.mu.Unlock()
@@ -551,14 +584,15 @@ func (t *codexTurn) notification(msg codexMessage) {
 		}
 	case "item/started":
 		if item, ok := t.item(msg.Params); ok {
-			t.itemStarted(item)
+			t.itemStarted(item, t.ours(msg.Params))
 		}
 	case "item/completed":
 		if item, ok := t.item(msg.Params); ok {
-			t.itemCompleted(item)
+			t.itemCompleted(item, t.ours(msg.Params))
 		}
 	case "thread/tokenUsage/updated":
 		var p struct {
+			ThreadID   string `json:"threadId"`
 			TokenUsage struct {
 				Total *codexTokens `json:"total"`
 				Last  *codexTokens `json:"last"`
@@ -568,20 +602,29 @@ func (t *codexTurn) notification(msg codexMessage) {
 			break
 		}
 		t.mu.Lock()
+		th := t.tokens[p.ThreadID]
+		if th == nil {
+			th = &codexThreadTokens{}
+			t.tokens[p.ThreadID] = th
+		}
 		switch total, last := p.TokenUsage.Total, p.TokenUsage.Last; {
 		case total != nil:
-			if !t.tokensSeen && last != nil {
-				t.tokensBase = total.minus(*last)
-			} else if !t.tokensSeen {
-				t.tokensBase = *total
+			if !th.seen && last != nil {
+				th.base = total.minus(*last)
+			} else if !th.seen {
+				th.base = *total
 			}
-			t.tokensTotal, t.tokensSeen = *total, true
+			th.total, th.seen = *total, true
 		case last != nil:
 			// Without a running total, add up each response instead.
-			t.tokensTotal, t.tokensSeen = t.tokensTotal.plus(*last), true
+			th.total, th.seen = th.total.plus(*last), true
 		}
 		t.mu.Unlock()
 	case "turn/completed":
+		if !t.ours(msg.Params) {
+			// A subagent's turn: the turn goes on.
+			break
+		}
 		var p struct {
 			Turn struct {
 				Status string `json:"status"`
@@ -709,10 +752,19 @@ func (t *codexTurn) item(params json.RawMessage) (codexItemView, bool) {
 	return p.Item, true
 }
 
-func (t *codexTurn) itemStarted(item codexItemView) {
+// itemStarted and itemCompleted take the items of the turn's own thread,
+// ours, and of its subagents'. A subagent's compaction is none of the
+// session's, and what it says is none of the reply.
+func (t *codexTurn) itemStarted(item codexItemView, ours bool) {
 	switch item.Type {
 	case "contextCompaction":
-		t.emit(t.ctx, Event{Kind: EventCompaction, Phase: CompactionStart})
+		if ours {
+			t.emit(t.ctx, Event{Kind: EventCompaction, Phase: CompactionStart})
+		}
+	case "subAgentActivity":
+		if ours && item.Kind == "started" {
+			t.notice(t.ctx, NoticeInfo, "Codex started a subagent, "+path.Base(item.AgentPath)+"; its tool calls are among this turn's")
+		}
 	case "commandExecution":
 		t.remember(item.ID, codexItem{tool: "commandExecution"})
 		t.emit(t.ctx, Event{Kind: EventToolCall, Tool: "commandExecution", Input: truncate(item.Command, t.cfg.MaxEventBytes)})
@@ -729,14 +781,18 @@ func (t *codexTurn) itemStarted(item codexItemView) {
 	}
 }
 
-func (t *codexTurn) itemCompleted(item codexItemView) {
+func (t *codexTurn) itemCompleted(item codexItemView, ours bool) {
 	switch item.Type {
 	case "contextCompaction":
-		t.emit(t.ctx, Event{Kind: EventCompaction, Phase: CompactionEnd})
+		if ours {
+			t.emit(t.ctx, Event{Kind: EventCompaction, Phase: CompactionEnd})
+		}
 	case "agentMessage":
-		t.mu.Lock()
-		t.final = item.Text
-		t.mu.Unlock()
+		if ours {
+			t.mu.Lock()
+			t.final = item.Text
+			t.mu.Unlock()
+		}
 	case "commandExecution":
 		text := item.AggregatedOutput
 		switch {
@@ -1086,12 +1142,26 @@ func (t *codexTurn) decide(tool string, input map[string]any) string {
 	return "accept"
 }
 
-// usage is what the turn has spent so far: the thread's latest total less
-// what it stood at before the turn.
+// usage is what the turn has spent so far: in each thread, the turn's own
+// and its subagents', the latest total less what it stood at before.
 func (t *codexTurn) usage() Usage {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	return t.tokensTotal.minus(t.tokensBase).usage()
+	var spent codexTokens
+	for _, th := range t.tokens {
+		spent = spent.plus(th.total.minus(th.base))
+	}
+	return spent.usage()
+}
+
+// codexThreadTokens is what one thread's token reports come to. The
+// app-server reports a thread's running total after each model response:
+// base is that total before this turn, found from the first report (its
+// total less its own response), and total is the latest. The thread spent
+// the difference, however many responses it took.
+type codexThreadTokens struct {
+	base, total codexTokens
+	seen        bool
 }
 
 // codexTokens is one token breakdown from the app-server. Following OpenAI,

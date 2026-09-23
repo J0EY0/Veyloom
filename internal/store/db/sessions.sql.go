@@ -16,25 +16,29 @@ UPDATE member_sessions SET
     room_seen   = GREATEST(room_seen, $1::bigint),
     thread_seen = thread_seen || jsonb_build_object(
         $2::text,
-        GREATEST(coalesce((thread_seen ->> $2::text)::bigint, 0), $3::bigint))
-WHERE id = $4
+        GREATEST(coalesce((thread_seen ->> $2::text)::bigint, 0), $3::bigint)),
+    wiki_seen   = GREATEST(wiki_seen, $4::timestamptz)
+WHERE id = $5
 `
 
 type AdvanceSessionParams struct {
 	RoomSeen   int64
 	ThreadID   string
 	ThreadSeen int64
+	WikiSeen   pgtype.Timestamptz
 	ID         pgtype.UUID
 }
 
 // Moves a session's reading positions forward after a turn that took its
-// brief in: the room's, and the one topic's it was briefed in. Positions
-// never move back.
+// brief in: the room's, the one topic's it was briefed in, and the project
+// wiki's when the brief showed it (NULL leaves it). Positions never move
+// back.
 func (q *Queries) AdvanceSession(ctx context.Context, arg AdvanceSessionParams) (int64, error) {
 	result, err := q.db.Exec(ctx, advanceSession,
 		arg.RoomSeen,
 		arg.ThreadID,
 		arg.ThreadSeen,
+		arg.WikiSeen,
 		arg.ID,
 	)
 	if err != nil {
@@ -58,7 +62,7 @@ func (q *Queries) CountSessionTurns(ctx context.Context, sessionID pgtype.UUID) 
 const createSession = `-- name: CreateSession :one
 INSERT INTO member_sessions (id, member_id, runtime, machine_id, work_dir, session_ref)
 VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, member_id, runtime, machine_id, work_dir, session_ref, room_seen, thread_seen, compactions, started_at, ended_at, end_reason
+RETURNING id, member_id, runtime, machine_id, work_dir, session_ref, room_seen, thread_seen, compactions, wiki_seen, started_at, ended_at, end_reason
 `
 
 type CreateSessionParams struct {
@@ -92,6 +96,7 @@ func (q *Queries) CreateSession(ctx context.Context, arg CreateSessionParams) (M
 		&i.RoomSeen,
 		&i.ThreadSeen,
 		&i.Compactions,
+		&i.WikiSeen,
 		&i.StartedAt,
 		&i.EndedAt,
 		&i.EndReason,
@@ -119,7 +124,7 @@ func (q *Queries) EndOpenSession(ctx context.Context, arg EndOpenSessionParams) 
 }
 
 const getOpenSession = `-- name: GetOpenSession :one
-SELECT id, member_id, runtime, machine_id, work_dir, session_ref, room_seen, thread_seen, compactions, started_at, ended_at, end_reason FROM member_sessions WHERE member_id = $1 AND ended_at IS NULL
+SELECT id, member_id, runtime, machine_id, work_dir, session_ref, room_seen, thread_seen, compactions, wiki_seen, started_at, ended_at, end_reason FROM member_sessions WHERE member_id = $1 AND ended_at IS NULL
 `
 
 // The session a member's next turn resumes; no row when it has none.
@@ -136,6 +141,7 @@ func (q *Queries) GetOpenSession(ctx context.Context, memberID pgtype.UUID) (Mem
 		&i.RoomSeen,
 		&i.ThreadSeen,
 		&i.Compactions,
+		&i.WikiSeen,
 		&i.StartedAt,
 		&i.EndedAt,
 		&i.EndReason,
@@ -144,7 +150,7 @@ func (q *Queries) GetOpenSession(ctx context.Context, memberID pgtype.UUID) (Mem
 }
 
 const getSession = `-- name: GetSession :one
-SELECT id, member_id, runtime, machine_id, work_dir, session_ref, room_seen, thread_seen, compactions, started_at, ended_at, end_reason FROM member_sessions WHERE id = $1
+SELECT id, member_id, runtime, machine_id, work_dir, session_ref, room_seen, thread_seen, compactions, wiki_seen, started_at, ended_at, end_reason FROM member_sessions WHERE id = $1
 `
 
 func (q *Queries) GetSession(ctx context.Context, id pgtype.UUID) (MemberSession, error) {
@@ -160,6 +166,7 @@ func (q *Queries) GetSession(ctx context.Context, id pgtype.UUID) (MemberSession
 		&i.RoomSeen,
 		&i.ThreadSeen,
 		&i.Compactions,
+		&i.WikiSeen,
 		&i.StartedAt,
 		&i.EndedAt,
 		&i.EndReason,
@@ -168,7 +175,7 @@ func (q *Queries) GetSession(ctx context.Context, id pgtype.UUID) (MemberSession
 }
 
 const listMemberSessions = `-- name: ListMemberSessions :many
-SELECT id, member_id, runtime, machine_id, work_dir, session_ref, room_seen, thread_seen, compactions, started_at, ended_at, end_reason FROM member_sessions WHERE member_id = $1 ORDER BY started_at DESC, id
+SELECT id, member_id, runtime, machine_id, work_dir, session_ref, room_seen, thread_seen, compactions, wiki_seen, started_at, ended_at, end_reason FROM member_sessions WHERE member_id = $1 ORDER BY started_at DESC, id
 `
 
 // Every session a member has had, newest first.
@@ -191,6 +198,7 @@ func (q *Queries) ListMemberSessions(ctx context.Context, memberID pgtype.UUID) 
 			&i.RoomSeen,
 			&i.ThreadSeen,
 			&i.Compactions,
+			&i.WikiSeen,
 			&i.StartedAt,
 			&i.EndedAt,
 			&i.EndReason,
@@ -219,7 +227,8 @@ func (q *Queries) MemberHasRunningTurn(ctx context.Context, memberID pgtype.UUID
 const noteSessionCompactions = `-- name: NoteSessionCompactions :execrows
 UPDATE member_sessions SET
     compactions = compactions + $1::int,
-    thread_seen = '{}'::jsonb
+    thread_seen = '{}'::jsonb,
+    wiki_seen   = NULL
 WHERE id = $2
 `
 
@@ -229,7 +238,8 @@ type NoteSessionCompactionsParams struct {
 }
 
 // Counts compactions the runtime reported and forgets what the session had
-// read of each topic, as the session itself just did with the detail.
+// read of each topic and of the wiki's catalog, as the session itself just
+// did with the detail.
 func (q *Queries) NoteSessionCompactions(ctx context.Context, arg NoteSessionCompactionsParams) (int64, error) {
 	result, err := q.db.Exec(ctx, noteSessionCompactions, arg.Count, arg.ID)
 	if err != nil {

@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -50,10 +52,24 @@ func (m *TurnManager) OnRoomQuery(conn protocol.Conn, q protocol.RoomQuery) {
 		ctx, cancel := context.WithTimeout(context.Background(), m.storeTimeout)
 		defer cancel()
 		res := protocol.RoomResult{TurnID: q.TurnID, QueryID: q.QueryID}
-		if at == nil {
-			res.Error = "the turn is over"
-		} else if text, err := answerRoomQuery(ctx, m.store, at.thread.RoomID, q.Query); err != nil {
-			res.Error = err.Error()
+		var text string
+		var err error
+		switch {
+		case at == nil:
+			err = errors.New("the turn is over")
+		case slices.Contains(runtime.WikiToolNames, q.Query.Tool):
+			text, err = m.answerWiki(ctx, at, q.Query)
+		case slices.Contains(runtime.MemoryToolNames, q.Query.Tool):
+			text, err = m.answerMemory(ctx, at, q.Query)
+		case q.Query.Tool == runtime.RoomToolReadTurn:
+			text, err = m.answerReadTurn(ctx, at, q.Query)
+		case slices.Contains(runtime.UpkeepToolNames, q.Query.Tool):
+			text, err = m.answerUpkeep(ctx, at, q.Query)
+		default:
+			text, err = answerRoomQuery(ctx, m.store, at.thread.RoomID, m.attachmentDir, q.Query)
+		}
+		if err != nil {
+			res.Error = store.Reason(err)
 		} else {
 			res.Text = text
 		}
@@ -62,13 +78,14 @@ func (m *TurnManager) OnRoomQuery(conn protocol.Conn, q protocol.RoomQuery) {
 }
 
 // answerRoomQuery reads what a room tool asked for and renders it as text.
-func answerRoomQuery(ctx context.Context, st roomStore, roomID string, q runtime.RoomQuery) (string, error) {
+// attachmentDir is where the files people sent are, for the agent to open.
+func answerRoomQuery(ctx context.Context, st roomStore, roomID, attachmentDir string, q runtime.RoomQuery) (string, error) {
 	limit := q.Limit
 	if limit <= 0 {
 		limit = roomPageDefault
 	}
 	limit = min(limit, roomPageMax)
-	r := &roomReader{store: st, names: newNameResolver(st), roomID: roomID}
+	r := &roomReader{store: st, names: newNameResolver(st), roomID: roomID, attachmentDir: attachmentDir}
 	switch q.Tool {
 	case runtime.RoomToolListTopics:
 		return r.listTopics(ctx, q.Before, limit)
@@ -85,10 +102,12 @@ func answerRoomQuery(ctx context.Context, st roomStore, roomID string, q runtime
 
 // roomReader renders one answer.
 type roomReader struct {
-	store  roomStore
-	names  *nameResolver
-	roomID string
-	sb     strings.Builder
+	// attachmentDir is where the files people sent are kept.
+	attachmentDir string
+	store         roomStore
+	names         *nameResolver
+	roomID        string
+	sb            strings.Builder
 }
 
 func (r *roomReader) listTopics(ctx context.Context, before int64, limit int) (string, error) {
@@ -137,32 +156,42 @@ func (r *roomReader) readTopic(ctx context.Context, number int, before int64, li
 	if err != nil {
 		return "", err
 	}
-	// What each agent turn in the topic changed, said after its last word.
+	// Each agent turn in the topic, named after its last word with the
+	// files it changed, for read_turn to tell the rest.
 	turns, err := r.store.ListThreadTurns(ctx, thread.ID)
 	if err != nil {
 		return "", err
 	}
-	files := make(map[string][]string, len(turns))
+	byID := make(map[string]store.Turn, len(turns))
 	for _, turn := range turns {
-		if len(turn.FilesChanged) > 0 {
-			files[turn.ID] = turn.FilesChanged
-		}
+		byID[turn.ID] = turn
 	}
 
 	fmt.Fprintf(&r.sb, "Topic #%d %q, oldest first:\n", number, excerpt(topicTitle(root), titleExcerpt))
 	shown := replies
 	if len(replies) < limit {
-		// The page reaches back to the start of the topic: the root heads it.
+		// The page reaches back to the start of the topic: the root heads
+		// it, after the question in the room it answers if an agent's reply
+		// opened the topic.
+		if opened, ok := byID[root.TurnID]; ok && opened.TriggerMessageID != "" {
+			if asked, err := r.store.GetMessage(ctx, opened.TriggerMessageID); err == nil && asked.ThreadID == "" {
+				r.message(ctx, asked, "(asked in the room) ")
+			}
+		}
 		shown = append([]store.Message{root}, replies...)
 	} else {
 		fmt.Fprintf(&r.sb, "(earlier ones: %s with topic=%d before=%d)\n", runtime.RoomToolReadTopic, number, replies[0].Seq)
 	}
 	for i, msg := range shown {
 		r.message(ctx, msg, "")
-		// A turn's files come after the last message of the turn on the page.
-		last := i == len(shown)-1 || shown[i+1].TurnID != msg.TurnID
-		if changed := files[msg.TurnID]; msg.TurnID != "" && last && len(changed) > 0 {
-			fmt.Fprintf(&r.sb, "     (this turn changed: %s)\n", strings.Join(changed, ", "))
+		turn, ok := byID[msg.TurnID]
+		if !ok || (i < len(shown)-1 && shown[i+1].TurnID == msg.TurnID) {
+			continue
+		}
+		if len(turn.FilesChanged) > 0 {
+			fmt.Fprintf(&r.sb, "     (turn %s; it changed: %s)\n", turn.ID, strings.Join(turn.FilesChanged, ", "))
+		} else {
+			fmt.Fprintf(&r.sb, "     (turn %s)\n", turn.ID)
 		}
 	}
 	return r.sb.String(), nil
@@ -250,7 +279,8 @@ func (r *roomReader) message(ctx context.Context, m store.Message, tag string) {
 	}
 	fmt.Fprintf(&r.sb, "%s%s [%s] %s\n", tag, stamp(m.CreatedAt), r.names.of(ctx, m), body)
 	for _, a := range m.Attachments {
-		fmt.Fprintf(&r.sb, "     (attached %s, %s, %d bytes)\n", a.Filename, a.MediaType, a.Size)
+		// The id keeps it in the wiki (write_wiki's files); the path opens it.
+		fmt.Fprintf(&r.sb, "     (attached %s, %s, %d bytes; file %s at %s)\n", a.Filename, a.MediaType, a.Size, a.ID, filepath.Join(r.attachmentDir, filepath.FromSlash(a.Path)))
 	}
 }
 

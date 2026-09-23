@@ -45,6 +45,95 @@ func (q *Queries) GetThreadByRoot(ctx context.Context, rootMessageID pgtype.UUID
 	return i, err
 }
 
+const listTopicsByNumber = `-- name: ListTopicsByNumber :many
+SELECT th.id AS thread_id, th.room_id, th.number, coalesce(root.body, '')::text AS root_body
+FROM threads th
+LEFT JOIN messages root ON root.id = th.root_message_id
+WHERE th.room_id = $1 AND th.number = ANY($2::integer[])
+`
+
+type ListTopicsByNumberParams struct {
+	RoomID  pgtype.UUID
+	Numbers []int32
+}
+
+type ListTopicsByNumberRow struct {
+	ThreadID pgtype.UUID
+	RoomID   pgtype.UUID
+	Number   int32
+	RootBody string
+}
+
+// Some topics of a room, by number, with each one's first message.
+func (q *Queries) ListTopicsByNumber(ctx context.Context, arg ListTopicsByNumberParams) ([]ListTopicsByNumberRow, error) {
+	rows, err := q.db.Query(ctx, listTopicsByNumber, arg.RoomID, arg.Numbers)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTopicsByNumberRow
+	for rows.Next() {
+		var i ListTopicsByNumberRow
+		if err := rows.Scan(
+			&i.ThreadID,
+			&i.RoomID,
+			&i.Number,
+			&i.RootBody,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listTurnTopics = `-- name: ListTurnTopics :many
+SELECT t.id AS turn_id, th.id AS thread_id, th.room_id, th.number, coalesce(root.body, '')::text AS root_body
+FROM turns t
+JOIN threads th ON th.id = t.thread_id
+LEFT JOIN messages root ON root.id = th.root_message_id
+WHERE t.id = ANY($1::uuid[])
+`
+
+type ListTurnTopicsRow struct {
+	TurnID   pgtype.UUID
+	ThreadID pgtype.UUID
+	RoomID   pgtype.UUID
+	Number   int32
+	RootBody string
+}
+
+// The topics some turns ran in, by turn, with each topic's first message:
+// where the wiki pages those turns wrote came from (design.md 5.17).
+func (q *Queries) ListTurnTopics(ctx context.Context, ids []pgtype.UUID) ([]ListTurnTopicsRow, error) {
+	rows, err := q.db.Query(ctx, listTurnTopics, ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListTurnTopicsRow
+	for rows.Next() {
+		var i ListTurnTopicsRow
+		if err := rows.Scan(
+			&i.TurnID,
+			&i.ThreadID,
+			&i.RoomID,
+			&i.Number,
+			&i.RootBody,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const upsertThread = `-- name: UpsertThread :one
 WITH next AS (
     UPDATE rooms SET last_thread_number = last_thread_number + 1

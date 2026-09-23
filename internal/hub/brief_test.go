@@ -26,6 +26,7 @@ type fakeBriefStore struct {
 	topicTotal int
 	replies    []store.Message
 	replyTotal int
+	turns      []store.Turn
 
 	asked struct {
 		room, topics, thread store.NewsQuery
@@ -90,6 +91,10 @@ func (f *fakeBriefStore) TopicNews(_ context.Context, q store.NewsQuery, except 
 func (f *fakeBriefStore) ThreadNews(_ context.Context, _ string, q store.NewsQuery) ([]store.Message, int, error) {
 	f.asked.thread = q
 	return f.replies, max(f.replyTotal, len(f.replies)), nil
+}
+
+func (f *fakeBriefStore) ListThreadTurns(context.Context, string) ([]store.Turn, error) {
+	return f.turns, nil
 }
 
 func user(id, body string) store.Message {
@@ -265,6 +270,63 @@ func TestBrief_AContinuedSessionGetsOnlyWhatIsNew(t *testing.T) {
 	if q := st.asked.room; q.After != 60 {
 		t.Errorf("the room is still read from where the session left it: asked as %+v", q)
 	}
+}
+
+// A topic an agent's reply opened starts, when told in full, from the
+// question in the room the reply answered: the topic says little without
+// it, and after a compaction the room is not told again.
+func TestBrief_ATopicToldInFullStartsFromItsQuestion(t *testing.T) {
+	st, in := newBriefRoom()
+	// Claude's reply m1 opened #7, answering alice's m0 in the room.
+	question := user("m0", "@Claude remember the word saffron")
+	root := agent("m1", "a1", "ok")
+	root.TurnID = "turn1"
+	st.messages["m0"], st.messages["m1"] = question, root
+	st.turns = []store.Turn{{ID: "turn1", TriggerMessageID: "m0"}}
+	ask := user("m2", "@Claude which word?")
+	st.replies = []store.Message{ask}
+	in.Triggers = []store.Message{ask}
+	text := build(t, st, in).Prompt
+	wantInOrder(t, text, "in full (oldest first):\n", "   (asked in the room) [alice] @Claude remember the word saffron\n", "   [Claude] ok\n", ">> [alice] @Claude which word?\n")
+
+	// The room part of the same brief shows it: once is enough.
+	st.roomNews = []store.RoomNewsItem{{Message: question}}
+	text = build(t, st, in).Prompt
+	if n := strings.Count(text, "remember the word saffron"); n != 1 {
+		t.Errorf("the question should be shown once, not %d times:\n%s", n, text)
+	}
+
+	// A session that has been in the topic is told what is new only.
+	st.roomNews = nil
+	in.Session = store.MemberSession{ID: "s1", RoomSeen: 60, ThreadSeen: map[string]int64{"t7": 55}}
+	if text := build(t, st, in).Prompt; strings.Contains(text, "saffron") {
+		t.Errorf("a continued topic should not tell the question again:\n%s", text)
+	}
+}
+
+func TestBrief_SaysWhoIsAtWork(t *testing.T) {
+	st, in := newBriefRoom()
+	now := time.Date(2026, 9, 23, 10, 0, 0, 0, time.UTC)
+	files := []string{"a.go", "b.go", "c.go", "d.go", "e.go", "f.go", "g.go", "h.go", "i.go", "j.go"}
+	in.Busy = []busyMember{
+		{Name: "Codex", Topic: 12, Since: now.Add(-90 * time.Minute), Files: files},
+		{Name: "Keeper", Topic: 3, Since: now.Add(-4 * time.Minute), Upkeep: true, Waiting: []string{"allow running `make test`"}},
+		{Name: "Pi", Topic: 9, Since: now.Add(-20 * time.Second)},
+	}
+	b := newBriefBuilder(st, briefLimits{Thread: 40, Room: 30, Topics: 10}, "")
+	b.now = func() time.Time { return now }
+	got, err := b.Build(context.Background(), in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantInOrder(t, got.Prompt,
+		"- Codex: You implement what was designed.\n",
+		"\nAt work right now:\n",
+		"- Codex, in topic #12, for 1 h 30 min; has changed a.go, b.go, c.go, d.go, e.go, f.go, g.go, h.go and 2 more\n",
+		"- Keeper is tidying the wiki, for 4 min; waits for a person to allow running `make test`\n",
+		"- Pi, in topic #9, started just now\n",
+		"You are shown what is new",
+	)
 }
 
 func TestBrief_NothingNewInTheTopic(t *testing.T) {

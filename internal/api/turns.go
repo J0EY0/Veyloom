@@ -112,7 +112,7 @@ func (h *handlers) cancelTurn(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.deps.Chat.CancelTurn(r.Context(), id); err != nil {
 		if errors.Is(err, hub.ErrUnknownTurn) {
-			writeError(w, http.StatusConflict, "turn is not running")
+			writeCoded(w, http.StatusConflict, "turnNotRunning", nil, "turn is not running")
 			return
 		}
 		h.writeStoreError(w, r, err)
@@ -133,7 +133,7 @@ func (h *handlers) turnTranscript(w http.ResponseWriter, r *http.Request) {
 	path := turn.TranscriptPath
 	if path == "" {
 		if h.deps.TranscriptDir == "" {
-			writeError(w, http.StatusNotFound, "transcript not available")
+			writeCoded(w, http.StatusNotFound, "transcriptGone", nil, "transcript not available")
 			return
 		}
 		path = filepath.Join(h.deps.TranscriptDir, turn.ID+".jsonl")
@@ -141,7 +141,7 @@ func (h *handlers) turnTranscript(w http.ResponseWriter, r *http.Request) {
 	file, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			writeError(w, http.StatusNotFound, "transcript not available")
+			writeCoded(w, http.StatusNotFound, "transcriptGone", nil, "transcript not available")
 			return
 		}
 		h.deps.Logger.Error("open transcript", "turn", turn.ID, "err", err)

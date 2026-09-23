@@ -19,3 +19,19 @@ RETURNING *;
 
 -- name: GetThread :one
 SELECT * FROM threads WHERE id = $1;
+
+-- name: ListTurnTopics :many
+-- The topics some turns ran in, by turn, with each topic's first message:
+-- where the wiki pages those turns wrote came from (design.md 5.17).
+SELECT t.id AS turn_id, th.id AS thread_id, th.room_id, th.number, coalesce(root.body, '')::text AS root_body
+FROM turns t
+JOIN threads th ON th.id = t.thread_id
+LEFT JOIN messages root ON root.id = th.root_message_id
+WHERE t.id = ANY(sqlc.arg(ids)::uuid[]);
+
+-- name: ListTopicsByNumber :many
+-- Some topics of a room, by number, with each one's first message.
+SELECT th.id AS thread_id, th.room_id, th.number, coalesce(root.body, '')::text AS root_body
+FROM threads th
+LEFT JOIN messages root ON root.id = th.root_message_id
+WHERE th.room_id = sqlc.arg(room_id) AND th.number = ANY(sqlc.arg(numbers)::integer[]);

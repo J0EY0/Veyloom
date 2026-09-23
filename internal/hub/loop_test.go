@@ -33,8 +33,9 @@ func newLoop(t *testing.T) *loop {
 	return newLoopWith(t, Config{})
 }
 
-// newLoopWith is newLoop with hub settings a test wants to pin.
-func newLoopWith(t *testing.T, cfg Config) *loop {
+// newLoopWith is newLoop with hub settings a test wants to pin, and hub
+// options such as a clock.
+func newLoopWith(t *testing.T, cfg Config, opts ...Option) *loop {
 	t.Helper()
 	s := storetest.New(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -42,8 +43,8 @@ func newLoopWith(t *testing.T, cfg Config) *loop {
 
 	cfg.TranscriptDir = t.TempDir()
 	cfg.HeartbeatInterval = time.Hour
-	h := New(s, cfg)
-	w := machine.New(machine.Config{Name: "laptop"}, machine.NewDiscovery(nil, time.Second), &machine.MemoryIdentity{}, runtime.BuiltinRunners())
+	h := New(s, cfg, opts...)
+	w := machine.New(machine.Config{Name: "laptop", ToolDir: t.TempDir()}, machine.NewDiscovery(nil, time.Second), &machine.MemoryIdentity{}, runtime.BuiltinRunners())
 	hubEnd, machineEnd := protocol.Pipe()
 	go h.Serve(ctx, hubEnd)
 	go w.Run(ctx, machineEnd)
@@ -982,16 +983,83 @@ func TestLoop_AgentReadsAnotherTopicWithItsRoomTools(t *testing.T) {
 	answer := l.root(l.topic(asked)).Body
 	for _, want := range []string{
 		`Topic #1 "Tokens are done.", oldest first:`,
+		"(asked in the room) ", "[alice] @Worker do the tokens",
 		"[Worker] Tokens are done.",
-		"(this turn changed: auth/token.go, auth/token_test.go)",
+		"(turn " + turns[0].ID + "; it changed: auth/token.go, auth/token_test.go)",
 	} {
 		if !strings.Contains(answer, want) {
 			t.Errorf("Reader's answer lacks %q:\n%s", want, answer)
 		}
 	}
 	// Every brief says the tools are there.
-	if prompt := promptOf(t, l.turns()[0]); !strings.Contains(prompt, "use your veyloom tools: list_topics, read_topic, read_room, search_messages") {
+	if prompt := promptOf(t, l.turns()[0]); !strings.Contains(prompt, "use your veyloom tools: list_topics, read_topic, read_turn, read_room, search_messages") {
 		t.Errorf("the brief should say how to read more:\n%s", prompt)
+	}
+}
+
+// A member reads what another member did in a turn, which its reply leaves
+// out, with read_turn: every chat turn has it, for its own chat's turns.
+func TestLoop_MemberReadsATurnOfItsChat(t *testing.T) {
+	l := newLoop(t)
+	worker := l.member("Worker", map[string]any{"changes": []any{"auth/token.go"}, "reply": "Tokens are done."})
+	l.say("@Worker do the tokens", "", worker)
+	turns := l.waitTurns(1, store.TurnDone, "Worker's turn")
+
+	reader := l.member("Reader", map[string]any{"tool_calls": []any{
+		map[string]any{"tool": runtime.RoomToolReadTurn, "args": map[string]any{"turn": turns[0].ID}},
+	}})
+	asked := l.say("@Reader what did Worker do?", "", reader)
+	l.waitTurns(2, store.TurnDone, "Reader's turn")
+	answer := l.root(l.topic(asked)).Body
+	for _, want := range []string{
+		"Turn " + turns[0].ID + " of Worker (fake) in topic #1",
+		"Files it changed: auth/token.go",
+		"What it was asked, by alice", "@Worker do the tokens",
+		"What happened:\nCalled write_file auth/token.go", "Said: Tokens are done.",
+	} {
+		if !strings.Contains(answer, want) {
+			t.Errorf("Reader's answer lacks %q:\n%s", want, answer)
+		}
+	}
+}
+
+// A member asked while another is at work is told who is busy where, what
+// it has changed so far and what it waits on a person for: read off the
+// turn under way, not the database.
+func TestLoop_BriefSaysWhoIsAtWork(t *testing.T) {
+	l := newLoop(t)
+	worker := l.member("Worker", map[string]any{"changes": []any{"auth/token.go"}, "approval": true})
+	helper := l.member("Helper", nil)
+	l.say("@Worker do the tokens", "", worker)
+	asked := l.waitApproval()
+
+	l.say("@Helper how is it going?", "", helper)
+	var helped store.Turn
+	eventually(t, func() bool {
+		for _, turn := range l.turns() {
+			if turn.MemberID == helper.ID && turn.Status == store.TurnDone {
+				helped = turn
+				return true
+			}
+		}
+		return false
+	}, "Helper's turn")
+	wantInOrder(t, promptOf(t, helped),
+		"In this chat (mention one as @Name to hand something over):\n",
+		"At work right now:\n",
+		"- Worker, in topic #1, started just now; has changed auth/token.go; waits for a person to allow running `make test`\n",
+		"You are shown what is new",
+	)
+
+	if _, err := l.h.DecideApproval(l.ctx, asked.ID, l.user.ID, runtime.Decision{Allow: true}); err != nil {
+		t.Fatal(err)
+	}
+	l.waitTurns(2, store.TurnDone, "both turns")
+	// Nobody is at work now: the section is left out.
+	l.say("@Helper and now?", "", helper)
+	turns := l.waitTurns(3, store.TurnDone, "Helper's second turn")
+	if prompt := promptOf(t, turns[len(turns)-1]); strings.Contains(prompt, "At work right now") {
+		t.Errorf("nobody is at work:\n%s", prompt)
 	}
 }
 

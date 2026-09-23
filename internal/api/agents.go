@@ -66,6 +66,9 @@ type AgentRequest struct {
 	RoleCard         string                 `json:"role_card"`
 	PermissionPreset store.PermissionPreset `json:"permission_preset"`
 	RuntimeOptions   map[string]any         `json:"runtime_options"`
+	// Skills names the skills of the library installed for the agent; absent
+	// keeps those it has.
+	Skills *[]string `json:"skills"`
 }
 
 // AgentResponse is the body of single-agent endpoints.
@@ -109,7 +112,7 @@ type MembersResponse struct {
 }
 
 func (h *handlers) createAgent(w http.ResponseWriter, r *http.Request) {
-	in, ok := h.decodeAgent(w, r)
+	in, ok := h.decodeAgent(w, r, nil)
 	if !ok {
 		return
 	}
@@ -122,16 +125,20 @@ func (h *handlers) createAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handlers) updateAgent(w http.ResponseWriter, r *http.Request) {
-	in, ok := h.decodeAgent(w, r)
+	// The avatar it had goes once nothing shows it any more.
+	before, err := h.deps.Agents.GetAgent(r.Context(), r.PathValue("id"))
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	in, ok := h.decodeAgent(w, r, &before)
 	if !ok {
 		return
 	}
-	// The avatar it had goes once nothing shows it any more.
-	before, _ := h.deps.Agents.GetAgent(r.Context(), r.PathValue("id"))
 	agent, err := h.deps.Agents.UpdateAgent(r.Context(), r.PathValue("id"), in)
 	var inUse *store.AgentInUseError
 	if errors.As(err, &inUse) {
-		writeJSON(w, http.StatusConflict, AgentInUseResponse{Error: err.Error(), Projects: inUse.Projects})
+		writeJSON(w, http.StatusConflict, AgentInUseResponse{Error: store.Reason(err), Projects: inUse.Projects})
 		return
 	}
 	if err != nil {
@@ -145,16 +152,18 @@ func (h *handlers) updateAgent(w http.ResponseWriter, r *http.Request) {
 }
 
 // decodeAgent reads and validates an agent request, writing the 400
-// itself when something is wrong.
-func (h *handlers) decodeAgent(w http.ResponseWriter, r *http.Request) (store.NewAgent, bool) {
+// itself when something is wrong. For an agent there already (before),
+// what it keeps is not checked again: a runtime taken off its machine
+// since, or an avatar file gone, does not stand in the way of other edits.
+func (h *handlers) decodeAgent(w http.ResponseWriter, r *http.Request, before *store.Agent) (store.NewAgent, bool) {
 	var req AgentRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return store.NewAgent{}, false
 	}
 	name, err := requireName("name", req.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return store.NewAgent{}, false
 	}
 	if !slices.Contains(runtime.Names(), req.Runtime) {
@@ -168,17 +177,23 @@ func (h *handlers) decodeAgent(w http.ResponseWriter, r *http.Request) (store.Ne
 	}
 	// A connected machine says what it has; one that is not connected
 	// cannot be asked, so any known runtime is let through for it.
-	if info, ok := h.connectedMachine(machineID); ok && !installed(info, req.Runtime) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("runtime %s is not installed on %s", req.Runtime, info.Name))
+	kept := before != nil && before.Runtime == req.Runtime && before.MachineID == machineID
+	if info, ok := h.connectedMachine(machineID); ok && !kept && !installed(info, req.Runtime) {
+		writeCoded(w, http.StatusBadRequest, "runtimeMissing", store.Params{"runtime": req.Runtime, "machine": info.Name},
+			fmt.Sprintf("runtime %s is not installed on %s", req.Runtime, info.Name))
 		return store.NewAgent{}, false
 	}
 	if err := validatePreset(req.PermissionPreset, false); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return store.NewAgent{}, false
 	}
 	avatar := strings.TrimSpace(req.Avatar)
-	if avatar != "" && !h.avatarExists(avatar) {
-		writeError(w, http.StatusBadRequest, fmt.Sprintf("avatar %q was not uploaded", avatar))
+	if avatar != "" && (before == nil || before.Avatar != avatar) && !h.avatarExists(avatar) {
+		writeCoded(w, http.StatusBadRequest, "avatarMissing", nil, fmt.Sprintf("avatar %q was not uploaded", avatar))
+		return store.NewAgent{}, false
+	}
+	skills, ok := h.agentSkills(w, r, req.Skills, before)
+	if !ok {
 		return store.NewAgent{}, false
 	}
 	return store.NewAgent{
@@ -190,7 +205,44 @@ func (h *handlers) decodeAgent(w http.ResponseWriter, r *http.Request) (store.Ne
 		RoleCard:         req.RoleCard,
 		PermissionPreset: req.PermissionPreset,
 		RuntimeOptions:   req.RuntimeOptions,
+		Skills:           skills,
 	}, true
+}
+
+// agentSkills reads the skills an agent request installs, each once. Only
+// one newly installed must be a current skill of the library: one the
+// agent has already stays until someone takes it off, retired or not.
+func (h *handlers) agentSkills(w http.ResponseWriter, r *http.Request, asked *[]string, before *store.Agent) ([]string, bool) {
+	var had []string
+	if before != nil {
+		had = before.Skills
+	}
+	if asked == nil {
+		return had, true
+	}
+	var skills, added []string
+	for _, name := range *asked {
+		name = strings.TrimSpace(name)
+		if name == "" || slices.Contains(skills, name) {
+			continue
+		}
+		skills = append(skills, name)
+		if !slices.Contains(had, name) {
+			added = append(added, name)
+		}
+	}
+	if h.deps.Wikis == nil || len(added) == 0 {
+		return skills, true
+	}
+	if err := h.deps.Wikis.CheckSkills(r.Context(), added); err != nil {
+		if errors.Is(err, store.ErrNotFound) {
+			writeReason(w, http.StatusBadRequest, err)
+		} else {
+			h.writeWikiError(w, r, err)
+		}
+		return nil, false
+	}
+	return skills, true
 }
 
 func (h *handlers) getAgent(w http.ResponseWriter, r *http.Request) {
@@ -218,7 +270,7 @@ func (h *handlers) deleteAgent(w http.ResponseWriter, r *http.Request) {
 	err := h.deps.Agents.DeleteAgent(r.Context(), r.PathValue("id"))
 	var inUse *store.AgentInUseError
 	if errors.As(err, &inUse) {
-		writeJSON(w, http.StatusConflict, AgentInUseResponse{Error: err.Error(), Projects: inUse.Projects})
+		writeJSON(w, http.StatusConflict, AgentInUseResponse{Error: store.Reason(err), Projects: inUse.Projects})
 		return
 	}
 	if err != nil {
@@ -232,7 +284,7 @@ func (h *handlers) deleteAgent(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) createMember(w http.ResponseWriter, r *http.Request) {
 	var req CreateMemberRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	if strings.TrimSpace(req.AgentID) == "" {
@@ -244,7 +296,7 @@ func (h *handlers) createMember(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := validatePreset(req.PermissionPreset, true); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -281,7 +333,7 @@ func (h *handlers) listRoomMembers(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) updateMember(w http.ResponseWriter, r *http.Request) {
 	var req UpdateMemberRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	patch := store.MemberPatch{Model: req.Model, Enabled: req.Enabled}
@@ -292,14 +344,14 @@ func (h *handlers) updateMember(w http.ResponseWriter, r *http.Request) {
 	if req.DisplayName != nil {
 		name, err := requireName("display_name", *req.DisplayName)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeReason(w, http.StatusBadRequest, err)
 			return
 		}
 		patch.DisplayName = &name
 	}
 	if req.PermissionPreset != nil {
 		if err := validatePreset(*req.PermissionPreset, true); err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeReason(w, http.StatusBadRequest, err)
 			return
 		}
 		patch.PermissionPreset = req.PermissionPreset

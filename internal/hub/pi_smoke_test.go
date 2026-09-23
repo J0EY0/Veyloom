@@ -37,15 +37,19 @@ func TestPiSmoke_SessionLifecycle(t *testing.T) {
 	sessionDir := filepath.Join(t.TempDir(), "sessions")
 	runners := runtime.BuiltinRunnersWith(runtime.RunnerOptions{SessionDir: sessionDir, ToolDir: filepath.Join(t.TempDir(), "tools")})
 	firstDir, secondDir := t.TempDir(), t.TempDir()
+	// The memories are off: what is kept in one reaches every brief, and a
+	// model may take "keep in mind" for a thing to keep (pi did, on
+	// 2026-09-23), which would put the word in the second brief. The answer
+	// is to come from the session alone.
 	r := newSmokeRoom(t, runners, store.NewAgent{
 		Name: "Pi smoke", Runtime: "pi", PermissionPreset: store.PermissionReadOnly,
 		RoleCard: "Answer in as few words as you can.",
-	}, firstDir)
+	}, firstDir, WithMemoryPrefs(func() store.MemoryPrefs { return store.MemoryPrefs{} }))
 	ctx, s, member := r.ctx, r.s, r.member
 	say, waitDone, lastReply := r.say, r.waitDone, r.lastReply
 
 	// Turn 1 starts the session in the file the hub named.
-	asked := say("Remember the word banana. Reply with exactly: ok", "")
+	asked := say("Keep the word banana in mind for my next question. Reply with exactly: ok", "")
 	first := waitDone(1)
 	thread, err := s.ThreadForMessage(ctx, first.ReplyMessageID)
 	if err != nil {
@@ -68,7 +72,7 @@ func TestPiSmoke_SessionLifecycle(t *testing.T) {
 	// The second brief holds what is new and no more, so the word is not in
 	// it: the answer can only come from the session.
 	before, _ := os.Stat(file)
-	say("Which word did I ask you to remember? One word.", thread.ID)
+	say("Which word did I ask you to keep in mind? One word.", thread.ID)
 	second := waitDone(2)
 	after, _ := os.Stat(file)
 	if second.SessionID != session.ID {
@@ -155,6 +159,51 @@ func TestPiSmoke_SessionLifecycle(t *testing.T) {
 		t.Errorf("the chat has one topic, pi said %q", reply)
 	}
 	t.Logf("turn 5 with the room tools: pi said %q", lastReply(thread.ID))
+
+	// Turn 6: the wiki tools, whose parameters reach pi as plain JSON Schema.
+	if _, commits := r.wikiRound(6, thread.ID); !strings.HasPrefix(commits[0].Author, "pi/") {
+		t.Errorf("pi's writes should be signed as pi, got %q", commits[0].Author)
+	}
+	// Turn 7: the wiki in the brief.
+	r.briefRound(7, thread.ID)
+	// Turn 8: a skill of the library, loaded with --skill.
+	r.skillRound(8, thread.ID)
+	// Turn 9: the agent sets the skill right, which puts it on trial.
+	r.evolveRound(9, thread.ID)
+	// Turns 10 to 12: the member keeps the wiki, with the maintainer's tools.
+	r.upkeepRound(10)
+	// Turn 13: a bundle the wiki mounts, read-only.
+	r.mountRound(13, thread.ID)
+}
+
+// TestPiSmoke_SkillNameClash has the library hold a skill whose name one
+// of the project's own skills has: pi keeps the project's and leaves the
+// library's out, unless the machine gives the library's another name,
+// which it does. The project's skill is about something else, so only the
+// library's knows the word.
+func TestPiSmoke_SkillNameClash(t *testing.T) {
+	if os.Getenv("VEYLOOM_PI_SMOKE") != "1" {
+		t.Skip("set VEYLOOM_PI_SMOKE=1 to run against the real pi CLI")
+	}
+	if _, err := exec.LookPath("pi"); err != nil {
+		t.Skipf("pi is not installed: %v", err)
+	}
+	work := t.TempDir()
+	local := filepath.Join(work, ".agents", "skills", "code-word")
+	if err := os.MkdirAll(local, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	os.WriteFile(filepath.Join(local, "SKILL.md"), []byte("---\nname: code-word\ndescription: Use when turning words into Morse code.\n---\n\nSpell each letter in dots and dashes.\n"), 0o644)
+	runners := runtime.BuiltinRunnersWith(runtime.RunnerOptions{SessionDir: filepath.Join(t.TempDir(), "sessions"), ToolDir: filepath.Join(t.TempDir(), "tools")})
+	r := newSmokeRoom(t, runners, store.NewAgent{
+		Name: "Pi clash", Runtime: "pi", PermissionPreset: store.PermissionReadOnly,
+		RoleCard: "Answer in as few words as you can.",
+	}, work)
+	turn := r.skillRoundNamed(1, "", "code-word", "JUNIPER-7")
+	tx, _ := os.ReadFile(turn.TranscriptPath)
+	if !strings.Contains(string(tx), "veyloom-code-word") {
+		t.Errorf("the library's skill should have reached pi as veyloom-code-word:\n%s", tx)
+	}
 }
 
 // TestPiSmoke_ExtensionDialogs drives the real pi through the hub with an

@@ -5,11 +5,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime"
 	"mime/multipart"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/J0EY0/veyloom/internal/store"
@@ -53,8 +55,15 @@ func (h *handlers) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, MaxAttachmentSize+formMemory)
 	if err := r.ParseMultipartForm(formMemory); err != nil {
 		var tooBig *http.MaxBytesError
+		var disk *fs.PathError
+		if errors.As(err, &disk) {
+			// The form was fine; keeping it on disk was not.
+			h.deps.Logger.Error("read upload", "room", roomID, "err", err)
+			writeError(w, http.StatusInternalServerError, "internal error")
+			return
+		}
 		if errors.As(err, &tooBig) {
-			writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file too large (max %d MB)", MaxAttachmentSize>>20))
+			writeCoded(w, http.StatusRequestEntityTooLarge, "attachmentTooLarge", store.Params{"mb": strconv.Itoa(MaxAttachmentSize >> 20)}, fmt.Sprintf("file too large (max %d MB)", MaxAttachmentSize>>20))
 			return
 		}
 		writeError(w, http.StatusBadRequest, "expected a multipart form with a file field")
@@ -68,7 +77,7 @@ func (h *handlers) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 	if header.Size > MaxAttachmentSize {
-		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf("file too large (max %d MB)", MaxAttachmentSize>>20))
+		writeCoded(w, http.StatusRequestEntityTooLarge, "attachmentTooLarge", store.Params{"mb": strconv.Itoa(MaxAttachmentSize >> 20)}, fmt.Sprintf("file too large (max %d MB)", MaxAttachmentSize>>20))
 		return
 	}
 
@@ -147,7 +156,11 @@ func (h *handlers) getAttachment(w http.ResponseWriter, r *http.Request) {
 // origin: images, sound, video, PDFs and plain text, but not SVG or HTML,
 // which can carry scripts.
 func inlineSafe(mediaType string) bool {
-	mt := strings.ToLower(mediaType)
+	mt, _, err := mime.ParseMediaType(mediaType)
+	if err != nil {
+		mt = mediaType
+	}
+	mt = strings.ToLower(mt)
 	switch {
 	case mt == "image/svg+xml":
 		return false

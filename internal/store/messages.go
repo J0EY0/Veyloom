@@ -242,7 +242,7 @@ func mapMessageError(err error) error {
 			return fmt.Errorf("turn: %w", ErrNotFound)
 		}
 	case "23514": // check_violation, e.g. blank body or sender/user mismatch
-		return fmt.Errorf("%w: %s", ErrInvalidInput, pgErr.ConstraintName)
+		return constraintProblem(pgErr)
 	}
 	return fmt.Errorf("create message: %w", err)
 }
@@ -457,6 +457,28 @@ func (s *Store) ThreadForMessage(ctx context.Context, messageID string) (Thread,
 	}
 	if err != nil {
 		return Thread{}, fmt.Errorf("thread for message %s: %w", messageID, err)
+	}
+	return toThread(row), nil
+}
+
+// ThreadOfMessage returns the thread a message is in, or the one it
+// started, without starting one: ErrNotFound for a top-level message
+// nothing came of.
+func (s *Store) ThreadOfMessage(ctx context.Context, messageID string) (Thread, error) {
+	msg, err := s.GetMessage(ctx, messageID)
+	if err != nil {
+		return Thread{}, err
+	}
+	if msg.ThreadID != "" {
+		return s.GetThread(ctx, msg.ThreadID)
+	}
+	rootID, _ := parseUUID(msg.ID)
+	row, err := s.q.GetThreadByRoot(ctx, rootID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Thread{}, fmt.Errorf("thread of message %s: %w", messageID, ErrNotFound)
+	}
+	if err != nil {
+		return Thread{}, fmt.Errorf("thread of message %s: %w", messageID, err)
 	}
 	return toThread(row), nil
 }

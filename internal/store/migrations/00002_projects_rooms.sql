@@ -11,6 +11,28 @@ CREATE TABLE projects (
     -- What the project is, in a paragraph: what it is for, its goals, its
     -- stack. A person writes it once and every agent's brief opens with it.
     description text       NOT NULL DEFAULT '',
+    -- The folder the project's wiki lives in, under the hub's state dir
+    -- (wiki/projects/<wiki_slug>): lowercase words from the name when it
+    -- has any. Set once when the project is created, so the folder never
+    -- moves (docs/design.md 5.9).
+    wiki_slug  text        NOT NULL UNIQUE CHECK (wiki_slug ~ '^[a-z0-9]+(-[a-z0-9]+)*$'),
+    -- When the wiki maintainer, once a person has chosen one (see 00004),
+    -- goes over what the chat did (design.md 5.12, 5.16): once a topic has
+    -- been quiet a while, once a day, every three days, once a week, or
+    -- only when a person asks.
+    wiki_maintainer_trigger text NOT NULL DEFAULT 'daily'
+        CHECK (wiki_maintainer_trigger IN ('idle', 'daily', 'every_3_days', 'weekly', 'manual')),
+    -- When a person said no to a wiki maintainer, offered in the chat to a
+    -- project that has none (design.md 5.16): it is not offered again.
+    wiki_offer_declined_at timestamptz,
+    -- How far the wiki maintainer has gone over what people said in the
+    -- chat, as messages.seq (design.md 5.16): what they said after it is
+    -- news to the next upkeep. It only moves forward.
+    wiki_seen_seq bigint NOT NULL DEFAULT 0,
+    -- OKF bundles from elsewhere the project's wiki mounts, read-only, by
+    -- their folders on the hub's machine (design.md 5.9): searched and read
+    -- with the wiki, never written.
+    wiki_external_bundles text[] NOT NULL DEFAULT '{}',
     created_at timestamptz NOT NULL DEFAULT now()
 );
 

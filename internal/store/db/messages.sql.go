@@ -381,7 +381,7 @@ SELECT t.root_message_id,
        lt.ended_at AS last_turn_ended_at
 FROM threads t
 LEFT JOIN LATERAL (
-    SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, started_at, ended_at FROM turns tu WHERE tu.thread_id = t.id ORDER BY tu.started_at DESC LIMIT 1
+    SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, started_at, ended_at FROM turns tu WHERE tu.thread_id = t.id ORDER BY tu.started_at DESC LIMIT 1
 ) lt ON true
 WHERE t.root_message_id = ANY($1::uuid[])
 `

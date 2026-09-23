@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/J0EY0/veyloom/internal/store"
 )
@@ -220,17 +221,19 @@ func TestSessions_AdvanceAndCompact(t *testing.T) {
 	f := newBriefFixture(t)
 	ctx := context.Background()
 
-	if f.session.RoomSeen != 0 || len(f.session.ThreadSeen) != 0 || f.session.Compactions != 0 {
+	if f.session.RoomSeen != 0 || len(f.session.ThreadSeen) != 0 || f.session.Compactions != 0 || f.session.WikiSeen != nil {
 		t.Fatalf("a new session has read nothing: %+v", f.session)
 	}
-	if err := f.s.AdvanceSession(ctx, f.session.ID, 40, f.thread.ID); err != nil {
+	wiki := time.Date(2026, 9, 21, 9, 0, 0, 123456000, time.UTC)
+	if err := f.s.AdvanceSession(ctx, f.session.ID, store.Reading{Position: 40, ThreadID: f.thread.ID, Wiki: wiki}); err != nil {
 		t.Fatal(err)
 	}
-	if err := f.s.AdvanceSession(ctx, f.session.ID, 55, f.topic2.ID); err != nil {
+	// A brief that showed no wiki leaves the session's place in it.
+	if err := f.s.AdvanceSession(ctx, f.session.ID, store.Reading{Position: 55, ThreadID: f.topic2.ID}); err != nil {
 		t.Fatal(err)
 	}
 	// Positions never move back.
-	if err := f.s.AdvanceSession(ctx, f.session.ID, 12, f.thread.ID); err != nil {
+	if err := f.s.AdvanceSession(ctx, f.session.ID, store.Reading{Position: 12, ThreadID: f.thread.ID, Wiki: wiki.Add(-time.Hour)}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := f.s.GetSession(ctx, f.session.ID)
@@ -240,8 +243,12 @@ func TestSessions_AdvanceAndCompact(t *testing.T) {
 	if got.RoomSeen != 55 || got.ThreadSeen[f.thread.ID] != 40 || got.ThreadSeen[f.topic2.ID] != 55 || len(got.ThreadSeen) != 2 {
 		t.Errorf("after advancing: room %d, threads %v; want 55 and {#1: 40, #2: 55}", got.RoomSeen, got.ThreadSeen)
 	}
+	if got.WikiSeen == nil || !got.WikiSeen.Equal(wiki) {
+		t.Errorf("the wiki position, to the microsecond: %v, want %v", got.WikiSeen, wiki)
+	}
 
-	// A compaction forgets what was read of each topic, not of the room.
+	// A compaction forgets what was read of each topic and of the wiki,
+	// not of the room.
 	if err := f.s.NoteSessionCompactions(ctx, f.session.ID, 2); err != nil {
 		t.Fatal(err)
 	}
@@ -249,11 +256,11 @@ func TestSessions_AdvanceAndCompact(t *testing.T) {
 		t.Fatal(err)
 	}
 	got, _ = f.s.GetSession(ctx, f.session.ID)
-	if got.Compactions != 2 || len(got.ThreadSeen) != 0 || got.RoomSeen != 55 {
-		t.Errorf("after compacting: %d compactions, threads %v, room %d; want 2, none, 55", got.Compactions, got.ThreadSeen, got.RoomSeen)
+	if got.Compactions != 2 || len(got.ThreadSeen) != 0 || got.RoomSeen != 55 || got.WikiSeen != nil {
+		t.Errorf("after compacting: %d compactions, threads %v, room %d, wiki %v; want 2, none, 55, none", got.Compactions, got.ThreadSeen, got.RoomSeen, got.WikiSeen)
 	}
 
-	if err := f.s.AdvanceSession(ctx, store.NewID(), 1, f.thread.ID); !errors.Is(err, store.ErrNotFound) {
+	if err := f.s.AdvanceSession(ctx, store.NewID(), store.Reading{Position: 1, ThreadID: f.thread.ID}); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("advance an unknown session: got %v, want ErrNotFound", err)
 	}
 	if err := f.s.NoteSessionCompactions(ctx, store.NewID(), 1); !errors.Is(err, store.ErrNotFound) {

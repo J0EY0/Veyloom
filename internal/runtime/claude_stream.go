@@ -15,7 +15,10 @@ type claudeLine struct {
 	Type      string `json:"type"`
 	Subtype   string `json:"subtype"`
 	SessionID string `json:"session_id"`
-	Model     string `json:"model"`
+	// ParentToolUseID is set on a subagent's lines (an Agent tool's): what
+	// it does is part of the turn, what it says is not the reply.
+	ParentToolUseID *string `json:"parent_tool_use_id"`
+	Model           string  `json:"model"`
 	// Status is set on system/status lines, "compacting" while the CLI
 	// compacts the session, and on task_notification lines, how the
 	// background task ended.
@@ -198,12 +201,12 @@ func (p *claudeParser) handle(line claudeLine) {
 			p.emit(Event{Kind: EventNotice, Level: NoticeInfo, Text: fmt.Sprintf("Claude Code: MCP server %q says request %s is done", line.MCPServerName, line.ElicitationID)})
 		}
 	case "stream_event":
-		if ev := line.Event; ev != nil && ev.Type == "content_block_delta" && ev.Delta != nil && ev.Delta.Type == "text_delta" && ev.Delta.Text != "" {
+		if ev := line.Event; ev != nil && ev.Type == "content_block_delta" && ev.Delta != nil && ev.Delta.Type == "text_delta" && ev.Delta.Text != "" && line.ParentToolUseID == nil {
 			p.text.WriteString(ev.Delta.Text)
 			p.emit(Event{Kind: EventText, Text: ev.Delta.Text})
 		}
 	case "assistant":
-		p.assistant(line.Message)
+		p.assistant(line.Message, line.ParentToolUseID != nil)
 	case "user":
 		p.user(line.Message)
 	case "result":
@@ -313,12 +316,12 @@ func describeClaudeUse(tool string, input json.RawMessage, max int) string {
 	return tool + " " + truncate(compactJSON(input), max)
 }
 
-func (p *claudeParser) assistant(msg *claudeMessage) {
+func (p *claudeParser) assistant(msg *claudeMessage, subagent bool) {
 	for _, block := range blocksOf(msg) {
 		switch block.Type {
 		case "text":
 			// With partial messages on, this text already streamed as deltas.
-			if !p.cfg.StreamPartials && block.Text != "" {
+			if !p.cfg.StreamPartials && !subagent && block.Text != "" {
 				p.text.WriteString(block.Text)
 				p.emit(Event{Kind: EventText, Text: block.Text})
 			}

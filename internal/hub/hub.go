@@ -39,6 +39,10 @@ type Config struct {
 	// AvatarDir is where the pictures uploaded for agents are stored. Empty
 	// means an "avatars" directory under the state dir.
 	AvatarDir string `mapstructure:"avatar_dir"`
+	// WikiDir is where the wikis are kept: each project's under projects/
+	// (docs/design.md 5.9). Empty means a "wiki" directory under the state
+	// dir; a hub given none keeps no wikis.
+	WikiDir string `mapstructure:"wiki_dir"`
 	// BriefMessages caps how many messages of the topic a turn is in its
 	// brief includes. A brief tells a session only what it has not read, so
 	// the caps below matter for a new session and after a long absence;
@@ -49,6 +53,20 @@ type Config struct {
 	BriefRoomMessages int `mapstructure:"brief_room_messages"`
 	// BriefTopics caps the other topics a brief lists as having news.
 	BriefTopics int `mapstructure:"brief_topics"`
+	// BriefWikiPages caps the pages of the project wiki's catalog a brief
+	// lists: all of them to a new session, the ones changed since to one
+	// that has seen them.
+	BriefWikiPages int `mapstructure:"brief_wiki_pages"`
+	// BriefResidentChars caps, in characters, the resident pages of the
+	// project wiki a brief carries in full; the ones that do not fit are
+	// named instead.
+	BriefResidentChars int `mapstructure:"brief_resident_chars"`
+	// MemoryPersonalChars and MemoryProjectChars cap, in characters, the
+	// personal memory and each project's (design.md 5.16): every turn
+	// carries both whole, so a change that would take one past its cap is
+	// refused.
+	MemoryPersonalChars int `mapstructure:"memory_personal_chars"`
+	MemoryProjectChars  int `mapstructure:"memory_project_chars"`
 	// ApprovalTimeout is how long an approval request waits for a decision
 	// before it is denied. Zero takes the default; a negative value waits
 	// forever.
@@ -59,20 +77,53 @@ type Config struct {
 	// for a person. Zero takes the default; a negative value turns the
 	// relay off, leaving mentions as hand-off buttons.
 	RelayBudget int `mapstructure:"relay_budget"`
+	// UpkeepIdle is how long a topic stays quiet before the wiki maintainer
+	// of a project that runs it on quiet topics goes over it (docs/design.md
+	// 5.12); also the least time between two such upkeeps.
+	UpkeepIdle time.Duration `mapstructure:"upkeep_idle"`
+	// UpkeepCheck is how often the hub looks for wikis due for upkeep.
+	UpkeepCheck time.Duration `mapstructure:"upkeep_check"`
+	// UpkeepTurns caps the turns of its own project one upkeep goes over;
+	// the rest wait for the next. Half as many of other projects' turns
+	// that used the team's skills go along.
+	UpkeepTurns int `mapstructure:"upkeep_turns"`
+	// UpkeepRunsPerDay caps the upkeeps of one wiki in a day. An upkeep that
+	// went over as many turns as it may leaves the rest to the next, which
+	// then starts at once rather than a day or a week later; this is how
+	// many may run so, one after another (docs/design.md 5.16).
+	UpkeepRunsPerDay int `mapstructure:"upkeep_runs_per_day"`
+	// UpkeepOfferTopics is how many quiet topics wait to be gone over before
+	// a project without a wiki maintainer is offered one in its chat
+	// (docs/design.md 5.16). Zero takes the default; a negative value turns
+	// the offer off.
+	UpkeepOfferTopics int `mapstructure:"upkeep_offer_topics"`
+	// SkillTrialUses is how many turns must use a skill an agent changed,
+	// and end well, before the change is kept (design.md 5.15).
+	SkillTrialUses int `mapstructure:"skill_trial_uses"`
 }
 
 // DefaultConfig returns the defaults every Config is completed with.
 func DefaultConfig() Config {
 	return Config{
-		HeartbeatInterval: 15 * time.Second,
-		HandshakeTimeout:  10 * time.Second,
-		StoreTimeout:      10 * time.Second,
-		TranscriptDir:     "",
-		BriefMessages:     40,
-		BriefRoomMessages: 30,
-		BriefTopics:       10,
-		ApprovalTimeout:   15 * time.Minute,
-		RelayBudget:       4,
+		HeartbeatInterval:   15 * time.Second,
+		HandshakeTimeout:    10 * time.Second,
+		StoreTimeout:        10 * time.Second,
+		TranscriptDir:       "",
+		BriefMessages:       40,
+		BriefRoomMessages:   30,
+		BriefTopics:         10,
+		BriefWikiPages:      30,
+		BriefResidentChars:  4000,
+		MemoryPersonalChars: 2000,
+		MemoryProjectChars:  3000,
+		ApprovalTimeout:     15 * time.Minute,
+		RelayBudget:         4,
+		UpkeepIdle:          30 * time.Minute,
+		UpkeepCheck:         time.Minute,
+		UpkeepTurns:         20,
+		UpkeepRunsPerDay:    6,
+		UpkeepOfferTopics:   3,
+		SkillTrialUses:      3,
 	}
 }
 
@@ -97,11 +148,41 @@ func (c Config) withDefaults() Config {
 	if c.BriefTopics <= 0 {
 		c.BriefTopics = def.BriefTopics
 	}
+	if c.BriefWikiPages <= 0 {
+		c.BriefWikiPages = def.BriefWikiPages
+	}
+	if c.BriefResidentChars <= 0 {
+		c.BriefResidentChars = def.BriefResidentChars
+	}
+	if c.MemoryPersonalChars <= 0 {
+		c.MemoryPersonalChars = def.MemoryPersonalChars
+	}
+	if c.MemoryProjectChars <= 0 {
+		c.MemoryProjectChars = def.MemoryProjectChars
+	}
 	if c.ApprovalTimeout == 0 {
 		c.ApprovalTimeout = def.ApprovalTimeout
 	}
 	if c.RelayBudget == 0 {
 		c.RelayBudget = def.RelayBudget
+	}
+	if c.UpkeepIdle <= 0 {
+		c.UpkeepIdle = def.UpkeepIdle
+	}
+	if c.UpkeepCheck <= 0 {
+		c.UpkeepCheck = def.UpkeepCheck
+	}
+	if c.UpkeepTurns <= 0 {
+		c.UpkeepTurns = def.UpkeepTurns
+	}
+	if c.UpkeepRunsPerDay <= 0 {
+		c.UpkeepRunsPerDay = def.UpkeepRunsPerDay
+	}
+	if c.UpkeepOfferTopics == 0 {
+		c.UpkeepOfferTopics = def.UpkeepOfferTopics
+	}
+	if c.SkillTrialUses <= 0 {
+		c.SkillTrialUses = def.SkillTrialUses
 	}
 	return c
 }
@@ -162,6 +243,11 @@ type Hub struct {
 	router *Router
 	turns  *TurnManager
 	events *broker
+	wikis  *wikiShelf
+	// person names the account, for the wikis' history.
+	person func() string
+	// memoryPrefs are the account's memory switches (design.md 5.19).
+	memoryPrefs func() store.MemoryPrefs
 
 	mu       sync.Mutex
 	machines map[string]*connectedMachine
@@ -181,6 +267,18 @@ func WithLogger(logger *slog.Logger) Option {
 	return func(h *Hub) { h.logger = logger }
 }
 
+// WithPerson tells the hub the name of the one account, which the wikis
+// commit edits made outside Veyloom under.
+func WithPerson(name func() string) Option {
+	return func(h *Hub) { h.person = name }
+}
+
+// WithMemoryPrefs tells the hub where the account's memory switches are
+// read (design.md 5.19); without it every memory is on.
+func WithMemoryPrefs(prefs func() store.MemoryPrefs) Option {
+	return func(h *Hub) { h.memoryPrefs = prefs }
+}
+
 // New creates a Hub over st.
 func New(st Store, cfg Config, opts ...Option) *Hub {
 	h := &Hub{
@@ -195,8 +293,33 @@ func New(st Store, cfg Config, opts ...Option) *Hub {
 	}
 	h.router = NewRouter(st)
 	h.events = newBroker(subscriptionBuffer)
-	limits := briefLimits{Thread: h.cfg.BriefMessages, Room: h.cfg.BriefRoomMessages, Topics: h.cfg.BriefTopics}
-	h.turns = newTurnManager(st, newBriefBuilder(st, limits, h.cfg.AttachmentDir), h.connFor, h.events.publish, h.cfg.TranscriptDir, h.cfg.StoreTimeout, h.cfg.ApprovalTimeout, h.cfg.RelayBudget, h.logger)
+	h.wikis = newWikiShelf(h.cfg.WikiDir, h.person, h.logger)
+	h.wikis.now = h.now
+	if h.memoryPrefs != nil {
+		h.wikis.prefs = h.memoryPrefs
+	}
+	h.wikis.budgets = memoryBudgets{Personal: h.cfg.MemoryPersonalChars, Project: h.cfg.MemoryProjectChars}
+	h.wikis.changed = func(projectID, roomID string) { h.events.publish(wikiChangedEvent(projectID, roomID)) }
+	limits := briefLimits{
+		Thread: h.cfg.BriefMessages, Room: h.cfg.BriefRoomMessages, Topics: h.cfg.BriefTopics,
+		WikiPages: h.cfg.BriefWikiPages, Resident: h.cfg.BriefResidentChars,
+	}
+	brief := newBriefBuilder(st, limits, h.cfg.AttachmentDir)
+	brief.trialUses = h.cfg.SkillTrialUses
+	if h.cfg.WikiDir != "" {
+		brief.wikis = h.wikis
+	}
+	h.turns = newTurnManager(st, brief, h.connFor, h.events.publish, h.cfg.TranscriptDir, h.cfg.StoreTimeout, h.cfg.ApprovalTimeout, h.cfg.RelayBudget, h.logger)
+	h.turns.wikis = h.wikis
+	h.turns.upkeepTurns, h.turns.residentBudget = h.cfg.UpkeepTurns, h.cfg.BriefResidentChars
+	h.turns.attachmentDir = h.cfg.AttachmentDir
+	h.turns.trialUses = h.cfg.SkillTrialUses
+	// A person changing a skill on trial by hand keeps their version.
+	h.wikis.edited = func(ctx context.Context, projectID string, pages []string) {
+		if person := h.wikis.human(); projectID == "" && person != "" {
+			h.turns.skillsEditedOutside(ctx, pages, person)
+		}
+	}
 	return h
 }
 

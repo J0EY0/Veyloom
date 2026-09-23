@@ -36,6 +36,10 @@ type Store interface {
 // MinPasswordLen is the shortest password accepted.
 const MinPasswordLen = 8
 
+// MaxPasswordBytes is the longest password accepted, in bytes of UTF-8:
+// bcrypt takes no more.
+const MaxPasswordBytes = 72
+
 // DefaultSessionTTL is how long a sign-in lasts.
 const DefaultSessionTTL = 30 * 24 * time.Hour
 
@@ -48,6 +52,8 @@ var (
 	ErrNoSession = errors.New("auth: not signed in")
 	// ErrWeakPassword means the password is too short.
 	ErrWeakPassword = fmt.Errorf("auth: the password needs at least %d characters", MinPasswordLen)
+	// ErrLongPassword means the password is longer than bcrypt takes.
+	ErrLongPassword = fmt.Errorf("auth: the password can be at most %d bytes", MaxPasswordBytes)
 )
 
 // Service is the sign-in logic over a Store.
@@ -184,6 +190,9 @@ func (s *Service) openSession(ctx context.Context, userID string) (string, error
 func checkPassword(password string) error {
 	if len([]rune(password)) < MinPasswordLen {
 		return ErrWeakPassword
+	}
+	if len(password) > MaxPasswordBytes {
+		return ErrLongPassword
 	}
 	return nil
 }

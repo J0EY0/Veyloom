@@ -27,21 +27,25 @@ SELECT * FROM member_sessions WHERE member_id = $1 ORDER BY started_at DESC, id;
 
 -- name: AdvanceSession :execrows
 -- Moves a session's reading positions forward after a turn that took its
--- brief in: the room's, and the one topic's it was briefed in. Positions
--- never move back.
+-- brief in: the room's, the one topic's it was briefed in, and the project
+-- wiki's when the brief showed it (NULL leaves it). Positions never move
+-- back.
 UPDATE member_sessions SET
     room_seen   = GREATEST(room_seen, sqlc.arg(room_seen)::bigint),
     thread_seen = thread_seen || jsonb_build_object(
         sqlc.arg(thread_id)::text,
-        GREATEST(coalesce((thread_seen ->> sqlc.arg(thread_id)::text)::bigint, 0), sqlc.arg(thread_seen)::bigint))
+        GREATEST(coalesce((thread_seen ->> sqlc.arg(thread_id)::text)::bigint, 0), sqlc.arg(thread_seen)::bigint)),
+    wiki_seen   = GREATEST(wiki_seen, sqlc.narg(wiki_seen)::timestamptz)
 WHERE id = sqlc.arg(id);
 
 -- name: NoteSessionCompactions :execrows
 -- Counts compactions the runtime reported and forgets what the session had
--- read of each topic, as the session itself just did with the detail.
+-- read of each topic and of the wiki's catalog, as the session itself just
+-- did with the detail.
 UPDATE member_sessions SET
     compactions = compactions + sqlc.arg(count)::int,
-    thread_seen = '{}'::jsonb
+    thread_seen = '{}'::jsonb,
+    wiki_seen   = NULL
 WHERE id = sqlc.arg(id);
 
 -- name: CountSessionTurns :one

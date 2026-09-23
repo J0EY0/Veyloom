@@ -1,6 +1,6 @@
 -- name: CreateAgent :one
-INSERT INTO agents (name, avatar, machine_id, runtime, model, role_card, permission_preset, runtime_options)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO agents (name, avatar, machine_id, runtime, model, role_card, permission_preset, runtime_options, skills)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING id;
 
 -- name: GetAgent :one
@@ -43,11 +43,27 @@ UPDATE agents AS ag SET
     role_card         = sqlc.arg(role_card),
     permission_preset = sqlc.arg(permission_preset),
     runtime_options   = sqlc.arg(runtime_options),
+    skills            = sqlc.arg(skills)::text[],
     updated_at        = now()
 WHERE ag.id = sqlc.arg(id)
   AND (ag.machine_id = sqlc.arg(machine_id)
        OR NOT EXISTS (SELECT 1 FROM members AS mb WHERE mb.agent_id = ag.id AND mb.removed_at IS NULL))
 RETURNING ag.id;
+
+-- name: SetAgentSkill :execrows
+-- Installs a skill for an agent, once, or takes it off.
+UPDATE agents SET
+    skills = CASE
+        WHEN NOT sqlc.arg(installed)::boolean THEN array_remove(skills, sqlc.arg(skill)::text)
+        WHEN sqlc.arg(skill)::text = ANY(skills) THEN skills
+        ELSE array_append(skills, sqlc.arg(skill)::text)
+    END,
+    updated_at = now()
+WHERE id = sqlc.arg(id);
+
+-- name: ListSkillAgents :many
+-- The agents a skill is installed for, by name.
+SELECT id, name FROM agents WHERE sqlc.arg(skill)::text = ANY(skills) ORDER BY name;
 
 -- name: CountAgentsWithAvatar :one
 -- How many agents show an avatar file, asked before the file is removed.
@@ -110,6 +126,10 @@ WHERE mb.id = $1
   AND mb.removed_at IS NULL
   AND NOT EXISTS (SELECT 1 FROM turns AS t WHERE t.member_id = mb.id AND t.status = 'running')
 RETURNING *;
+
+-- name: ClearWikiMaintainer :exec
+-- A member taken out of its project keeps its wiki no longer.
+UPDATE projects SET wiki_maintainer_member_id = NULL WHERE wiki_maintainer_member_id = $1;
 
 -- name: ListMachineMembers :many
 -- The current members a machine runs, across every project: the project

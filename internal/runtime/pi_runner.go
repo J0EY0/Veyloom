@@ -138,11 +138,14 @@ func (r *PiRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error) {
 		if _, err := ensurePiExtension(r.toolDir()); err != nil {
 			return nil, fmt.Errorf("pi: room tools extension: %w", err)
 		}
-		ep, err := r.tools.register(spec.Host, nil)
+		ep, err := r.tools.register(spec.Host, spec.ExtraTools, nil)
 		if err != nil {
 			return nil, fmt.Errorf("pi: tool endpoint: %w", err)
 		}
 		env = append(env, piRoomURLEnv+"="+ep.Room)
+		if len(spec.ExtraTools) > 0 {
+			env = append(env, piExtraToolsEnv+"="+strings.Join(spec.ExtraTools, ","))
+		}
 		release = func() { r.tools.unregister(ep.token) }
 	}
 
@@ -206,11 +209,16 @@ func (r *PiRunner) args(spec TurnSpec) []string {
 	if spec.Host != nil {
 		args = append(args, "-e", piExtensionFile(r.toolDir()))
 	}
+	// The skill library's skills, one folder each.
+	for _, dir := range SkillDirs(spec.SkillDir) {
+		args = append(args, "--skill", dir)
+	}
 	if tools, ok := piToolSets[spec.Permission]; ok {
-		// The whitelist covers extension tools too. The room tools only
-		// read the turn's own room, so every preset has them.
+		// The whitelist covers extension tools too. Veyloom's own tools
+		// are in every preset: the room tools only read the turn's own
+		// room, and the hub decides which wiki changes wait for a person.
 		if spec.Host != nil {
-			tools = append(append([]string{}, tools...), RoomToolNames...)
+			tools = append(append([]string{}, tools...), turnToolNames(spec.ExtraTools)...)
 		}
 		args = append(args, "--tools", strings.Join(tools, ","))
 	}
@@ -251,16 +259,19 @@ type piTurn struct {
 	// release gives the turn's tool endpoint back.
 	release func()
 	// in carries the commands and the answers to pi's requests. It is
-	// closed once the agent is done: pi then exits.
+	// closed once pi is done (see piSettle): pi then exits.
 	in *jsonLines
 }
 
 // run reads pi's output until it ends, then reconciles the exit status
-// with what was parsed. Requests to people are answered as they come; the
-// end of the agent's run, or a prompt pi refused, closes the input, which
-// ends pi.
+// with what was parsed. Requests to people are answered as they come; pi
+// being done, or refusing the prompt, closes the input, which ends pi.
 func (t *piTurn) run(proc *cliProcess) {
 	parser := newPiParser(t.cfg, func(ev Event) { t.emit(t.ctx, ev) })
+	settle := &piSettle{
+		ask:  func() { t.in.send(map[string]any{"id": piSettleID, "type": "get_state"}) },
+		done: t.in.close,
+	}
 	proc.lines(func(raw []byte) {
 		var head struct {
 			Type string `json:"type"`
@@ -280,9 +291,7 @@ func (t *piTurn) run(proc *cliProcess) {
 			return
 		}
 		parser.handle(ev)
-		if ev.Type == "agent_end" || (ev.Type == "response" && ev.Command == "prompt" && !ev.Success) {
-			t.in.close()
-		}
+		settle.handle(ev)
 	})
 	t.in.close()
 	waitErr := proc.wait()

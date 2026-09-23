@@ -29,8 +29,10 @@ type Config struct {
 	// under the state dir.
 	SessionDir string `mapstructure:"session_dir"`
 	// ToolDir is where runtimes write the files that give their CLI the
-	// room tools (Pi's extension). Empty means a temporary directory; the
-	// config loader fills in one under the state dir.
+	// room tools (Pi's extension), and where the skill library's skills are
+	// written for the runtimes to load (under skills/). Empty means a
+	// temporary directory for the one, no skills for the other; the config
+	// loader fills in one under the state dir.
 	ToolDir string `mapstructure:"tool_dir"`
 }
 

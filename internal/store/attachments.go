@@ -61,9 +61,9 @@ func (s *Store) CreateAttachment(ctx context.Context, a NewAttachment) (Attachme
 			case "23503": // foreign_key_violation: the room
 				return Attachment{}, fmt.Errorf("room: %w", ErrNotFound)
 			case "23514": // check_violation: blank filename, negative size
-				return Attachment{}, fmt.Errorf("%w: %s", ErrInvalidInput, pgErr.ConstraintName)
+				return Attachment{}, constraintProblem(pgErr)
 			case "23505": // unique_violation: the id
-				return Attachment{}, fmt.Errorf("attachment %s: %w", a.ID, ErrConflict)
+				return Attachment{}, fmt.Errorf("%w: attachment %s is already stored", ErrConflict, a.ID)
 			}
 		}
 		return Attachment{}, fmt.Errorf("create attachment: %w", err)

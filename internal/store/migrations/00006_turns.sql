@@ -20,6 +20,10 @@ CREATE TABLE turns (
     -- The runtime that ran the turn, as the member's agent named it when
     -- the turn started: an agent changed or deleted later leaves it be.
     runtime            text        NOT NULL DEFAULT '',
+    -- What the turn was for: answering the chat, or the wiki maintainer
+    -- going over what the chat did (design.md 5.12), which runs in a
+    -- session of its own and is not itself gone over.
+    kind               text        NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'upkeep')),
     status             text        NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'done', 'failed', 'cancelled')),
     error              text        NOT NULL DEFAULT '',
     -- The agent's reply, once posted.
@@ -37,6 +41,10 @@ CREATE TABLE turns (
     -- in the order first touched. What another agent reading the topic is
     -- told the turn changed.
     files_changed      text[]      NOT NULL DEFAULT '{}',
+    -- The skills of the library the turn used, by name, each once: seen in
+    -- its tool calls, not merely given (docs/design.md 5.10). How a skill's
+    -- team learns where it was used and how that went.
+    skills_used        text[]      NOT NULL DEFAULT '{}',
     started_at         timestamptz NOT NULL DEFAULT now(),
     ended_at           timestamptz
 );
@@ -45,6 +53,10 @@ CREATE INDEX turns_by_member ON turns (member_id, started_at DESC);
 CREATE INDEX turns_by_room ON turns (room_id, started_at DESC);
 -- A machine's activity over the last day, week or month.
 CREATE INDEX turns_by_machine ON turns (machine_id, started_at);
+-- The turns that used a skill.
+CREATE INDEX turns_by_skill ON turns USING gin (skills_used);
+-- A room's maintainer turns, newest first.
+CREATE INDEX turns_upkeep ON turns (room_id, started_at DESC) WHERE kind = 'upkeep';
 
 -- +goose Down
 DROP TABLE turns;

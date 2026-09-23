@@ -67,7 +67,14 @@ func runServe(cmd *cobra.Command, cfg config.Config) error {
 		logger.Warn("failed turns left running by the last stop", "count", len(cut))
 	}
 
-	h := hub.New(dir, cfg.Hub, hub.WithLogger(logger))
+	person := func() string {
+		if user, ok := accounts.Account(); ok {
+			return user.Name
+		}
+		return ""
+	}
+	// The account's memory switches say which memories turns use.
+	h := hub.New(dir, cfg.Hub, hub.WithLogger(logger), hub.WithPerson(person), hub.WithMemoryPrefs(accounts.MemoryPrefs))
 	discovery := machine.NewDiscovery(runtime.Builtin(), cfg.Machine.DetectTimeout)
 	identity := machine.FileIdentity{Path: cfg.MachineIdentityPath()}
 	// The CLIs reach a turn's tools through this very executable, run as
@@ -94,6 +101,8 @@ func runServe(cmd *cobra.Command, cfg config.Config) error {
 			cancel()
 		}
 	}()
+	// The wiki maintainers' upkeeps, when they are due (docs/design.md 5.12).
+	go h.RunUpkeep(ctx)
 
 	// Sign-in over the account file; expired sessions are swept at startup.
 	signIn := auth.New(accounts, auth.DefaultSessionTTL)
@@ -121,6 +130,8 @@ func runServe(cmd *cobra.Command, cfg config.Config) error {
 		Attachments:   s,
 		AttachmentDir: cfg.Hub.AttachmentDir,
 		AvatarDir:     cfg.Hub.AvatarDir,
+		Wikis:         h,
+		Prefs:         accounts,
 		Logger:        logger,
 	}))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {

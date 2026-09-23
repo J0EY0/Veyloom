@@ -12,9 +12,9 @@ import (
 )
 
 const createTurn = `-- name: CreateTurn :one
-INSERT INTO turns (member_id, room_id, thread_id, trigger_message_id, machine_id, runtime, transcript_path, session_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, started_at, ended_at
+INSERT INTO turns (member_id, room_id, thread_id, trigger_message_id, machine_id, runtime, transcript_path, session_id, kind)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, started_at, ended_at
 `
 
 type CreateTurnParams struct {
@@ -26,6 +26,7 @@ type CreateTurnParams struct {
 	Runtime          string
 	TranscriptPath   string
 	SessionID        pgtype.UUID
+	Kind             string
 }
 
 func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, error) {
@@ -38,6 +39,7 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		arg.Runtime,
 		arg.TranscriptPath,
 		arg.SessionID,
+		arg.Kind,
 	)
 	var i Turn
 	err := row.Scan(
@@ -49,6 +51,7 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.MachineID,
 		&i.SessionID,
 		&i.Runtime,
+		&i.Kind,
 		&i.Status,
 		&i.Error,
 		&i.ReplyMessageID,
@@ -58,6 +61,7 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.CacheWriteTokens,
 		&i.OutputTokens,
 		&i.FilesChanged,
+		&i.SkillsUsed,
 		&i.StartedAt,
 		&i.EndedAt,
 	)
@@ -67,7 +71,7 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 const failRunningTurns = `-- name: FailRunningTurns :many
 UPDATE turns SET status = 'failed', error = $1, ended_at = now()
 WHERE status = 'running'
-RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, started_at, ended_at
+RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, started_at, ended_at
 `
 
 // Turns still marked running when the hub starts were cut off by its last
@@ -90,6 +94,7 @@ func (q *Queries) FailRunningTurns(ctx context.Context, error string) ([]Turn, e
 			&i.MachineID,
 			&i.SessionID,
 			&i.Runtime,
+			&i.Kind,
 			&i.Status,
 			&i.Error,
 			&i.ReplyMessageID,
@@ -99,6 +104,7 @@ func (q *Queries) FailRunningTurns(ctx context.Context, error string) ([]Turn, e
 			&i.CacheWriteTokens,
 			&i.OutputTokens,
 			&i.FilesChanged,
+			&i.SkillsUsed,
 			&i.StartedAt,
 			&i.EndedAt,
 		); err != nil {
@@ -123,9 +129,10 @@ UPDATE turns SET
     cache_write_tokens = $8,
     output_tokens      = $9,
     files_changed      = $10,
+    skills_used        = $11,
     ended_at           = now()
 WHERE id = $1
-RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, started_at, ended_at
+RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, started_at, ended_at
 `
 
 type FinishTurnParams struct {
@@ -139,6 +146,7 @@ type FinishTurnParams struct {
 	CacheWriteTokens int64
 	OutputTokens     int64
 	FilesChanged     []string
+	SkillsUsed       []string
 }
 
 func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) (Turn, error) {
@@ -153,6 +161,7 @@ func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) (Turn, e
 		arg.CacheWriteTokens,
 		arg.OutputTokens,
 		arg.FilesChanged,
+		arg.SkillsUsed,
 	)
 	var i Turn
 	err := row.Scan(
@@ -164,6 +173,7 @@ func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) (Turn, e
 		&i.MachineID,
 		&i.SessionID,
 		&i.Runtime,
+		&i.Kind,
 		&i.Status,
 		&i.Error,
 		&i.ReplyMessageID,
@@ -173,6 +183,7 @@ func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) (Turn, e
 		&i.CacheWriteTokens,
 		&i.OutputTokens,
 		&i.FilesChanged,
+		&i.SkillsUsed,
 		&i.StartedAt,
 		&i.EndedAt,
 	)
@@ -180,7 +191,7 @@ func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) (Turn, e
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, started_at, ended_at FROM turns WHERE id = $1
+SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, started_at, ended_at FROM turns WHERE id = $1
 `
 
 func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
@@ -195,6 +206,7 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.MachineID,
 		&i.SessionID,
 		&i.Runtime,
+		&i.Kind,
 		&i.Status,
 		&i.Error,
 		&i.ReplyMessageID,
@@ -204,6 +216,7 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.CacheWriteTokens,
 		&i.OutputTokens,
 		&i.FilesChanged,
+		&i.SkillsUsed,
 		&i.StartedAt,
 		&i.EndedAt,
 	)
@@ -267,7 +280,7 @@ func (q *Queries) ListMachineTurnsSince(ctx context.Context, arg ListMachineTurn
 }
 
 const listRoomTurns = `-- name: ListRoomTurns :many
-SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, started_at, ended_at FROM turns WHERE room_id = $1 ORDER BY started_at DESC LIMIT $2
+SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, started_at, ended_at FROM turns WHERE room_id = $1 ORDER BY started_at DESC LIMIT $2
 `
 
 type ListRoomTurnsParams struct {
@@ -294,6 +307,7 @@ func (q *Queries) ListRoomTurns(ctx context.Context, arg ListRoomTurnsParams) ([
 			&i.MachineID,
 			&i.SessionID,
 			&i.Runtime,
+			&i.Kind,
 			&i.Status,
 			&i.Error,
 			&i.ReplyMessageID,
@@ -303,6 +317,7 @@ func (q *Queries) ListRoomTurns(ctx context.Context, arg ListRoomTurnsParams) ([
 			&i.CacheWriteTokens,
 			&i.OutputTokens,
 			&i.FilesChanged,
+			&i.SkillsUsed,
 			&i.StartedAt,
 			&i.EndedAt,
 		); err != nil {
@@ -317,7 +332,7 @@ func (q *Queries) ListRoomTurns(ctx context.Context, arg ListRoomTurnsParams) ([
 }
 
 const listRoomTurnsByStatus = `-- name: ListRoomTurnsByStatus :many
-SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, started_at, ended_at FROM turns WHERE room_id = $1 AND status = $2 ORDER BY started_at DESC LIMIT $3
+SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, started_at, ended_at FROM turns WHERE room_id = $1 AND status = $2 ORDER BY started_at DESC LIMIT $3
 `
 
 type ListRoomTurnsByStatusParams struct {
@@ -346,6 +361,7 @@ func (q *Queries) ListRoomTurnsByStatus(ctx context.Context, arg ListRoomTurnsBy
 			&i.MachineID,
 			&i.SessionID,
 			&i.Runtime,
+			&i.Kind,
 			&i.Status,
 			&i.Error,
 			&i.ReplyMessageID,
@@ -355,6 +371,7 @@ func (q *Queries) ListRoomTurnsByStatus(ctx context.Context, arg ListRoomTurnsBy
 			&i.CacheWriteTokens,
 			&i.OutputTokens,
 			&i.FilesChanged,
+			&i.SkillsUsed,
 			&i.StartedAt,
 			&i.EndedAt,
 		); err != nil {
@@ -419,8 +436,74 @@ func (q *Queries) ListRunningTopics(ctx context.Context) ([]ListRunningTopicsRow
 	return items, nil
 }
 
+const listSkillUses = `-- name: ListSkillUses :many
+SELECT t.id, t.status, t.runtime, t.started_at, t.ended_at, t.room_id, t.thread_id,
+       th.number AS topic_number, m.display_name AS member_name, p.id AS project_id, p.name AS project_name
+FROM turns t
+JOIN threads th ON th.id = t.thread_id
+JOIN members m ON m.id = t.member_id
+JOIN rooms r ON r.id = t.room_id
+JOIN projects p ON p.id = r.project_id
+WHERE $1::text = ANY (t.skills_used)
+ORDER BY t.started_at DESC, t.id
+LIMIT $2
+`
+
+type ListSkillUsesParams struct {
+	Skill string
+	Lim   int32
+}
+
+type ListSkillUsesRow struct {
+	ID          pgtype.UUID
+	Status      string
+	Runtime     string
+	StartedAt   pgtype.Timestamptz
+	EndedAt     pgtype.Timestamptz
+	RoomID      pgtype.UUID
+	ThreadID    pgtype.UUID
+	TopicNumber int32
+	MemberName  string
+	ProjectID   pgtype.UUID
+	ProjectName string
+}
+
+// The turns that used a skill, newest first, with where they ran: what the
+// team that owns it looks back on.
+func (q *Queries) ListSkillUses(ctx context.Context, arg ListSkillUsesParams) ([]ListSkillUsesRow, error) {
+	rows, err := q.db.Query(ctx, listSkillUses, arg.Skill, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListSkillUsesRow
+	for rows.Next() {
+		var i ListSkillUsesRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Status,
+			&i.Runtime,
+			&i.StartedAt,
+			&i.EndedAt,
+			&i.RoomID,
+			&i.ThreadID,
+			&i.TopicNumber,
+			&i.MemberName,
+			&i.ProjectID,
+			&i.ProjectName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listThreadTurns = `-- name: ListThreadTurns :many
-SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, started_at, ended_at FROM turns
+SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, started_at, ended_at FROM turns
 WHERE thread_id = $1
 ORDER BY started_at
 `
@@ -444,6 +527,7 @@ func (q *Queries) ListThreadTurns(ctx context.Context, threadID pgtype.UUID) ([]
 			&i.MachineID,
 			&i.SessionID,
 			&i.Runtime,
+			&i.Kind,
 			&i.Status,
 			&i.Error,
 			&i.ReplyMessageID,
@@ -453,6 +537,7 @@ func (q *Queries) ListThreadTurns(ctx context.Context, threadID pgtype.UUID) ([]
 			&i.CacheWriteTokens,
 			&i.OutputTokens,
 			&i.FilesChanged,
+			&i.SkillsUsed,
 			&i.StartedAt,
 			&i.EndedAt,
 		); err != nil {

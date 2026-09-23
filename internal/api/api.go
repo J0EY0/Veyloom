@@ -42,6 +42,57 @@ type ProjectStore interface {
 	ListRooms(ctx context.Context, projectID string) ([]store.Room, error)
 }
 
+// Wikis is what the API asks of the project wikis; *hub.Hub.
+type Wikis interface {
+	// ArchiveProjectWiki puts a deleted project's wiki aside.
+	ArchiveProjectWiki(projectID, slug string) error
+	WikiCatalog(ctx context.Context, projectID string) (hub.WikiCatalog, error)
+	WikiPage(ctx context.Context, projectID, path string) (hub.WikiPageView, error)
+	// A file the wiki keeps beside its pages (docs/design.md 5.16).
+	WikiFile(ctx context.Context, projectID, path string) ([]byte, error)
+	SearchWiki(ctx context.Context, projectID, query string, limit int) ([]hub.WikiHit, error)
+	WikiHistory(ctx context.Context, projectID, path string, limit int) ([]hub.WikiCommit, error)
+	RevertWiki(ctx context.Context, projectID, sha, userID, reason string) (string, error)
+	VerifyWikiPage(ctx context.Context, projectID, path, userID string) (hub.WikiPageView, error)
+	SetWikiResident(ctx context.Context, projectID, path string, resident bool, userID string) (hub.WikiPageView, error)
+	// Where a person's doubt about a page goes (docs/design.md 5.15).
+	WikiQuestion(ctx context.Context, projectID string) (hub.WikiQuestion, error)
+	// The wikis as graphs (docs/design.md 5.17).
+	WikiGraph(ctx context.Context, projectID string) (hub.WikiGraph, error)
+	LibraryGraph(ctx context.Context) (hub.WikiGraph, error)
+	// Every project's wiki at once (docs/design.md 5.18).
+	Wikis(ctx context.Context) ([]hub.WikiSummary, error)
+	SearchWikis(ctx context.Context, query string, limit int) ([]hub.WikiProjectHit, error)
+
+	// The skill library every project shares (docs/design.md 5.10).
+	LibraryCatalog(ctx context.Context) (hub.WikiCatalog, error)
+	LibraryPage(ctx context.Context, path string) (hub.WikiPageView, error)
+	SearchLibrary(ctx context.Context, query string, limit int) ([]hub.WikiHit, error)
+	LibraryHistory(ctx context.Context, path string, limit int) ([]hub.WikiCommit, error)
+	RevertLibrary(ctx context.Context, sha, userID, reason string) (string, error)
+	VerifyLibraryPage(ctx context.Context, path, userID string) (hub.WikiPageView, error)
+	TransferSkill(ctx context.Context, name, projectID, userID string) (hub.WikiPageView, error)
+	SkillUses(ctx context.Context, name string, limit int) ([]store.SkillUse, error)
+	// People add skills to the library and install them for agents
+	// (docs/design.md 5.15).
+	ImportSkill(ctx context.Context, folder, team, userID string) (hub.WikiPageView, error)
+	InstallSkill(ctx context.Context, name, agentID string, installed bool) ([]store.AgentRef, error)
+	CheckSkills(ctx context.Context, names []string) error
+	// A person rolls back an agent's change to a skill on trial.
+	RollbackSkill(ctx context.Context, name, userID, reason string) (hub.WikiPageView, error)
+
+	// The project's wiki maintainer (docs/design.md 5.12).
+	UpkeepStatus(ctx context.Context, projectID string) (hub.UpkeepStatus, error)
+	StartUpkeep(ctx context.Context, projectID string) (hub.UpkeepStatus, error)
+
+	// The memories every turn carries (docs/design.md 5.16): a project's,
+	// or the personal one when projectID is empty.
+	Memory(ctx context.Context, projectID string) (hub.MemoryView, error)
+	SetMemory(ctx context.Context, projectID string, entries []string, hash, userID string) (hub.MemoryView, error)
+	MemoryHistory(ctx context.Context, limit int) ([]hub.WikiCommit, error)
+	RevertMemory(ctx context.Context, sha, userID, reason string) (string, error)
+}
+
 // Deps are the collaborators the handlers need.
 type Deps struct {
 	Runtimes Discoverer
@@ -69,6 +120,11 @@ type Deps struct {
 	// AvatarDir is where the pictures uploaded for agents go. Empty means
 	// avatars are refused.
 	AvatarDir string
+	// Wikis keeps the project wikis. Nil means the API leaves them alone.
+	Wikis Wikis
+	// Prefs keeps the account's memory switches (docs/design.md 5.19).
+	// Nil means there are none to change.
+	Prefs MemoryPrefsStore
 	// Logger receives unexpected errors. nil means slog.Default().
 	Logger *slog.Logger
 }
@@ -119,6 +175,8 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/v1/auth/logout", h.authLogout)
 	mux.HandleFunc("GET /api/v1/me", h.me)
 	mux.HandleFunc("PATCH /api/v1/me", h.renameMe)
+	mux.HandleFunc("GET /api/v1/settings/memory", h.memoryPrefs)
+	mux.HandleFunc("PUT /api/v1/settings/memory", h.setMemoryPrefs)
 	mux.HandleFunc("POST /api/v1/me/password", h.changePassword)
 	mux.HandleFunc("POST /api/v1/users", h.createUser)
 	mux.HandleFunc("GET /api/v1/users", h.listUsers)
@@ -161,6 +219,40 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/v1/turns/{id}/approvals", h.listTurnApprovals)
 
 	mux.HandleFunc("GET /api/v1/rooms/{id}/events", h.roomEvents)
+
+	mux.HandleFunc("GET /api/v1/projects/{id}/wiki", h.wikiCatalog)
+	mux.HandleFunc("GET /api/v1/projects/{id}/wiki/page", h.wikiPage)
+	mux.HandleFunc("GET /api/v1/projects/{id}/wiki/file", h.wikiFile)
+	mux.HandleFunc("GET /api/v1/projects/{id}/wiki/search", h.searchWiki)
+	mux.HandleFunc("GET /api/v1/projects/{id}/wiki/history", h.wikiHistory)
+	mux.HandleFunc("GET /api/v1/projects/{id}/wiki/graph", h.wikiGraph)
+	mux.HandleFunc("POST /api/v1/projects/{id}/wiki/revert", h.revertWiki)
+	mux.HandleFunc("POST /api/v1/projects/{id}/wiki/verify", h.verifyWikiPage)
+	mux.HandleFunc("POST /api/v1/projects/{id}/wiki/resident", h.setWikiResident)
+	mux.HandleFunc("POST /api/v1/projects/{id}/wiki/question", h.wikiQuestion)
+	mux.HandleFunc("GET /api/v1/projects/{id}/wiki/maintainer", h.upkeepStatus)
+	mux.HandleFunc("POST /api/v1/projects/{id}/wiki/maintain", h.startUpkeep)
+	mux.HandleFunc("GET /api/v1/projects/{id}/memory", h.projectMemory)
+	mux.HandleFunc("PUT /api/v1/projects/{id}/memory", h.setProjectMemory)
+	mux.HandleFunc("GET /api/v1/memory", h.personalMemory)
+	mux.HandleFunc("PUT /api/v1/memory", h.setPersonalMemory)
+	mux.HandleFunc("GET /api/v1/memory/history", h.memoryHistory)
+	mux.HandleFunc("POST /api/v1/memory/revert", h.revertMemory)
+
+	mux.HandleFunc("GET /api/v1/library", h.libraryCatalog)
+	mux.HandleFunc("GET /api/v1/library/page", h.libraryPage)
+	mux.HandleFunc("GET /api/v1/wikis", h.listWikis)
+	mux.HandleFunc("GET /api/v1/wikis/search", h.searchWikis)
+	mux.HandleFunc("GET /api/v1/library/search", h.searchLibrary)
+	mux.HandleFunc("GET /api/v1/library/history", h.libraryHistory)
+	mux.HandleFunc("GET /api/v1/library/graph", h.libraryGraph)
+	mux.HandleFunc("POST /api/v1/library/revert", h.revertLibrary)
+	mux.HandleFunc("POST /api/v1/library/verify", h.verifyLibraryPage)
+	mux.HandleFunc("POST /api/v1/library/transfer", h.transferSkill)
+	mux.HandleFunc("POST /api/v1/library/import", h.importSkill)
+	mux.HandleFunc("POST /api/v1/library/install", h.installSkill)
+	mux.HandleFunc("POST /api/v1/library/rollback", h.rollbackSkill)
+	mux.HandleFunc("GET /api/v1/library/usage", h.skillUses)
 	return withCORS(deps.Events.AllowedOrigins, h.requireSession(mux))
 }
 
@@ -181,10 +273,10 @@ func (h *handlers) probeMachine(w http.ResponseWriter, r *http.Request) {
 	case err == nil:
 		w.WriteHeader(http.StatusAccepted)
 	case errors.Is(err, hub.ErrUnknownMachine):
-		writeError(w, http.StatusNotFound, "machine is not connected")
+		writeCoded(w, http.StatusNotFound, "machineOffline", nil, "machine is not connected")
 	default:
 		h.deps.Logger.Error("probe machine", "machine", r.PathValue("id"), "err", err)
-		writeError(w, http.StatusBadGateway, "the machine could not be reached")
+		writeCoded(w, http.StatusBadGateway, "machineUnreachable", nil, "the machine could not be reached")
 	}
 }
 

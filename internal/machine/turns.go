@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -25,6 +27,9 @@ type turnRunner struct {
 	runners map[string]runtime.Runner
 	conn    protocol.Conn
 	flush   time.Duration
+	// skillRoot is where the skills turns are given are written; empty
+	// leaves turns without them.
+	skillRoot string
 
 	mu     sync.Mutex
 	active map[string]runtime.Turn
@@ -35,13 +40,14 @@ type turnRunner struct {
 	wg      sync.WaitGroup
 }
 
-func newTurnRunner(runners map[string]runtime.Runner, conn protocol.Conn, flush time.Duration) *turnRunner {
+func newTurnRunner(runners map[string]runtime.Runner, conn protocol.Conn, flush time.Duration, skillRoot string) *turnRunner {
 	return &turnRunner{
-		runners: runners,
-		conn:    conn,
-		flush:   flush,
-		active:  make(map[string]runtime.Turn),
-		waiting: make(map[string]chan protocol.RoomResult),
+		runners:   runners,
+		conn:      conn,
+		flush:     flush,
+		skillRoot: skillRoot,
+		active:    make(map[string]runtime.Turn),
+		waiting:   make(map[string]chan protocol.RoomResult),
 	}
 }
 
@@ -62,6 +68,21 @@ func (r *turnRunner) start(ctx context.Context, req protocol.StartTurn) {
 
 	// What the turn may ask of this machine, and through it of the hub.
 	req.Spec.Host = &turnHost{runner: r, turnID: req.TurnID}
+	// The skills it is given, where its runtime loads them from. A turn
+	// whose skills could not be written goes without, and people are told.
+	if req.Spec.Skills != nil && r.skillRoot != "" {
+		taken := runtime.UserSkillNames(req.Spec.WorkDir)
+		dir, err := runtime.WriteSkills(r.skillRoot, req.Spec.Skills, taken)
+		if err != nil {
+			_ = r.conn.Send(ctx, outbound(req.TurnID, runtime.Event{
+				Kind: runtime.EventNotice, Level: runtime.NoticeWarning, At: time.Now(),
+				Text: "The skill library's skills could not be written on this machine, so this turn goes without them: " + err.Error(),
+			}))
+		} else if renamed := renamedSkills(runtime.SkillAliases(req.Spec.Skills, taken)); renamed != "" {
+			_ = r.conn.Send(ctx, outbound(req.TurnID, runtime.Event{Kind: runtime.EventNotice, Level: runtime.NoticeInfo, At: time.Now(), Text: renamed}))
+		}
+		req.Spec.SkillDir = dir
+	}
 	turn, err := runner.StartTurn(ctx, req.Spec)
 	if err != nil {
 		r.release(req.TurnID)
@@ -323,4 +344,22 @@ func (r *turnRunner) roomResult(res protocol.RoomResult) {
 	if ch != nil {
 		ch <- res
 	}
+}
+
+// renamedSkills tells people which of the library's skills go by another
+// name in a turn, because skills of their own on this machine have theirs
+// (docs/design.md 5.11); empty when none do.
+func renamedSkills(aliases map[string]string) string {
+	if len(aliases) == 0 {
+		return ""
+	}
+	names := slices.Sorted(maps.Keys(aliases))
+	for i, name := range names {
+		names[i] = name + " goes by " + aliases[name]
+	}
+	whose := "as a skill of your own on this machine has its name"
+	if len(names) > 1 {
+		whose = "as skills of your own on this machine have their names"
+	}
+	return "In this turn the skill library's " + strings.Join(names, " and ") + ", " + whose + "."
 }

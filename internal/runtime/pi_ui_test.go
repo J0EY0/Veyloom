@@ -63,7 +63,7 @@ func questionOf(t *testing.T, ev Event) Question {
 }
 
 // The prompt goes in as the RPC prompt command, after asking for the
-// session's id.
+// session's id; once the agent is done the runner asks whether pi is too.
 func TestPi_CommandsOverStdin(t *testing.T) {
 	_, stdinPath := scriptedPiCLI(t)
 	events, res, err := runPi(t, PiConfig{}, TurnSpec{Prompt: "line 1\nline 2 with 'quotes'"})
@@ -75,12 +75,15 @@ func TestPi_CommandsOverStdin(t *testing.T) {
 	}
 	raw, _ := os.ReadFile(stdinPath)
 	lines := strings.Split(strings.TrimSpace(string(raw)), "\n")
-	var state, prompt map[string]any
-	if len(lines) != 2 || json.Unmarshal([]byte(lines[0]), &state) != nil || json.Unmarshal([]byte(lines[1]), &prompt) != nil {
-		t.Fatalf("stdin = %q, want two commands", raw)
+	var state, prompt, settle map[string]any
+	if len(lines) != 3 || json.Unmarshal([]byte(lines[0]), &state) != nil || json.Unmarshal([]byte(lines[1]), &prompt) != nil || json.Unmarshal([]byte(lines[2]), &settle) != nil {
+		t.Fatalf("stdin = %q, want three commands", raw)
 	}
 	if state["type"] != "get_state" || prompt["type"] != "prompt" || prompt["message"] != "line 1\nline 2 with 'quotes'" {
 		t.Errorf("commands = %v then %v", state, prompt)
+	}
+	if settle["type"] != "get_state" || settle["id"] != piSettleID {
+		t.Errorf("the last command = %v, want the runner asking whether pi is done", settle)
 	}
 }
 

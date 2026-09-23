@@ -1,6 +1,6 @@
 -- name: CreateTurn :one
-INSERT INTO turns (member_id, room_id, thread_id, trigger_message_id, machine_id, runtime, transcript_path, session_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO turns (member_id, room_id, thread_id, trigger_message_id, machine_id, runtime, transcript_path, session_id, kind)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 RETURNING *;
 
 -- name: FinishTurn :one
@@ -14,6 +14,7 @@ UPDATE turns SET
     cache_write_tokens = $8,
     output_tokens      = $9,
     files_changed      = $10,
+    skills_used        = $11,
     ended_at           = now()
 WHERE id = $1
 RETURNING *;
@@ -72,3 +73,17 @@ WHERE machine_id = sqlc.arg(machine_id)
   AND started_at >= sqlc.arg(since)
   AND (sqlc.arg(runtime)::text = '' OR runtime = sqlc.arg(runtime)::text)
 ORDER BY started_at;
+
+-- name: ListSkillUses :many
+-- The turns that used a skill, newest first, with where they ran: what the
+-- team that owns it looks back on.
+SELECT t.id, t.status, t.runtime, t.started_at, t.ended_at, t.room_id, t.thread_id,
+       th.number AS topic_number, m.display_name AS member_name, p.id AS project_id, p.name AS project_name
+FROM turns t
+JOIN threads th ON th.id = t.thread_id
+JOIN members m ON m.id = t.member_id
+JOIN rooms r ON r.id = t.room_id
+JOIN projects p ON p.id = r.project_id
+WHERE sqlc.arg(skill)::text = ANY (t.skills_used)
+ORDER BY t.started_at DESC, t.id
+LIMIT sqlc.arg(lim);

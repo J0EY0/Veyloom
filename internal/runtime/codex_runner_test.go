@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,6 +118,8 @@ func (f *fakeAppServer) serve() {
 		case "initialize":
 			f.send(map[string]any{"id": msg.ID, "result": map[string]any{"userAgent": "fake-codex", "codexHome": "/tmp", "platformFamily": "unix", "platformOs": "macos"}})
 		case "initialized":
+		case "skills/extraRoots/set":
+			f.send(map[string]any{"id": msg.ID, "result": map[string]any{}})
 		case "thread/start", "thread/resume":
 			id := "thr-new"
 			if msg.Method == "thread/resume" {
@@ -177,6 +180,35 @@ func (f *fakeAppServer) play(threadID, prompt string) bool {
 	}
 
 	switch {
+	case strings.Contains(prompt, "[subagent]"):
+		// Codex starts a subagent, which works in a thread of its own on the
+		// same server: its messages stream among the turn's, and its turn
+		// ends before the turn does.
+		sub := func(extra map[string]any) map[string]any {
+			extra["threadId"], extra["turnId"] = "thr-sub", "turn-sub"
+			return extra
+		}
+		usage := func(in, out int) map[string]any {
+			n := map[string]any{"totalTokens": in + out, "inputTokens": in, "cachedInputTokens": 0, "cacheWriteInputTokens": 0, "outputTokens": out}
+			return map[string]any{"tokenUsage": map[string]any{"total": n, "last": n}}
+		}
+		f.notify("item/started", item("", map[string]any{"item": map[string]any{"type": "subAgentActivity", "id": "sa-1", "kind": "started", "agentThreadId": "thr-sub", "agentPath": "/root/audit_refunds"}}))
+		f.notify("turn/started", map[string]any{"threadId": "thr-sub", "turn": map[string]any{"id": "turn-sub", "status": "inProgress", "items": []any{}}})
+		f.notify("item/agentMessage/delta", item("", map[string]any{"itemId": "msg-1", "delta": "Look"}))
+		f.notify("item/agentMessage/delta", sub(map[string]any{"itemId": "msg-sub", "delta": "SUB "}))
+		f.notify("item/agentMessage/delta", item("", map[string]any{"itemId": "msg-1", "delta": "ing."}))
+		f.notify("item/started", sub(map[string]any{"item": map[string]any{"type": "commandExecution", "id": "cmd-sub", "command": "cat SKILL.md", "status": "inProgress", "commandActions": []any{}}}))
+		f.notify("item/completed", sub(map[string]any{"item": map[string]any{"type": "commandExecution", "id": "cmd-sub", "command": "cat SKILL.md", "status": "completed", "aggregatedOutput": "45 days\n", "exitCode": 0, "commandActions": []any{}}}))
+		f.notify("item/started", sub(map[string]any{"item": map[string]any{"type": "contextCompaction", "id": "cc-sub"}}))
+		f.notify("item/completed", sub(map[string]any{"item": map[string]any{"type": "contextCompaction", "id": "cc-sub"}}))
+		f.notify("thread/tokenUsage/updated", sub(usage(40, 4)))
+		f.notify("item/completed", sub(map[string]any{"item": map[string]any{"type": "agentMessage", "id": "msg-sub", "text": "SUB done"}}))
+		f.notify("turn/completed", map[string]any{"threadId": "thr-sub", "turn": map[string]any{"id": "turn-sub", "status": "completed", "items": []any{}}})
+		f.notify("thread/tokenUsage/updated", item("", usage(100, 10)))
+		f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "agentMessage", "id": "msg-1", "text": "Looking."}}))
+		f.notify("item/started", item("", map[string]any{"item": map[string]any{"type": "mcpToolCall", "id": "mcp-1", "server": "veyloom", "tool": "patch_wiki", "arguments": map[string]any{"path": "/skills/refund-window/SKILL.md"}, "status": "inProgress"}}))
+		f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "mcpToolCall", "id": "mcp-1", "server": "veyloom", "tool": "patch_wiki", "status": "completed", "result": map[string]any{"content": []map[string]any{{"type": "text", "text": "Proposed"}}}}}))
+		complete("completed", "", "Proposed the patch.")
 	case strings.Contains(prompt, "[compact]"):
 		// The thread outgrew its budget: codex compacts, then answers.
 		f.notify("item/started", item("", map[string]any{"item": map[string]any{"type": "contextCompaction", "id": "cc-1"}}))
@@ -832,6 +864,49 @@ func TestCodex_ReportsCompaction(t *testing.T) {
 	}
 }
 
+func TestCodex_SubagentsWorkInTheTurnButDoNotEndOrAnswerIt(t *testing.T) {
+	h := newCodexHarness(t)
+	turn, err := h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "[subagent] keep the wiki", Permission: PermissionEditWithApproval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var text strings.Builder
+	var calls, notices []string
+	compacted := false
+	for _, ev := range drain(t, turn) {
+		switch ev.Kind {
+		case EventText:
+			text.WriteString(ev.Text)
+		case EventToolCall:
+			calls = append(calls, ev.Tool+" "+ev.Input)
+		case EventNotice:
+			notices = append(notices, ev.Text)
+		case EventCompaction:
+			compacted = true
+		}
+	}
+	res, err := turn.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Output != "Proposed the patch." || text.String() != "Looking." {
+		t.Errorf("the reply is the turn's own: output %q, streamed %q", res.Output, text.String())
+	}
+	// The subagent's turn ending did not end this one: the patch came after.
+	if want := []string{"commandExecution cat SKILL.md", `veyloom/patch_wiki {"path":"/skills/refund-window/SKILL.md"}`}; !slices.Equal(calls, want) {
+		t.Errorf("calls %q, want the subagent's command and then the turn's own call %q", calls, want)
+	}
+	if compacted {
+		t.Error("the subagent's compaction is none of the session's")
+	}
+	if len(notices) != 1 || !strings.Contains(notices[0], "Codex started a subagent, audit_refunds") {
+		t.Errorf("notices %q", notices)
+	}
+	if want := (Usage{InputTokens: 140, OutputTokens: 14}); res.Usage != want {
+		t.Errorf("usage %+v, want both threads' %+v", res.Usage, want)
+	}
+}
+
 func TestCodex_MCPResultText(t *testing.T) {
 	for _, tc := range []struct {
 		name, raw, want string
@@ -953,5 +1028,26 @@ func TestCodex_ElicitationsReachAPerson(t *testing.T) {
 	want := `form={"_meta":null,"action":"accept","content":{"region":"eu"}}; link={"_meta":null,"action":"decline","content":null}`
 	if err != nil || res.Output != want {
 		t.Errorf("result = %q, %v\nwant %q", res.Output, err, want)
+	}
+}
+
+func TestCodex_SkillsComeAsAnExtraRoot(t *testing.T) {
+	h := newCodexHarness(t)
+	dir := t.TempDir()
+	turn, err := h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "go", SkillDir: dir})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, turn)
+	sent := h.sent(t)
+	if roots := sent["skills/extraRoots/set"]; len(roots) != 1 || paramsOf(t, roots[0])["extraRoots"].([]any)[0] != filepath.Join(dir, "skills") {
+		t.Errorf("skills/extraRoots/set = %+v", roots)
+	}
+	// Without skills Codex is not asked.
+	h2 := newCodexHarness(t)
+	turn, _ = h2.runner.StartTurn(context.Background(), TurnSpec{Prompt: "go"})
+	drain(t, turn)
+	if roots := h2.sent(t)["skills/extraRoots/set"]; len(roots) != 0 {
+		t.Errorf("no skills, no roots: %+v", roots)
 	}
 }

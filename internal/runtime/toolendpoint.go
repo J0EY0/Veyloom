@@ -19,7 +19,7 @@ const toolServerName = "veyloom"
 //
 //	/turns/{token}/mcp   the turn's MCP server (Claude Code and Codex, which
 //	                     reach it through the stdio proxy, internal/mcpproxy)
-//	/turns/{token}/room  the room tools as plain JSON, for runtimes without
+//	/turns/{token}/room  the same tools as plain JSON, for runtimes without
 //	                     MCP (Pi's extension)
 type toolEndpoint struct {
 	once     sync.Once
@@ -90,22 +90,23 @@ type turnEndpoint struct {
 	MCP, Room string
 }
 
-// register gives a turn its tools: the room tools when it has a host to ask,
-// and whatever more adds to its MCP server (nil for nothing).
-func (e *toolEndpoint) register(host TurnHost, more func(*mcp.Server)) (turnEndpoint, error) {
+// register gives a turn its tools: when it has a host to ask, every turn's
+// and the optional ones extra names; and whatever more adds to its MCP
+// server (nil for nothing).
+func (e *toolEndpoint) register(host TurnHost, extra []string, more func(*mcp.Server)) (turnEndpoint, error) {
 	if err := e.start(); err != nil {
 		return turnEndpoint{}, err
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: toolServerName, Version: "dev"}, nil)
 	if host != nil {
-		addRoomTools(server, host)
+		addRoomTools(server, host, extra)
 	}
 	if more != nil {
 		more(server)
 	}
 	token := randomHex(16)
 	e.mu.Lock()
-	e.turns[token] = &turnTools{mcp: server, room: serveRoomTool(host)}
+	e.turns[token] = &turnTools{mcp: server, room: serveRoomTool(host, extra)}
 	base := e.base + "/turns/" + token
 	e.mu.Unlock()
 	return turnEndpoint{token: token, MCP: base + "/mcp", Room: base + "/room"}, nil

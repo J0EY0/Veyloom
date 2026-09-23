@@ -18,7 +18,7 @@ type sessionStore interface {
 	StartSession(ctx context.Context, n store.NewMemberSession) (store.MemberSession, error)
 	SetSessionRef(ctx context.Context, id, ref string) error
 	LatestSession(ctx context.Context, memberID string) (store.MemberSession, error)
-	AdvanceSession(ctx context.Context, id string, position int64, threadID string) error
+	AdvanceSession(ctx context.Context, id string, r store.Reading) error
 	NoteSessionCompactions(ctx context.Context, id string, count int) error
 }
 
@@ -247,7 +247,10 @@ func (m *TurnManager) rerun(at *activeTurn, first protocol.TurnDone) {
 	}
 
 	// A session that has read nothing: the brief is the whole story.
-	b, err := m.brief.Build(ctx, briefInput{Member: at.member, Thread: at.thread, Triggers: at.triggers, NewSession: endReasonOf(first.Result.Failure)})
+	b, err := m.brief.Build(ctx, briefInput{
+		Member: at.member, Thread: at.thread, Triggers: at.triggers, NewSession: endReasonOf(first.Result.Failure),
+		Busy: m.busyIn(at.thread.RoomID, at.member.ID),
+	})
 	if err != nil {
 		giveUp("brief", err)
 		return
@@ -263,10 +266,10 @@ func (m *TurnManager) rerun(at *activeTurn, first protocol.TurnDone) {
 	at.fresh = fresh
 	at.resumed = false
 	at.sessionRef = ""
-	at.position = b.Position
+	at.position, at.wikiPosition = b.Position, b.Wiki
 	at.spent = at.spent.Plus(first.Result.Usage)
 	if at.transcript != nil {
-		if err := at.transcript.write(transcriptLine{Kind: "restart", TurnID: at.turn.ID, Runtime: at.agent.Runtime, Spec: &spec, Error: first.Error}); err != nil {
+		if err := at.transcript.write(transcriptLine{Kind: "restart", TurnID: at.turn.ID, Runtime: at.agent.Runtime, Spec: transcriptSpec(spec), Error: first.Error}); err != nil {
 			m.logger.Warn("transcript", "turn", at.turn.ID, "err", err)
 		}
 	}
@@ -314,23 +317,24 @@ func (m *TurnManager) adopt(ctx context.Context, at *activeTurn, fresh *freshSes
 // settleReading records, once a turn is over, how far its session has read
 // and what the runtime did to it. Runs on the turn's executor.
 //
-// The positions move up to where the room stood when the brief was put
-// together, not to where it stands now: what others said while the turn ran
-// is still news next time. They move only when the turn said or did
+// The positions move up to where the room and the wiki stood when the
+// brief was put together, not to where they stand now: what others said or
+// wrote while the turn ran is still news next time. They move only when the turn said or did
 // something, which is how the hub knows the session took the brief in; a
 // turn that failed before that leaves them, and the next brief tells it
 // all again. Compactions the runtime reported are counted either way.
 func (m *TurnManager) settleReading(ctx context.Context, at *activeTurn) {
 	at.mu.Lock()
-	sessionID, position := at.turn.SessionID, at.position
+	sessionID := at.turn.SessionID
+	reading := store.Reading{Position: at.position, ThreadID: at.thread.ID, Wiki: at.wikiPosition}
 	acted := at.output.Len() > 0 || at.toolActivity || at.segments > 0
 	compactions := at.compactions
 	at.mu.Unlock()
 	if sessionID == "" {
 		return
 	}
-	if acted && position > 0 {
-		if err := m.store.AdvanceSession(ctx, sessionID, position, at.thread.ID); err != nil {
+	if acted && reading.Position > 0 {
+		if err := m.store.AdvanceSession(ctx, sessionID, reading); err != nil {
 			m.logger.Error("advance session", "session", sessionID, "err", err)
 		}
 	}

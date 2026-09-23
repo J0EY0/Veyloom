@@ -7,6 +7,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -31,6 +34,9 @@ var ErrTurnCancelled = errors.New("runtime: turn cancelled")
 //	failure  string  the FailureKind reported with either kind of failure
 //	compact  bool    compact the session before replying
 //	changes  []string report these files as written, before replying
+//	use_skill string  read this skill's SKILL.md from the turn's skills, as
+//	                 a runtime does when a task calls for the skill, and
+//	                 reply with its first line after the frontmatter
 //	room_tool string  call this room tool first, with room_topic (number)
 //	                 and room_text (string) as its arguments, and reply
 //	                 with what it answered
@@ -116,6 +122,21 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 		}
 	}
 	reply := optString(spec.Options, "reply")
+	if name := optString(spec.Options, "use_skill"); name != "" {
+		path := filepath.Join(spec.SkillDir, "skills", name, "SKILL.md")
+		input, _ := json.Marshal(map[string]string{"path": path})
+		data, err := os.ReadFile(path)
+		text := firstBodyLine(string(data))
+		if spec.SkillDir == "" || err != nil {
+			text = "no such skill: " + name
+		}
+		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: "read", Input: string(input)}) ||
+			!t.emit(ctx, Event{Kind: EventToolResult, Tool: "read", Text: text}) {
+			t.finish(ctx, Result{}, ErrTurnCancelled)
+			return
+		}
+		reply = text
+	}
 	if tool := optString(spec.Options, "room_tool"); tool != "" {
 		// Reads the room as a real agent would, through the turn's host.
 		q := RoomQuery{Tool: tool, Topic: int(optFloat(spec.Options, "room_topic")), Text: optString(spec.Options, "room_text")}
@@ -132,6 +153,29 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 		if reply == "" {
 			reply = answer
 		}
+	}
+	// tool_calls: [{"tool": ..., "args": {...}}], each made in order through
+	// the turn's host with its arguments as given, the way an agent calls
+	// the wiki tools. The answers make the reply unless one is set.
+	var answers []string
+	for _, call := range optCalls(spec.Options, "tool_calls") {
+		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: call.tool, Input: string(call.args)}) {
+			t.finish(ctx, Result{}, ErrTurnCancelled)
+			return
+		}
+		// A runtime has only the tools its turn was given.
+		answer := "error: this turn has no tool " + call.tool
+		if !isOptionalTool(call.tool) || slices.Contains(spec.ExtraTools, call.tool) {
+			answer = runRoomTool(ctx, spec.Host, call.tool, call.args)
+		}
+		if !t.emit(ctx, Event{Kind: EventToolResult, Tool: call.tool, Text: answer}) {
+			t.finish(ctx, Result{}, ErrTurnCancelled)
+			return
+		}
+		answers = append(answers, answer)
+	}
+	if reply == "" && len(answers) > 0 {
+		reply = strings.Join(answers, "\n---\n")
 	}
 	if reply == "" {
 		reply = "Echo: " + lastLine(spec.Prompt)
@@ -295,4 +339,42 @@ func randomHex(n int) string {
 		panic(fmt.Sprintf("runtime: random: %v", err))
 	}
 	return hex.EncodeToString(b)
+}
+
+// fakeCall is one tool call of the fake's tool_calls option.
+type fakeCall struct {
+	tool string
+	args json.RawMessage
+}
+
+// optCalls reads a list of {"tool", "args"} objects.
+func optCalls(o map[string]any, key string) []fakeCall {
+	list, _ := o[key].([]any)
+	calls := make([]fakeCall, 0, len(list))
+	for _, item := range list {
+		m, _ := item.(map[string]any)
+		tool, _ := m["tool"].(string)
+		if tool == "" {
+			continue
+		}
+		args, _ := json.Marshal(m["args"])
+		calls = append(calls, fakeCall{tool: tool, args: args})
+	}
+	return calls
+}
+
+// firstBodyLine is the first line of a markdown file after its frontmatter
+// that says something.
+func firstBodyLine(text string) string {
+	if rest, ok := strings.CutPrefix(text, "---\n"); ok {
+		if i := strings.Index(rest, "\n---\n"); i >= 0 {
+			text = rest[i+5:]
+		}
+	}
+	for _, line := range strings.Split(text, "\n") {
+		if line = strings.TrimSpace(line); line != "" {
+			return line
+		}
+	}
+	return ""
 }

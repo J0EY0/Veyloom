@@ -12,6 +12,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/jackc/pgx/v5/stdlib"
@@ -32,6 +33,33 @@ var ErrInvalidID = errors.New("store: invalid id")
 // ErrConflict is returned when a row would violate a uniqueness rule, such
 // as a second agent with the same name.
 var ErrConflict = errors.New("store: conflict")
+
+// sentinels are the kinds of failure the store names, which Reason looks
+// past.
+var sentinels = []error{ErrInvalidInput, ErrInvalidID, ErrConflict, ErrNotFound}
+
+// Reason is err in words for whoever it is reported to, a person or an
+// agent. A sentinel names the kind of failure, which the caller acts on
+// (an HTTP status, say); the words are the reason given after the last
+// one, like "… is not a folder on this machine". An error that gives none
+// keeps its words, less the "store: " the sentinels carry.
+func Reason(err error) string {
+	msg := err.Error()
+	cut := -1
+	for _, s := range sentinels {
+		label := s.Error() + ": "
+		if i := strings.LastIndex(msg, label); i >= 0 {
+			cut = max(cut, i+len(label))
+		}
+	}
+	if cut >= 0 && strings.TrimSpace(msg[cut:]) != "" {
+		return msg[cut:]
+	}
+	for _, s := range sentinels {
+		msg = strings.ReplaceAll(msg, s.Error(), strings.TrimPrefix(s.Error(), "store: "))
+	}
+	return msg
+}
 
 // NewID returns a fresh random UUID in the canonical text form, for rows
 // whose id the caller needs to know before the insert.

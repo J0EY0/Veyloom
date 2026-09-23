@@ -23,6 +23,9 @@ import (
 type contents struct {
 	Account  *entry    `json:"account,omitempty"`
 	Sessions []session `json:"sessions,omitempty"`
+	// Memory are the account's memory switches (docs/design.md 5.19);
+	// absent until first set, which means every memory on.
+	Memory *store.MemoryPrefs `json:"memory,omitempty"`
 }
 
 type entry struct {
@@ -105,7 +108,7 @@ func (f *File) CreateAccount(_ context.Context, name, passwordHash string) (stor
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.data.Account != nil {
-		return store.User{}, fmt.Errorf("create account: %w", store.ErrConflict)
+		return store.User{}, fmt.Errorf("create account: %w: the account already exists", store.ErrConflict)
 	}
 	f.data.Account = &entry{ID: store.NewID(), Name: name, PasswordHash: passwordHash, CreatedAt: time.Now().UTC()}
 	if err := f.save(); err != nil {
@@ -228,6 +231,30 @@ func (f *File) dropSessions(drop func(session) bool) error {
 
 func (e *entry) user() store.User {
 	return store.User{ID: e.ID, Name: e.Name, CreatedAt: e.CreatedAt}
+}
+
+// MemoryPrefs are the account's memory switches: every memory on until
+// they are set.
+func (f *File) MemoryPrefs() store.MemoryPrefs {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.data.Memory == nil {
+		return store.DefaultMemoryPrefs
+	}
+	return *f.data.Memory
+}
+
+// SetMemoryPrefs keeps new memory switches.
+func (f *File) SetMemoryPrefs(p store.MemoryPrefs) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	prev := f.data.Memory
+	f.data.Memory = &p
+	if err := f.save(); err != nil {
+		f.data.Memory = prev
+		return err
+	}
+	return nil
 }
 
 // save writes to a temporary file and renames it into place, so a crash

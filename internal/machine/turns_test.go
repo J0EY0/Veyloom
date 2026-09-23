@@ -2,6 +2,8 @@ package machine
 
 import (
 	"context"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -409,5 +411,56 @@ func TestTurn_RoomToolHearsWhyTheHubHasNoAnswer(t *testing.T) {
 	// The agent reads the reason and goes on; its turn does not fail.
 	if done.Error != "" || done.Result.Output != "error: this chat has no topic #99" {
 		t.Errorf("TurnDone = %+v", done)
+	}
+}
+
+func TestTurn_SaysWhichSkillsGoByAnotherName(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	work := t.TempDir()
+	own := filepath.Join(work, ".agents", "skills", "release-notes")
+	if err := os.MkdirAll(own, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(own, "SKILL.md"), []byte("---\nname: release-notes\ndescription: mine\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	hubEnd, _ := connectedMachine(t, Config{ToolDir: t.TempDir()})
+	skill := func(name string) runtime.Skill {
+		return runtime.Skill{Name: name, Files: map[string]string{"SKILL.md": "---\nname: " + name + "\ndescription: the library's\n---\n"}}
+	}
+	for _, c := range []struct {
+		turn, dir string
+		want      string
+	}{
+		{"t1", work, "In this turn the skill library's release-notes goes by veyloom-release-notes, as a skill of your own on this machine has its name."},
+		{"t2", t.TempDir(), ""},
+	} {
+		req := protocol.StartTurn{TurnID: c.turn, Runtime: "fake", Spec: runtime.TurnSpec{
+			Prompt: "hello", WorkDir: c.dir,
+			Skills: &runtime.SkillSet{Hash: "0123456789abcdef", Skills: []runtime.Skill{skill("release-notes"), skill("go-table-tests")}},
+		}}
+		if err := hubEnd.Send(context.Background(), req); err != nil {
+			t.Fatal(err)
+		}
+		events, _ := collectTurn(t, hubEnd, c.turn)
+		var notices []string
+		for _, ev := range events {
+			if ev.Kind == runtime.EventNotice {
+				notices = append(notices, ev.Text)
+			}
+		}
+		if c.want == "" && len(notices) != 0 || c.want != "" && (len(notices) != 1 || notices[0] != c.want) {
+			t.Errorf("%s: notices %q, want %q", c.turn, notices, c.want)
+		}
+	}
+}
+
+func TestRenamedSkills(t *testing.T) {
+	if got := renamedSkills(nil); got != "" {
+		t.Errorf("none renamed: %q", got)
+	}
+	got := renamedSkills(map[string]string{"b": "veyloom-b", "a": "veyloom-a"})
+	if want := "In this turn the skill library's a goes by veyloom-a and b goes by veyloom-b, as skills of your own on this machine have their names."; got != want {
+		t.Errorf("got %q, want %q", got, want)
 	}
 }

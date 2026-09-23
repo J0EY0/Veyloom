@@ -1,0 +1,6 @@
+acme_retail/ is the sample bundle from the Open Knowledge Format repository,
+https://github.com/GoogleCloudPlatform/open-knowledge-format/tree/main/bundles/acme_retail,
+copied unchanged (except for viz.html, which was left out) on 2026-09-21 to
+test that Veyloom reads and round-trips bundles it did not write. It is
+Copyright Google LLC and licensed under the Apache License 2.0, a copy of
+which is in LICENSE.txt.

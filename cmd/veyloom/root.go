@@ -68,6 +68,7 @@ and command-line flags.`,
 		newDiscoverCmd(a),
 		newServeCmd(a),
 		newMigrateCmd(a),
+		newWikiCmd(a),
 		newMCPProxyCmd(),
 	)
 	return root

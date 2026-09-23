@@ -80,14 +80,14 @@ type ThreadResponse struct {
 func (h *handlers) postMessage(w http.ResponseWriter, r *http.Request) {
 	var req PostMessageRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	if user, ok := userFrom(r.Context()); ok {
 		req.UserID = user.ID
 	}
 	if err := validatePostMessage(req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -153,7 +153,7 @@ func (h *handlers) listRoomMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := parsePage(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -196,7 +196,7 @@ func (h *handlers) userInbox(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := parsePage(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	items, err := h.deps.Messages.ListUserMentions(r.Context(), userID, page.before, page.limit)
@@ -244,7 +244,7 @@ func (h *handlers) listThreadMessages(w http.ResponseWriter, r *http.Request) {
 	}
 	page, err := parsePage(r)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	if page.hasBefore {

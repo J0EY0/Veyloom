@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -75,7 +77,7 @@ func TestRoomTools_OverMCP(t *testing.T) {
 	e := newToolEndpoint()
 	t.Cleanup(func() { e.close() })
 	host := &recordingHost{}
-	ep, err := e.register(host, nil)
+	ep, err := e.register(host, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,19 +89,20 @@ func TestRoomTools_OverMCP(t *testing.T) {
 		t.Fatal(err)
 	}
 	var names []string
+	writes := map[string]bool{WikiToolWrite: true, WikiToolPatch: true, WikiToolDeprecate: true, MemoryToolRemember: true, MemoryToolForget: true}
 	for _, tool := range listed.Tools {
 		names = append(names, tool.Name)
 		// Read-only, said where the CLIs look: what lets them through
-		// Claude Code's plan mode and past Codex's approvals.
-		if tool.Annotations == nil || !tool.Annotations.ReadOnlyHint {
-			t.Errorf("%s is not marked read-only", tool.Name)
+		// Claude Code's plan mode. The wiki and memory writes are not.
+		if tool.Annotations == nil || tool.Annotations.ReadOnlyHint == writes[tool.Name] {
+			t.Errorf("%s read-only = %v, want %v", tool.Name, tool.Annotations != nil && tool.Annotations.ReadOnlyHint, !writes[tool.Name])
 		}
 		if tool.Description == "" {
 			t.Errorf("%s has no description", tool.Name)
 		}
 	}
 	// The server lists them by name; which ones matters, not the order.
-	want := append([]string{}, RoomToolNames...)
+	want := append([]string{}, AgentToolNames...)
 	sort.Strings(names)
 	sort.Strings(want)
 	if strings.Join(names, ",") != strings.Join(want, ",") {
@@ -121,8 +124,18 @@ func TestRoomTools_OverMCP(t *testing.T) {
 	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: RoomToolListTopics}); err != nil {
 		t.Fatal(err)
 	}
-	if q := host.last(t); q != (RoomQuery{Tool: RoomToolListTopics}) {
+	if q := host.last(t); !reflect.DeepEqual(q, RoomQuery{Tool: RoomToolListTopics}) {
 		t.Errorf("the host was asked %+v", q)
+	}
+
+	// The wiki tools' arguments go to the hub as the agent gave them.
+	if _, err := session.CallTool(ctx, &mcp.CallToolParams{Name: WikiToolPatch, Arguments: map[string]any{
+		"path": "/facts/a.md", "edits": []map[string]any{{"op": "append", "content": "more"}},
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	if q := host.last(t); q.Tool != WikiToolPatch || !strings.Contains(string(q.Args), `"edits":[{"content":"more","op":"append"}]`) || q.Text != "" {
+		t.Errorf("the host was asked %+v with args %s", q, q.Args)
 	}
 
 	// What goes wrong is an answer the agent can read, not a broken call.
@@ -154,7 +167,7 @@ func TestRoomTools_OverPlainJSON(t *testing.T) {
 	e := newToolEndpoint()
 	t.Cleanup(func() { e.close() })
 	host := &recordingHost{}
-	ep, err := e.register(host, nil)
+	ep, err := e.register(host, nil, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +208,7 @@ func TestRoomTools_OverPlainJSON(t *testing.T) {
 func TestToolEndpoint_NoHostNoRoomTools(t *testing.T) {
 	e := newToolEndpoint()
 	t.Cleanup(func() { e.close() })
-	ep, err := e.register(nil, func(s *mcp.Server) {
+	ep, err := e.register(nil, nil, func(s *mcp.Server) {
 		mcp.AddTool(s, &mcp.Tool{Name: "only"}, func(context.Context, *mcp.CallToolRequest, struct{}) (*mcp.CallToolResult, any, error) {
 			return &mcp.CallToolResult{}, nil, nil
 		})
@@ -218,7 +231,9 @@ func TestClaude_RoomToolsInEveryPreset(t *testing.T) {
 			argsPath, _ := fakeClaudeCLI(t, claudeFixture, 0, "")
 			runner := NewClaudeRunner(ClaudeConfig{ProxyBinary: "/opt/veyloom"})
 			t.Cleanup(func() { runner.Close() })
-			turn, err := runner.StartTurn(context.Background(), TurnSpec{Prompt: "hi", Permission: preset, Host: &recordingHost{}})
+			// The memory tools come while the person uses a memory, as the
+			// hub gives them (docs/design.md 5.19).
+			turn, err := runner.StartTurn(context.Background(), TurnSpec{Prompt: "hi", Permission: preset, Host: &recordingHost{}, ExtraTools: MemoryToolNames})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -227,7 +242,9 @@ func TestClaude_RoomToolsInEveryPreset(t *testing.T) {
 			args := strings.Split(strings.TrimSpace(string(raw)), "\n")
 
 			mcpEndpoint(t, flagValue(args, "--mcp-config"), "/opt/veyloom")
-			want := "mcp__veyloom__list_topics,mcp__veyloom__read_topic,mcp__veyloom__read_room,mcp__veyloom__search_messages"
+			want := "mcp__veyloom__list_topics,mcp__veyloom__read_topic,mcp__veyloom__read_turn,mcp__veyloom__read_room,mcp__veyloom__search_messages," +
+				"mcp__veyloom__search_wiki,mcp__veyloom__read_wiki,mcp__veyloom__related_wiki,mcp__veyloom__write_wiki,mcp__veyloom__patch_wiki,mcp__veyloom__deprecate_wiki," +
+				"mcp__veyloom__remember,mcp__veyloom__forget"
 			if got := flagValue(args, "--allowedTools"); got != want {
 				t.Errorf("--allowedTools = %q, want %q", got, want)
 			}
@@ -236,6 +253,23 @@ func TestClaude_RoomToolsInEveryPreset(t *testing.T) {
 				t.Errorf("--permission-prompt-tool = %q", got)
 			}
 		})
+	}
+}
+
+// A turn not given the memory tools has none: the person turned memory off.
+func TestClaude_NoMemoryToolsUnlessGiven(t *testing.T) {
+	argsPath, _ := fakeClaudeCLI(t, claudeFixture, 0, "")
+	runner := NewClaudeRunner(ClaudeConfig{ProxyBinary: "/opt/veyloom"})
+	t.Cleanup(func() { runner.Close() })
+	turn, err := runner.StartTurn(context.Background(), TurnSpec{Prompt: "hi", Permission: PermissionFullAuto, Host: &recordingHost{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, turn)
+	raw, _ := os.ReadFile(argsPath)
+	args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+	if got := flagValue(args, "--allowedTools"); strings.Contains(got, "remember") || strings.Contains(got, "forget") || !strings.Contains(got, "read_wiki") {
+		t.Errorf("--allowedTools = %q", got)
 	}
 }
 
@@ -328,8 +362,8 @@ func TestPi_RoomToolsThroughTheExtension(t *testing.T) {
 	toolDir := filepath.Join(t.TempDir(), "tools")
 	ext := piExtensionFile(toolDir)
 	cases := map[string]string{
-		PermissionReadOnly:         "read,grep,find,ls," + strings.Join(RoomToolNames, ","),
-		PermissionEditWithApproval: "read,grep,find,ls,edit,write," + strings.Join(RoomToolNames, ","),
+		PermissionReadOnly:         "read,grep,find,ls," + strings.Join(AgentToolNames, ","),
+		PermissionEditWithApproval: "read,grep,find,ls,edit,write," + strings.Join(AgentToolNames, ","),
 		PermissionFullAuto:         "", // no whitelist: every tool, the extension's included
 	}
 	for preset, tools := range cases {
@@ -362,7 +396,7 @@ func TestPi_RoomToolsThroughTheExtension(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the extension should have been written: %v", err)
 	}
-	for _, want := range append([]string{piRoomURLEnv, "registerTool", `"required": true`}, RoomToolNames...) {
+	for _, want := range append([]string{piRoomURLEnv, "registerTool", `"required": [`, `"enum": [`, `"items": {`}, AgentToolNames...) {
 		if !strings.Contains(string(source), want) {
 			t.Errorf("the extension lacks %q", want)
 		}
@@ -395,5 +429,77 @@ func TestPi_ExtensionGetsTheTurnsEndpoint(t *testing.T) {
 	url, _ := os.ReadFile(envPath)
 	if !strings.HasPrefix(string(url), "http://127.0.0.1:") || !strings.HasSuffix(string(url), "/room") {
 		t.Errorf("%s = %q", piRoomURLEnv, url)
+	}
+}
+
+func TestRoomTools_UpkeepToolsOnlyForTheTurnsGivenThem(t *testing.T) {
+	e := newToolEndpoint()
+	t.Cleanup(func() { e.close() })
+	host := &recordingHost{}
+	upkeep, err := e.register(host, UpkeepToolNames, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	chat, err := e.register(host, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	names := func(url string) []string {
+		t.Helper()
+		listed, err := connectTools(t, url).ListTools(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out []string
+		for _, tool := range listed.Tools {
+			out = append(out, tool.Name)
+			// Reading turns only reads; rolling a skill back writes.
+			reads := tool.Name == UpkeepToolListTurns || tool.Name == RoomToolReadTurn
+			if (reads || tool.Name == UpkeepToolRollback) && (tool.Annotations == nil || tool.Annotations.ReadOnlyHint != reads) {
+				t.Errorf("%s: read-only %v", tool.Name, reads)
+			}
+		}
+		sort.Strings(out)
+		return out
+	}
+	want := append(append([]string{}, AgentToolNames...), UpkeepToolNames...)
+	sort.Strings(want)
+	if got := names(upkeep.MCP); !slices.Equal(got, want) {
+		t.Errorf("an upkeep turn's tools %v, want %v", got, want)
+	}
+	// Every turn reads turns; only the maintainer's lists them.
+	if got := names(chat.MCP); slices.Contains(got, UpkeepToolListTurns) || !slices.Contains(got, RoomToolReadTurn) || len(got) != len(AgentToolNames) {
+		t.Errorf("a chat turn's tools %v", got)
+	}
+
+	// Their arguments go to the hub as they came.
+	if _, err := connectTools(t, chat.MCP).CallTool(ctx, &mcp.CallToolParams{Name: RoomToolReadTurn, Arguments: map[string]any{"turn": "abc"}}); err != nil {
+		t.Fatal(err)
+	}
+	if q := host.last(t); q.Tool != RoomToolReadTurn || string(q.Args) != `{"turn":"abc"}` {
+		t.Errorf("the host was asked %+v with %s", q, q.Args)
+	}
+	if _, err := connectTools(t, upkeep.MCP).CallTool(ctx, &mcp.CallToolParams{Name: UpkeepToolListTurns, Arguments: map[string]any{"topic": 3}}); err != nil {
+		t.Fatal(err)
+	}
+	if q := host.last(t); q.Tool != UpkeepToolListTurns || string(q.Args) != `{"topic":3}` {
+		t.Errorf("the host was asked %+v with %s", q, q.Args)
+	}
+
+	post := func(url string) int {
+		t.Helper()
+		res, err := http.Post(url, "application/json", strings.NewReader(`{"tool":"list_turns","args":{"skills":true}}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		res.Body.Close()
+		return res.StatusCode
+	}
+	if code := post(upkeep.Room); code != http.StatusOK {
+		t.Errorf("list_turns on the upkeep turn: %d", code)
+	}
+	if code := post(chat.Room); code != http.StatusBadRequest {
+		t.Errorf("list_turns on a chat turn: %d, want 400", code)
 	}
 }

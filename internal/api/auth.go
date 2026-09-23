@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -167,7 +168,7 @@ func (h *handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 	}
 	var req ChangePasswordRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	token, err := h.deps.Auth.ChangePassword(r.Context(), user.ID, req.Current, req.New)
@@ -193,12 +194,12 @@ func (h *handlers) credentials(w http.ResponseWriter, r *http.Request) (Credenti
 	}
 	var req CredentialsRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return CredentialsRequest{}, false
 	}
 	name, err := requireName("name", req.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return CredentialsRequest{}, false
 	}
 	req.Name = name
@@ -210,7 +211,9 @@ func (h *handlers) writeAuthError(w http.ResponseWriter, r *http.Request, err er
 	case errors.Is(err, auth.ErrSetupDone):
 		writeError(w, http.StatusConflict, "the account already exists; sign in instead")
 	case errors.Is(err, auth.ErrWeakPassword):
-		writeError(w, http.StatusBadRequest, strings.TrimPrefix(err.Error(), "auth: "))
+		writeCoded(w, http.StatusBadRequest, "weakPassword", store.Params{"min": strconv.Itoa(auth.MinPasswordLen)}, strings.TrimPrefix(err.Error(), "auth: "))
+	case errors.Is(err, auth.ErrLongPassword):
+		writeCoded(w, http.StatusBadRequest, "passwordTooLong", store.Params{"max": strconv.Itoa(auth.MaxPasswordBytes)}, strings.TrimPrefix(err.Error(), "auth: "))
 	case errors.Is(err, auth.ErrBadCredentials):
 		writeError(w, http.StatusUnauthorized, "wrong username or password")
 	default:

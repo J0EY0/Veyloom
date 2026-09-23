@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"time"
 
 	"github.com/J0EY0/veyloom/internal/protocol"
@@ -59,7 +60,11 @@ func (w *Machine) Run(ctx context.Context, conn protocol.Conn) error {
 		interval = w.cfg.HeartbeatInterval
 	}
 
-	turns := newTurnRunner(w.runners, conn, w.cfg.EventFlushInterval)
+	skillRoot := ""
+	if w.cfg.ToolDir != "" {
+		skillRoot = filepath.Join(w.cfg.ToolDir, "skills")
+	}
+	turns := newTurnRunner(w.runners, conn, w.cfg.EventFlushInterval, skillRoot)
 	defer turns.shutdown()
 
 	// Recv blocks, so it runs in its own goroutine and feeds the select

@@ -309,10 +309,12 @@ func TestPi_UnknownSessionIDIsNamed(t *testing.T) {
 }
 
 func TestPi_ReportsCompaction(t *testing.T) {
-	// One that fails and is tried again, then one that takes.
+	// One that fails and is tried again, then one that takes. Pi says it
+	// will run the agent again only after one that took, so the failed one
+	// does not.
 	out := `{"type":"session","id":"pi-sess-1"}
 {"type":"compaction_start","reason":"overflow"}
-{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":true,"errorMessage":"summary request failed"}
+{"type":"compaction_end","reason":"overflow","aborted":false,"willRetry":false,"errorMessage":"summary request failed"}
 {"type":"compaction_start","reason":"threshold"}
 {"type":"compaction_end","reason":"threshold","result":{"summary":"## Goal\n...","firstKeptEntryId":"e9","tokensBefore":180000},"aborted":false,"willRetry":false}
 {"type":"message_end","message":{"role":"assistant","content":[{"type":"text","text":"done"}],"stopReason":"stop"}}
@@ -330,5 +332,53 @@ func TestPi_ReportsCompaction(t *testing.T) {
 		if ev.Kind == EventCompaction && ev.Phase == CompactionFailed && ev.Text != "summary request failed" {
 			t.Errorf("a failed compaction should say why: %+v", ev)
 		}
+	}
+}
+
+func TestPi_SkillsOneFolderEach(t *testing.T) {
+	dir, err := WriteSkills(t.TempDir(), testSkillSet("0123456789abcdef"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := NewPiRunner(PiConfig{})
+	args := strings.Join(r.args(TurnSpec{Prompt: "x", SkillDir: dir}), "\n")
+	for _, name := range []string{"go-table-tests", "release-notes"} {
+		if !strings.Contains(args, "--skill\n"+filepath.Join(dir, "skills", name)) {
+			t.Errorf("args lack --skill %s:\n%s", name, args)
+		}
+	}
+}
+
+// A maintainer's upkeep turn gets its tools: whitelisted, and named to
+// the extension, which registers its optional tools for the turns that
+// name them. A chat turn gets neither.
+func TestPi_UpkeepTurnsGetTheMaintainersTools(t *testing.T) {
+	cfg := PiConfig{ToolDir: t.TempDir()}
+	argsPath := fakePiCLI(t, piFixture, 0, "")
+	if _, _, err := runPi(t, cfg, TurnSpec{Prompt: "x", Permission: PermissionReadOnly, Host: &recordingHost{}, ExtraTools: UpkeepToolNames}); err != nil {
+		t.Fatal(err)
+	}
+	args, _ := os.ReadFile(argsPath)
+	want := strings.Join(append(append([]string{"read", "grep", "find", "ls"}, AgentToolNames...), UpkeepToolNames...), ",")
+	if !strings.Contains(string(args), "--tools\n"+want+"\n") {
+		t.Errorf("args %q, want --tools %s", args, want)
+	}
+	if extra, _ := os.ReadFile(argsPath + ".extra"); string(extra) != strings.Join(UpkeepToolNames, ",") {
+		t.Errorf("the extension is told %q", extra)
+	}
+	source, _ := os.ReadFile(piExtensionFile(cfg.ToolDir))
+	if !strings.Contains(string(source), `"name": "list_turns"`) || !strings.Contains(string(source), `"optional": true`) || !strings.Contains(string(source), piExtraToolsEnv) {
+		t.Errorf("the extension does not know the optional tools:\n%s", source)
+	}
+
+	argsPath = fakePiCLI(t, piFixture, 0, "")
+	if _, _, err := runPi(t, cfg, TurnSpec{Prompt: "x", Permission: PermissionReadOnly, Host: &recordingHost{}}); err != nil {
+		t.Fatal(err)
+	}
+	if args, _ := os.ReadFile(argsPath); strings.Contains(string(args), UpkeepToolListTurns) || !strings.Contains(string(args), RoomToolReadTurn) {
+		t.Errorf("a chat turn should get read_turn and not the maintainer's tools: %q", args)
+	}
+	if _, err := os.Stat(argsPath + ".extra"); err == nil {
+		t.Error("a chat turn names optional tools to the extension")
 	}
 }

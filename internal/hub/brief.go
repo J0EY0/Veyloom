@@ -1,14 +1,19 @@
 package hub
 
 import (
+	"cmp"
 	"context"
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
+	"github.com/J0EY0/veyloom/internal/wiki"
+	"github.com/J0EY0/veyloom/internal/wiki/okf"
 )
 
 // briefStore is the slice of Store the brief builder reads.
@@ -23,6 +28,7 @@ type briefStore interface {
 	RoomNews(ctx context.Context, q store.NewsQuery) ([]store.RoomNewsItem, int, error)
 	TopicNews(ctx context.Context, q store.NewsQuery, exceptThreadID string) ([]store.TopicNewsItem, int, error)
 	ThreadNews(ctx context.Context, threadID string, q store.NewsQuery) ([]store.Message, int, error)
+	ListThreadTurns(ctx context.Context, threadID string) ([]store.Turn, error)
 }
 
 // briefLimits caps the parts of a brief. What a cap leaves out is counted
@@ -34,6 +40,12 @@ type briefLimits struct {
 	Room int
 	// Topics caps the other topics listed as having news.
 	Topics int
+	// WikiPages caps the pages of the project wiki's catalog a brief lists,
+	// all of them or those changed since the session last looked.
+	WikiPages int
+	// Resident caps, in characters, the resident pages a brief carries in
+	// full.
+	Resident int
 }
 
 // briefBuilder composes the prompt an agent receives for a turn (design.md
@@ -51,6 +63,11 @@ type briefLimits struct {
 //   - The topic the turn is in: all of it the first time the session is
 //     there (and again after a compaction), otherwise only what is new.
 //
+// With a project wiki, the header is followed by what the brief shows of
+// it: the resident pages in full, every turn; the catalog, all of it the
+// first time and after a compaction, otherwise the pages changed since;
+// and the pages that may bear on the topic.
+//
 // A session that has read nothing gets the whole story from the same code:
 // there is no separate "full brief".
 type briefBuilder struct {
@@ -59,10 +76,17 @@ type briefBuilder struct {
 	// attachmentDir turns an attachment's stored path into one the runtime
 	// can open.
 	attachmentDir string
+	// wikis are the projects' wikis; nil when the hub keeps none, and the
+	// brief then says nothing of a wiki.
+	wikis *wikiShelf
+	// trialUses is how many turns keep a change to a skill.
+	trialUses int
+	// now is the clock, which says how long the members at work have been.
+	now func() time.Time
 }
 
 func newBriefBuilder(store briefStore, limits briefLimits, attachmentDir string) *briefBuilder {
-	return &briefBuilder{store: store, limits: limits, attachmentDir: attachmentDir}
+	return &briefBuilder{store: store, limits: limits, attachmentDir: attachmentDir, now: time.Now}
 }
 
 // briefInput is what a brief is made for.
@@ -78,18 +102,36 @@ type briefInput struct {
 	// that what follows is all it has and does not take the turn for a
 	// continuation of things it no longer remembers.
 	NewSession store.SessionEndReason
+	// Skills are the library's skills the turn is given, which the agent
+	// may improve as it uses them (design.md 5.15).
+	Skills []string
+	// Busy are the room's other members at work as the brief is put
+	// together (see busyIn).
+	Busy []busyMember
 }
 
-// brief is a composed prompt and the position of the room it was taken at:
-// once the session has taken the brief in, that is how far it has read.
+// brief is a composed prompt and the positions it was taken at: once the
+// session has taken the brief in, that is how far it has read.
 type brief struct {
-	Prompt   string
+	Prompt string
+	// Position is where the room stood, as messages.seq.
 	Position int64
+	// Wiki is where the project wiki stood (wiki.Bundle.Latest); zero when
+	// the brief showed no wiki.
+	Wiki time.Time
 }
 
 // Build renders the brief for one turn.
 func (b *briefBuilder) Build(ctx context.Context, in briefInput) (brief, error) {
 	position, err := b.store.RoomPosition(ctx, in.Thread.RoomID)
+	if err != nil {
+		return brief{}, fmt.Errorf("brief: %w", err)
+	}
+	project, err := b.store.RoomProject(ctx, in.Thread.RoomID)
+	if err != nil {
+		return brief{}, fmt.Errorf("brief: %w", err)
+	}
+	members, err := b.store.ListRoomMembers(ctx, in.Thread.RoomID)
 	if err != nil {
 		return brief{}, fmt.Errorf("brief: %w", err)
 	}
@@ -103,13 +145,13 @@ func (b *briefBuilder) Build(ctx context.Context, in briefInput) (brief, error) 
 		w.addressed[t.ID] = true
 	}
 
-	if err := b.header(ctx, w, in); err != nil {
-		return brief{}, err
-	}
+	bundle := b.projectWiki(ctx, project, in.Thread.RoomID)
+	b.header(ctx, w, in, project, members, bundle)
 	topic, err := b.readTopic(ctx, in, position)
 	if err != nil {
 		return brief{}, err
 	}
+	wikiAt := b.wiki(ctx, w, in, bundle, members, topic)
 	news := store.NewsQuery{RoomID: in.Thread.RoomID, After: in.Session.RoomSeen, UpTo: position, SessionID: in.Session.ID}
 	// What the agent is to answer comes last, where it reads it last: in
 	// the topic when it was asked there, in the room when it was asked
@@ -145,15 +187,12 @@ func (b *briefBuilder) Build(ctx context.Context, in briefInput) (brief, error) 
 			w.message(ctx, t, "")
 		}
 	}
-	return brief{Prompt: strings.TrimRight(w.sb.String(), "\n") + "\n", Position: position}, nil
+	return brief{Prompt: strings.TrimRight(w.sb.String(), "\n") + "\n", Position: position, Wiki: wikiAt}, nil
 }
 
-// header writes what every brief opens with.
-func (b *briefBuilder) header(ctx context.Context, w *briefWriter, in briefInput) error {
-	project, err := b.store.RoomProject(ctx, in.Thread.RoomID)
-	if err != nil {
-		return fmt.Errorf("brief: %w", err)
-	}
+// header writes what every brief opens with. bundle is the project's
+// wiki, nil when there is none to show.
+func (b *briefBuilder) header(ctx context.Context, w *briefWriter, in briefInput, project store.Project, members []store.Member, bundle *wiki.Bundle) {
 	fmt.Fprintf(&w.sb, "You are %q, an agent in the team chat of the project %q. Lines marked with >> are addressed to you; reply to them.\n", in.Member.DisplayName, project.Name)
 	if in.NewSession != "" {
 		fmt.Fprintf(&w.sb, "\nThis is a new session: your earlier session in this project could not be continued (%s), so you do not remember your earlier turns here. What follows is the hub's record; rely on that, and on the repository, rather than on memory.\n", sessionEndPhrase(in.NewSession))
@@ -163,11 +202,10 @@ func (b *briefBuilder) header(ctx context.Context, w *briefWriter, in briefInput
 		w.sb.WriteString(about)
 		w.sb.WriteString("\n")
 	}
-
-	members, err := b.store.ListRoomMembers(ctx, in.Thread.RoomID)
-	if err != nil {
-		return fmt.Errorf("brief: %w", err)
+	if b.wikis != nil {
+		b.wikis.writeMemories(ctx, w, bundle)
 	}
+
 	w.section("In this chat (mention one as @Name to hand something over):")
 	for _, m := range members {
 		if m.Removed() || !m.Enabled {
@@ -186,10 +224,239 @@ func (b *briefBuilder) header(ctx context.Context, w *briefWriter, in briefInput
 		}
 		w.sb.WriteString(line + "\n")
 	}
+	b.atWork(w, in.Busy)
 	// Said every time, like the rest of the header: a brief shows only what
 	// is new, and this is how the agent gets at everything else.
-	w.sb.WriteString("\nYou are shown what is new since you last looked. For anything else in this chat, such as earlier messages, another topic or what a turn changed, use your veyloom tools: " + strings.Join(runtime.RoomToolNames, ", ") + ". Topics are numbered; #12 is read with read_topic.\n")
-	return nil
+	w.sb.WriteString("\nYou are shown what is new since you last looked. For anything else in this chat, such as earlier messages, another topic, or what an agent did in a turn, the commands it ran and what came of them, use your veyloom tools: " + strings.Join(runtime.RoomToolNames, ", ") + ". Topics are numbered; #12 is read with read_topic, which names each agent turn for read_turn.\n")
+	if b.wikis != nil {
+		line := "\nThe project keeps a wiki of what the team has learned: decisions, conventions, facts, pitfalls, what modules are for, what finished topics came to. Look things up in it with search_wiki and read_wiki. " +
+			"Write to it only when a person asks you to, now or as a standing rule of this chat: then write_wiki a new page, patch_wiki the page that has it, or deprecate_wiki one that no longer holds; " +
+			"the change takes effect at once, and a person can undo it. When a person says a page is wrong, check it against the code, or ask them, set it right and say what you changed."
+		line += " related_wiki shows how pages bear on each other, and, given a path of the repository, which pages name it: look before you change a file."
+		line += " Every project also shares a skill library, the same tools with scope library: patterns of how tasks went wrong or right, and skills, which people add and install for agents; your runtime loads the ones installed for you when a task calls for them."
+		line += memoryLine(b.wikis.memoryPrefs())
+		if len(in.Skills) > 0 {
+			line += fmt.Sprintf(" Installed for you: %s. Those you improve as you use them, without being asked: when one proves wrong or short in your task, or you find a better way, "+
+				"set it right with patch_wiki (scope library), one focused change to its SKILL.md or a page of its folder, and record what happened as a Pattern page. "+
+				"The change reaches every agent the skill is installed for from its next turn, on trial until %d turns have used it and ended well; a person or the skill's team can roll it back.",
+				strings.Join(in.Skills, ", "), b.trialUses)
+		}
+		if mounted := mountsLine(b.wikis.mounts(ctx, project)); mounted != "" {
+			line += " " + mounted
+		}
+		w.sb.WriteString(line + "\n")
+	}
+}
+
+// Parts of the wiki a brief shows beside the capped ones.
+const (
+	// wikiRelated caps the pages listed as bearing on the topic.
+	wikiRelated = 5
+	// topicFiles caps the files of the topic looked for in the wiki.
+	topicFiles = 30
+	// relevanceText caps the text the related pages are looked for by.
+	relevanceText = 4000
+	// descriptionExcerpt is how much of a page's description a list shows.
+	descriptionExcerpt = 200
+)
+
+// projectWiki opens the project's wiki for the brief. Pages edited outside
+// Veyloom since it was last looked at are news like any other, so they are
+// picked up first. It is nil when the hub keeps no wikis, or when this one
+// cannot be read: that costs the brief its wiki, not the turn.
+func (b *briefBuilder) projectWiki(ctx context.Context, project store.Project, roomID string) *wiki.Bundle {
+	if b.wikis == nil {
+		return nil
+	}
+	bundle, err := b.wikis.project(ctx, project)
+	if err != nil {
+		b.wikis.logger.Warn("brief: open the project wiki", "project", project.ID, "err", err)
+		return nil
+	}
+	b.wikis.sync(ctx, bundle, project.ID, roomID)
+	return bundle
+}
+
+// wiki writes what the brief shows of the project wiki (design.md 5.2) and
+// returns where the wiki stood, zero when it showed none.
+func (b *briefBuilder) wiki(ctx context.Context, w *briefWriter, in briefInput, bundle *wiki.Bundle, members []store.Member, topic topicPart) time.Time {
+	if bundle == nil {
+		return time.Time{}
+	}
+	at := bundle.Latest()
+	// The memory is carried whole in the header, not listed again.
+	listed := map[string]bool{wiki.MemoryPath: true}
+	b.residentPages(w, bundle, listed)
+	b.wikiCatalog(w, bundle, in.Session.WikiSeen, listed)
+	b.relatedPages(ctx, w, bundle, b.relevance(ctx, in, members, topic), listed)
+	return at
+}
+
+// residentPages writes the pages every turn carries, in full, as many as
+// fit; those that do not are named so the agent can read them.
+func (b *briefBuilder) residentPages(w *briefWriter, bundle *wiki.Bundle, listed map[string]bool) {
+	pages := bundle.Resident()
+	if len(pages) == 0 {
+		return
+	}
+	w.section("Resident pages of the project wiki, carried in every turn:")
+	room := b.limits.Resident
+	var left []string
+	for _, p := range pages {
+		listed[p.Path] = true
+		text := p.ResidentText()
+		// In order: what does not fit ends the part, so a page is never
+		// cut and the ones carried are the ones confirmed last.
+		if n := utf8.RuneCountInString(text); len(left) == 0 && n <= room {
+			room -= n
+			w.sb.WriteString(text)
+			continue
+		}
+		left = append(left, p.Path)
+	}
+	if len(left) > 0 {
+		fmt.Fprintf(&w.sb, "\n(%s did not fit here; read_wiki has %s: %s)\n", count(len(left), "more resident page"), pronoun(len(left)), strings.Join(left, ", "))
+	}
+}
+
+// wikiCatalog lists the wiki's pages: all of them to a session that has
+// not seen the catalog, else the ones changed since it did. A long catalog
+// keeps the pages changed last.
+func (b *briefBuilder) wikiCatalog(w *briefWriter, bundle *wiki.Bundle, seen *time.Time, listed map[string]bool) {
+	var pages []wiki.Summary
+	var heading string
+	if seen == nil {
+		for _, s := range bundle.Pages() {
+			if s.Status != okf.Deprecated && !listed[s.Path] {
+				pages = append(pages, s)
+			}
+		}
+		heading = "The project wiki's pages (read one with read_wiki):"
+		if total := len(pages); total > b.limits.WikiPages {
+			slices.SortStableFunc(pages, func(x, y wiki.Summary) int { return y.Modified.Compare(x.Modified) })
+			pages = pages[:b.limits.WikiPages]
+			slices.SortFunc(pages, func(x, y wiki.Summary) int { return strings.Compare(x.Path, y.Path) })
+			heading = fmt.Sprintf("The project wiki's pages, the %d changed last of %d (search_wiki finds the others; read one with read_wiki):", len(pages), total)
+		}
+	} else {
+		for _, s := range bundle.Changed(*seen) {
+			if !listed[s.Path] {
+				pages = append(pages, s)
+			}
+		}
+		heading = "Pages of the project wiki added or changed since you last looked:"
+	}
+	if len(pages) == 0 {
+		return
+	}
+	w.section(heading)
+	more := 0
+	if len(pages) > b.limits.WikiPages {
+		pages, more = pages[:b.limits.WikiPages], len(pages)-b.limits.WikiPages
+	}
+	for _, s := range pages {
+		listed[s.Path] = true
+		w.sb.WriteString("   " + pageLine(s, descriptionExcerpt) + "\n")
+	}
+	if more > 0 {
+		fmt.Fprintf(&w.sb, "   (and %d more; search_wiki finds them)\n", more)
+	}
+}
+
+// relevance is what the turn is about, for finding the pages that bear on
+// it: the question, and the first time the session is in the topic also
+// what the topic is and the files its turns changed. Later turns in the
+// topic look only at what they are asked, so the same pages are not listed
+// every turn for the topic alone.
+func (b *briefBuilder) relevance(ctx context.Context, in briefInput, members []store.Member, topic topicPart) wiki.Relevance {
+	asked := in.Triggers
+	if !topic.been {
+		asked = append([]store.Message{topic.root}, asked...)
+	}
+	var text []string
+	said := map[string]bool{}
+	for _, m := range asked {
+		if !said[m.ID] {
+			said[m.ID] = true
+			text = append(text, m.Body)
+		}
+	}
+	r := wiki.Relevance{Text: excerpt(strings.Join(text, "\n"), relevanceText)}
+	if topic.been {
+		return r
+	}
+	turns, err := b.store.ListThreadTurns(ctx, in.Thread.ID)
+	if err != nil {
+		return r
+	}
+	var roots []string
+	for _, m := range members {
+		if m.RepoPath != "" {
+			roots = append(roots, filepath.Clean(m.RepoPath))
+		}
+	}
+	// The deepest repository first, for one inside another.
+	slices.SortFunc(roots, func(x, y string) int { return cmp.Compare(len(y), len(x)) })
+	seen := map[string]bool{}
+	for i := len(turns) - 1; i >= 0 && len(r.Paths) < topicFiles; i-- {
+		for _, f := range turns[i].FilesChanged {
+			if f = repoPath(f, roots); f != "" && !seen[f] && len(r.Paths) < topicFiles {
+				seen[f] = true
+				r.Paths = append(r.Paths, f)
+			}
+		}
+	}
+	return r
+}
+
+// repoPath is a changed file as its path in the repository, which is how
+// a page names it. Runtimes mostly report absolute paths: one under a
+// member's repository is made relative to it, any other keeps its last
+// three parts.
+func repoPath(p string, roots []string) string {
+	if !filepath.IsAbs(p) {
+		return filepath.ToSlash(filepath.Clean(p))
+	}
+	for _, root := range roots {
+		if rel, err := filepath.Rel(root, p); err == nil && rel != "." && !strings.HasPrefix(rel, "..") {
+			return filepath.ToSlash(rel)
+		}
+	}
+	parts := strings.Split(filepath.ToSlash(filepath.Clean(p)), "/")
+	return strings.Join(parts[max(len(parts)-3, 1):], "/")
+}
+
+// relatedPages lists the pages that may bear on the turn, beyond the ones
+// the brief listed already.
+func (b *briefBuilder) relatedPages(ctx context.Context, w *briefWriter, bundle *wiki.Bundle, r wiki.Relevance, listed map[string]bool) {
+	var related []wiki.Hit
+	for _, h := range bundle.Relevant(r, wikiRelated+len(listed)) {
+		if !listed[h.Path] && len(related) < wikiRelated {
+			related = append(related, h)
+		}
+	}
+	if len(related) == 0 {
+		return
+	}
+	w.section("Pages of the project wiki that may bear on this:")
+	for _, h := range related {
+		w.sb.WriteString("   " + pageLine(h.Summary, descriptionExcerpt) + "\n")
+	}
+}
+
+// count is n things, in words: "1 more page", "3 more pages".
+func count(n int, what string) string {
+	if n == 1 {
+		return "1 " + what
+	}
+	return fmt.Sprintf("%d %ss", n, what)
+}
+
+func pronoun(n int) string {
+	if n == 1 {
+		return "it"
+	}
+	return "them"
 }
 
 // roomNews writes the top-level messages new to the session.
@@ -242,8 +509,11 @@ func (b *briefBuilder) topicNews(ctx context.Context, w *briefWriter, q store.Ne
 // topicPart is the topic a turn is in, as its brief shows it: all of it
 // the first time the session is briefed there, otherwise what is new.
 type topicPart struct {
-	number  int
-	root    store.Message
+	number int
+	root   store.Message
+	// opener is the room message an agent's reply opened the topic to
+	// answer; set when the topic is told in full and it has one.
+	opener  *store.Message
 	replies []store.Message
 	// total counts the replies that matched, shown or not.
 	total int
@@ -267,7 +537,38 @@ func (b *briefBuilder) readTopic(ctx context.Context, in briefInput, position in
 	if err != nil {
 		return topicPart{}, fmt.Errorf("brief: %w", err)
 	}
-	return topicPart{number: in.Thread.Number, root: root, replies: replies, total: total, been: been}, nil
+	part := topicPart{number: in.Thread.Number, root: root, replies: replies, total: total, been: been}
+	if !been {
+		part.opener = b.opener(ctx, in.Thread.ID, root)
+	}
+	return part, nil
+}
+
+// opener is the room message a topic was opened to answer, when an
+// agent's reply to it is the topic's root. Told in full, the topic starts
+// there: its first reply says little without the question, and a session
+// that compacted what it had read of the room no longer has the question
+// (the room is not told again after a compaction). Nil when there is none;
+// one that cannot be read the brief goes without.
+func (b *briefBuilder) opener(ctx context.Context, threadID string, root store.Message) *store.Message {
+	if root.TurnID == "" {
+		return nil
+	}
+	turns, err := b.store.ListThreadTurns(ctx, threadID)
+	if err != nil {
+		return nil
+	}
+	for _, t := range turns {
+		if t.ID != root.TurnID || t.TriggerMessageID == "" {
+			continue
+		}
+		m, err := b.store.GetMessage(ctx, t.TriggerMessageID)
+		if err != nil || m.ThreadID != "" {
+			return nil
+		}
+		return &m
+	}
+	return nil
 }
 
 // opening reports whether the topic has nothing in it yet: the agent was
@@ -290,6 +591,10 @@ func (t topicPart) write(ctx context.Context, w *briefWriter) {
 		w.section(fmt.Sprintf("This topic, %s, new since you last looked%s:", name, leftOut(t.total-len(t.replies), "message")))
 	default:
 		w.section(fmt.Sprintf("This topic, %s, in full%s (oldest first):", name, leftOut(t.total-len(t.replies), "reply")))
+		// Unless the room part of this brief just showed it.
+		if t.opener != nil && !w.written[t.opener.ID] {
+			w.message(ctx, *t.opener, "(asked in the room) ")
+		}
 		w.message(ctx, t.root, "")
 	}
 	for _, m := range t.replies {
@@ -433,4 +738,22 @@ func (n *nameResolver) lookup(id string, fetch func() (string, error)) string {
 	}
 	n.cache[id] = name
 	return name
+}
+
+// memoryLine tells a member how to note what a person wants kept, in the
+// memories turns use (design.md 5.19); nothing when none is.
+func memoryLine(prefs store.MemoryPrefs) string {
+	const rest = " What only matters to the conversation at hand is not noted."
+	switch {
+	case prefs.UsesProject() && prefs.UsesPersonal():
+		return " When a person wants a way of working kept for later turns, a preference, a rule, a correction of how you went about something, note it with remember: in the project memory, or with scope personal when they mean every project; " +
+			"forget takes out an entry that no longer holds." + rest + " Every turn carries both memories whole, so each entry is one short line."
+	case prefs.UsesProject():
+		return " When a person wants a way of working kept for later turns, a preference, a rule, a correction of how you went about something, note it with remember in the project memory; " +
+			"forget takes out an entry that no longer holds." + rest + " Every turn carries the project memory whole, so each entry is one short line."
+	case prefs.UsesPersonal():
+		return " When a person wants a way of working kept for later turns in every project, a preference, a rule, a correction of how you went about something, note it with remember, scope personal; " +
+			"forget, scope personal, takes out an entry that no longer holds." + rest + " Every turn carries the personal memory whole, so each entry is one short line."
+	}
+	return ""
 }

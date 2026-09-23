@@ -12,26 +12,43 @@ import (
 )
 
 const createProject = `-- name: CreateProject :one
-INSERT INTO projects (name, repo_path, description)
-VALUES ($1, $2, $3)
-RETURNING id, name, repo_path, description, created_at
+INSERT INTO projects (name, repo_path, description, wiki_slug)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (wiki_slug) DO NOTHING
+RETURNING id, name, repo_path, description, wiki_slug, wiki_maintainer_trigger, wiki_offer_declined_at, wiki_seen_seq, wiki_external_bundles, created_at, wiki_maintainer_member_id, wiki_thread_id, wiki_offer_message_id
 `
 
 type CreateProjectParams struct {
 	Name        string
 	RepoPath    string
 	Description string
+	WikiSlug    string
 }
 
+// Adds a project unless its wiki folder name is taken, in which case no row
+// comes back and the caller tries the next name.
 func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (Project, error) {
-	row := q.db.QueryRow(ctx, createProject, arg.Name, arg.RepoPath, arg.Description)
+	row := q.db.QueryRow(ctx, createProject,
+		arg.Name,
+		arg.RepoPath,
+		arg.Description,
+		arg.WikiSlug,
+	)
 	var i Project
 	err := row.Scan(
 		&i.ID,
 		&i.Name,
 		&i.RepoPath,
 		&i.Description,
+		&i.WikiSlug,
+		&i.WikiMaintainerTrigger,
+		&i.WikiOfferDeclinedAt,
+		&i.WikiSeenSeq,
+		&i.WikiExternalBundles,
 		&i.CreatedAt,
+		&i.WikiMaintainerMemberID,
+		&i.WikiThreadID,
+		&i.WikiOfferMessageID,
 	)
 	return i, err
 }
@@ -56,7 +73,7 @@ func (q *Queries) DeleteProject(ctx context.Context, id pgtype.UUID) (int64, err
 }
 
 const getProject = `-- name: GetProject :one
-SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.created_at,
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.created_at, projects.wiki_maintainer_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id,
        (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
 FROM projects WHERE projects.id = $1
 `
@@ -74,14 +91,57 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (GetProjectRow
 		&i.Project.Name,
 		&i.Project.RepoPath,
 		&i.Project.Description,
+		&i.Project.WikiSlug,
+		&i.Project.WikiMaintainerTrigger,
+		&i.Project.WikiOfferDeclinedAt,
+		&i.Project.WikiSeenSeq,
+		&i.Project.WikiExternalBundles,
 		&i.Project.CreatedAt,
+		&i.Project.WikiMaintainerMemberID,
+		&i.Project.WikiThreadID,
+		&i.Project.WikiOfferMessageID,
+		&i.MainRoomID,
+	)
+	return i, err
+}
+
+const getProjectBySlug = `-- name: GetProjectBySlug :one
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.created_at, projects.wiki_maintainer_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id,
+       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
+FROM projects WHERE projects.wiki_slug = $1
+`
+
+type GetProjectBySlugRow struct {
+	Project    Project
+	MainRoomID pgtype.UUID
+}
+
+// The project whose wiki is in the folder of that name: whose team owns
+// the skills that name it.
+func (q *Queries) GetProjectBySlug(ctx context.Context, wikiSlug string) (GetProjectBySlugRow, error) {
+	row := q.db.QueryRow(ctx, getProjectBySlug, wikiSlug)
+	var i GetProjectBySlugRow
+	err := row.Scan(
+		&i.Project.ID,
+		&i.Project.Name,
+		&i.Project.RepoPath,
+		&i.Project.Description,
+		&i.Project.WikiSlug,
+		&i.Project.WikiMaintainerTrigger,
+		&i.Project.WikiOfferDeclinedAt,
+		&i.Project.WikiSeenSeq,
+		&i.Project.WikiExternalBundles,
+		&i.Project.CreatedAt,
+		&i.Project.WikiMaintainerMemberID,
+		&i.Project.WikiThreadID,
+		&i.Project.WikiOfferMessageID,
 		&i.MainRoomID,
 	)
 	return i, err
 }
 
 const getRoomProject = `-- name: GetRoomProject :one
-SELECT p.id, p.name, p.repo_path, p.description, p.created_at FROM projects p JOIN rooms r ON r.project_id = p.id WHERE r.id = $1
+SELECT p.id, p.name, p.repo_path, p.description, p.wiki_slug, p.wiki_maintainer_trigger, p.wiki_offer_declined_at, p.wiki_seen_seq, p.wiki_external_bundles, p.created_at, p.wiki_maintainer_member_id, p.wiki_thread_id, p.wiki_offer_message_id FROM projects p JOIN rooms r ON r.project_id = p.id WHERE r.id = $1
 `
 
 // The project a room belongs to.
@@ -93,13 +153,89 @@ func (q *Queries) GetRoomProject(ctx context.Context, id pgtype.UUID) (Project, 
 		&i.Name,
 		&i.RepoPath,
 		&i.Description,
+		&i.WikiSlug,
+		&i.WikiMaintainerTrigger,
+		&i.WikiOfferDeclinedAt,
+		&i.WikiSeenSeq,
+		&i.WikiExternalBundles,
 		&i.CreatedAt,
+		&i.WikiMaintainerMemberID,
+		&i.WikiThreadID,
+		&i.WikiOfferMessageID,
 	)
 	return i, err
 }
 
+const isCurrentProjectMember = `-- name: IsCurrentProjectMember :one
+SELECT EXISTS (
+    SELECT 1 FROM members m JOIN rooms r ON r.id = m.room_id
+    WHERE m.id = $1 AND r.project_id = $2 AND m.removed_at IS NULL
+)
+`
+
+type IsCurrentProjectMemberParams struct {
+	MemberID  pgtype.UUID
+	ProjectID pgtype.UUID
+}
+
+// Whether a member is in a project now: one of its rooms, not taken out.
+func (q *Queries) IsCurrentProjectMember(ctx context.Context, arg IsCurrentProjectMemberParams) (bool, error) {
+	row := q.db.QueryRow(ctx, isCurrentProjectMember, arg.MemberID, arg.ProjectID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
+const listMaintainedProjects = `-- name: ListMaintainedProjects :many
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.created_at, projects.wiki_maintainer_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id,
+       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
+FROM projects WHERE projects.wiki_maintainer_member_id IS NOT NULL
+ORDER BY projects.created_at
+`
+
+type ListMaintainedProjectsRow struct {
+	Project    Project
+	MainRoomID pgtype.UUID
+}
+
+// The projects a person has given a wiki maintainer.
+func (q *Queries) ListMaintainedProjects(ctx context.Context) ([]ListMaintainedProjectsRow, error) {
+	rows, err := q.db.Query(ctx, listMaintainedProjects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListMaintainedProjectsRow
+	for rows.Next() {
+		var i ListMaintainedProjectsRow
+		if err := rows.Scan(
+			&i.Project.ID,
+			&i.Project.Name,
+			&i.Project.RepoPath,
+			&i.Project.Description,
+			&i.Project.WikiSlug,
+			&i.Project.WikiMaintainerTrigger,
+			&i.Project.WikiOfferDeclinedAt,
+			&i.Project.WikiSeenSeq,
+			&i.Project.WikiExternalBundles,
+			&i.Project.CreatedAt,
+			&i.Project.WikiMaintainerMemberID,
+			&i.Project.WikiThreadID,
+			&i.Project.WikiOfferMessageID,
+			&i.MainRoomID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listProjects = `-- name: ListProjects :many
-SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.created_at,
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.created_at, projects.wiki_maintainer_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id,
        (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
 FROM projects ORDER BY projects.created_at, projects.name
 `
@@ -123,7 +259,65 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 			&i.Project.Name,
 			&i.Project.RepoPath,
 			&i.Project.Description,
+			&i.Project.WikiSlug,
+			&i.Project.WikiMaintainerTrigger,
+			&i.Project.WikiOfferDeclinedAt,
+			&i.Project.WikiSeenSeq,
+			&i.Project.WikiExternalBundles,
 			&i.Project.CreatedAt,
+			&i.Project.WikiMaintainerMemberID,
+			&i.Project.WikiThreadID,
+			&i.Project.WikiOfferMessageID,
+			&i.MainRoomID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnmaintainedProjects = `-- name: ListUnmaintainedProjects :many
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.created_at, projects.wiki_maintainer_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id,
+       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
+FROM projects
+WHERE projects.wiki_maintainer_member_id IS NULL AND projects.wiki_offer_message_id IS NULL AND projects.wiki_offer_declined_at IS NULL
+ORDER BY projects.created_at
+`
+
+type ListUnmaintainedProjectsRow struct {
+	Project    Project
+	MainRoomID pgtype.UUID
+}
+
+// The projects a wiki maintainer may yet be offered to: none chosen, none
+// offered, none declined (design.md 5.16).
+func (q *Queries) ListUnmaintainedProjects(ctx context.Context) ([]ListUnmaintainedProjectsRow, error) {
+	rows, err := q.db.Query(ctx, listUnmaintainedProjects)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUnmaintainedProjectsRow
+	for rows.Next() {
+		var i ListUnmaintainedProjectsRow
+		if err := rows.Scan(
+			&i.Project.ID,
+			&i.Project.Name,
+			&i.Project.RepoPath,
+			&i.Project.Description,
+			&i.Project.WikiSlug,
+			&i.Project.WikiMaintainerTrigger,
+			&i.Project.WikiOfferDeclinedAt,
+			&i.Project.WikiSeenSeq,
+			&i.Project.WikiExternalBundles,
+			&i.Project.CreatedAt,
+			&i.Project.WikiMaintainerMemberID,
+			&i.Project.WikiThreadID,
+			&i.Project.WikiOfferMessageID,
 			&i.MainRoomID,
 		); err != nil {
 			return nil, err
@@ -216,24 +410,92 @@ func (q *Queries) ProjectTurnIDs(ctx context.Context, projectID pgtype.UUID) ([]
 	return items, nil
 }
 
+const setProjectMaintainer = `-- name: SetProjectMaintainer :exec
+UPDATE projects SET wiki_maintainer_member_id = $1, wiki_maintainer_trigger = $2
+WHERE id = $3
+`
+
+type SetProjectMaintainerParams struct {
+	MemberID pgtype.UUID
+	Trigger  string
+	ID       pgtype.UUID
+}
+
+// Gives a project its wiki maintainer and when that runs, as the project
+// is created.
+func (q *Queries) SetProjectMaintainer(ctx context.Context, arg SetProjectMaintainerParams) error {
+	_, err := q.db.Exec(ctx, setProjectMaintainer, arg.MemberID, arg.Trigger, arg.ID)
+	return err
+}
+
+const setProjectWikiOffer = `-- name: SetProjectWikiOffer :execrows
+UPDATE projects SET wiki_offer_message_id = $1
+WHERE id = $2 AND wiki_maintainer_member_id IS NULL AND wiki_offer_message_id IS NULL AND wiki_offer_declined_at IS NULL
+`
+
+type SetProjectWikiOfferParams struct {
+	MessageID pgtype.UUID
+	ID        pgtype.UUID
+}
+
+// Records the note that offered the project a wiki maintainer, unless one
+// was chosen, offered or declined meanwhile.
+func (q *Queries) SetProjectWikiOffer(ctx context.Context, arg SetProjectWikiOfferParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setProjectWikiOffer, arg.MessageID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setProjectWikiThread = `-- name: SetProjectWikiThread :execrows
+UPDATE projects SET wiki_thread_id = $1
+WHERE id = $2 AND wiki_thread_id IS NULL
+`
+
+type SetProjectWikiThreadParams struct {
+	ThreadID pgtype.UUID
+	ID       pgtype.UUID
+}
+
+// Records the project's wiki topic, unless it has one already.
+func (q *Queries) SetProjectWikiThread(ctx context.Context, arg SetProjectWikiThreadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setProjectWikiThread, arg.ThreadID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const updateProject = `-- name: UpdateProject :one
 WITH before AS (
-    SELECT repo_path FROM projects WHERE id = $4 FOR UPDATE
+    SELECT repo_path FROM projects WHERE id = $9 FOR UPDATE
 )
 UPDATE projects
-SET name        = coalesce($1, projects.name),
-    repo_path   = coalesce($2, projects.repo_path),
-    description = coalesce($3, projects.description)
+SET name               = coalesce($1, projects.name),
+    repo_path          = coalesce($2, projects.repo_path),
+    description        = coalesce($3, projects.description),
+    wiki_maintainer_member_id = CASE WHEN $4::boolean
+        THEN $5::uuid ELSE projects.wiki_maintainer_member_id END,
+    wiki_maintainer_trigger = coalesce($6, projects.wiki_maintainer_trigger),
+    wiki_external_bundles = coalesce($7::text[], projects.wiki_external_bundles),
+    wiki_offer_declined_at = CASE WHEN $8::boolean
+        THEN coalesce(projects.wiki_offer_declined_at, now()) ELSE projects.wiki_offer_declined_at END
 FROM before
-WHERE projects.id = $4
+WHERE projects.id = $9
 RETURNING projects.id, projects.name, projects.repo_path, projects.created_at, before.repo_path AS old_repo_path
 `
 
 type UpdateProjectParams struct {
-	Name        pgtype.Text
-	RepoPath    pgtype.Text
-	Description pgtype.Text
-	ID          pgtype.UUID
+	Name               pgtype.Text
+	RepoPath           pgtype.Text
+	Description        pgtype.Text
+	SetMaintainer      bool
+	MaintainerMemberID pgtype.UUID
+	MaintainerTrigger  pgtype.Text
+	ExternalBundles    []string
+	DeclineOffer       bool
+	ID                 pgtype.UUID
 }
 
 type UpdateProjectRow struct {
@@ -244,14 +506,23 @@ type UpdateProjectRow struct {
 	OldRepoPath string
 }
 
-// Renames a project, moves its checkout or rewrites its description; a
-// NULL argument keeps the current value. The checkout it had comes back beside it, for moving the
-// members with it.
+// Renames a project, moves its checkout, rewrites its description, turns
+// its members' wiki writes on or off, changes its wiki maintainer or when
+// that runs, or the bundles its wiki mounts; a NULL argument keeps the
+// current value, except that the
+// maintainer is set, to a member or to none, whenever set_maintainer is.
+// The checkout it had comes back beside it, for moving the members with
+// it.
 func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (UpdateProjectRow, error) {
 	row := q.db.QueryRow(ctx, updateProject,
 		arg.Name,
 		arg.RepoPath,
 		arg.Description,
+		arg.SetMaintainer,
+		arg.MaintainerMemberID,
+		arg.MaintainerTrigger,
+		arg.ExternalBundles,
+		arg.DeclineOffer,
 		arg.ID,
 	)
 	var i UpdateProjectRow

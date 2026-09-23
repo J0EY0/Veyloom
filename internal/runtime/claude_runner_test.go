@@ -99,6 +99,54 @@ func kindStrings(kinds []EventKind) []string {
 	return out
 }
 
+func TestClaude_ASubagentsWordsAreNotTheReply(t *testing.T) {
+	// As Claude Code 2.1.275 forwards an Agent tool's subagent: its lines
+	// carry the tool use they belong to.
+	const fixture = `{"type":"system","subtype":"init","session_id":"sess-1","model":"claude-haiku","cwd":"/tmp"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu-agent","name":"Agent","input":{"prompt":"Say PLUM"}}]},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"PLUM"}},"parent_tool_use_id":"tu-agent"}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"tu-read","name":"Read","input":{"file_path":"SKILL.md"}},{"type":"text","text":"PLUM"}]},"parent_tool_use_id":"tu-agent"}
+{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"tu-agent","content":"PLUM"}]},"parent_tool_use_id":null}
+{"type":"stream_event","event":{"type":"content_block_delta","delta":{"type":"text_delta","text":"It said plum."}},"parent_tool_use_id":null}
+{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"It said plum."}]},"parent_tool_use_id":null}
+{"type":"result","subtype":"success","is_error":false,"num_turns":2,"result":"It said plum.","session_id":"sess-1"}
+`
+	for _, partials := range []bool{true, false} {
+		lines := fixture
+		if !partials {
+			// Without the flag the CLI sends no stream_event lines.
+			var kept []string
+			for _, line := range strings.Split(fixture, "\n") {
+				if !strings.Contains(line, `"stream_event"`) {
+					kept = append(kept, line)
+				}
+			}
+			lines = strings.Join(kept, "\n")
+		}
+		fakeClaudeCLI(t, lines, 0, "")
+		events, res, err := runClaude(t, ClaudeConfig{StreamPartials: partials}, TurnSpec{Prompt: "hi"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var text strings.Builder
+		var calls []string
+		for _, ev := range events {
+			switch ev.Kind {
+			case EventText:
+				text.WriteString(ev.Text)
+			case EventToolCall:
+				calls = append(calls, ev.Tool)
+			}
+		}
+		if text.String() != "It said plum." || res.Output != "It said plum." {
+			t.Errorf("partials %v: text %q, output %q, want the turn's own words", partials, text.String(), res.Output)
+		}
+		if strings.Join(calls, ",") != "Agent,Read" {
+			t.Errorf("partials %v: calls %q, want the subagent's among the turn's", partials, calls)
+		}
+	}
+}
+
 func TestClaude_WithoutPartialsTextComesFromMessages(t *testing.T) {
 	// No stream_event lines, as the CLI would produce without the flag.
 	var lines []string
@@ -449,5 +497,16 @@ func TestClaude_RefusedEditChangesNoFile(t *testing.T) {
 	}
 	if strings.Join(changed, ",") != "main.go" {
 		t.Errorf("files changed = %q, want only the edit that went through", changed)
+	}
+}
+
+func TestClaude_SkillsComeAsAPlugin(t *testing.T) {
+	r := NewClaudeRunner(DefaultClaudeConfig())
+	args := strings.Join(r.args(TurnSpec{Prompt: "x", SkillDir: "/tools/skills/0123456789abcdef"}), " ")
+	if !strings.Contains(args, "--plugin-dir /tools/skills/0123456789abcdef") {
+		t.Errorf("args %s", args)
+	}
+	if args := strings.Join(r.args(TurnSpec{Prompt: "x"}), " "); strings.Contains(args, "--plugin-dir") {
+		t.Errorf("no skills, no plugin: %s", args)
 	}
 }

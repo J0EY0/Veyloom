@@ -110,7 +110,7 @@ func TestCodexSmoke(t *testing.T) {
 	if _, err := r.s.UpdateAgent(r.ctx, agent.ID, store.NewAgent{
 		Name: agent.Name, MachineID: agent.MachineID, Runtime: agent.Runtime, RoleCard: agent.RoleCard,
 		PermissionPreset: store.PermissionEditWithApproval,
-		RuntimeOptions:   map[string]any{"approval_policy": "untrusted"},
+		RuntimeOptions:   withoutCodexMemories(map[string]any{"approval_policy": "untrusted"}),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -156,7 +156,7 @@ func TestCodexSmoke(t *testing.T) {
 	if _, err := r.s.UpdateAgent(r.ctx, agent.ID, store.NewAgent{
 		Name: agent.Name, MachineID: agent.MachineID, Runtime: agent.Runtime, RoleCard: agent.RoleCard,
 		PermissionPreset: store.PermissionEditWithApproval,
-		RuntimeOptions:   map[string]any{"extra_args": []any{"-c", `approvals_reviewer="auto_review"`}},
+		RuntimeOptions:   withoutCodexMemories(map[string]any{"extra_args": []any{"-c", `approvals_reviewer="auto_review"`}}),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -190,7 +190,7 @@ func TestCodexSmoke(t *testing.T) {
 		if _, err := r.s.UpdateAgent(r.ctx, agent.ID, store.NewAgent{
 			Name: agent.Name, MachineID: agent.MachineID, Runtime: agent.Runtime, RoleCard: agent.RoleCard,
 			PermissionPreset: store.PermissionEditWithApproval,
-			RuntimeOptions:   map[string]any{"extra_args": extra},
+			RuntimeOptions:   withoutCodexMemories(map[string]any{"extra_args": extra}),
 		}); err != nil {
 			t.Fatal(err)
 		}

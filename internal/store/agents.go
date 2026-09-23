@@ -58,8 +58,11 @@ type Agent struct {
 	RoleCard         string           `json:"role_card"`
 	PermissionPreset PermissionPreset `json:"permission_preset"`
 	RuntimeOptions   map[string]any   `json:"runtime_options"`
-	CreatedAt        time.Time        `json:"created_at"`
-	UpdatedAt        time.Time        `json:"updated_at"`
+	// Skills names the skills of the skill library installed for it: its
+	// turns are given these and no others (docs/design.md 5.15).
+	Skills    []string  `json:"skills"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // NewAgent is the input to CreateAgent and UpdateAgent.
@@ -73,6 +76,8 @@ type NewAgent struct {
 	RoleCard         string
 	PermissionPreset PermissionPreset
 	RuntimeOptions   map[string]any
+	// Skills installed for it, by name.
+	Skills []string
 }
 
 // Member is an agent added to a room.
@@ -132,6 +137,7 @@ func (s *Store) CreateAgent(ctx context.Context, t NewAgent) (Agent, error) {
 		RoleCard:         t.RoleCard,
 		PermissionPreset: string(t.PermissionPreset),
 		RuntimeOptions:   options,
+		Skills:           nonNil(t.Skills),
 	})
 	if err != nil {
 		return Agent{}, mapPGError("create agent", err)
@@ -165,6 +171,7 @@ func (s *Store) UpdateAgent(ctx context.Context, id string, t NewAgent) (Agent, 
 		RoleCard:         t.RoleCard,
 		PermissionPreset: string(t.PermissionPreset),
 		RuntimeOptions:   options,
+		Skills:           nonNil(t.Skills),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Unknown, or still in a project and asked to move.
@@ -349,6 +356,14 @@ func optionalText(v *string) pgtype.Text {
 	return pgtype.Text{String: *v, Valid: true}
 }
 
+// optionalBool is a patch's boolean: nil leaves the column as it is.
+func optionalBool(v *bool) pgtype.Bool {
+	if v == nil {
+		return pgtype.Bool{}
+	}
+	return pgtype.Bool{Bool: *v, Valid: true}
+}
+
 // RemoveMember takes a member out of its project and returns it with
 // RemovedAt set. An unknown id, or one already taken out, is ErrNotFound;
 // one with a turn still running is ErrConflict, since that turn would go
@@ -373,7 +388,7 @@ func (s *Store) RemoveMember(ctx context.Context, id string) (Member, error) {
 	if current.Removed() {
 		return Member{}, fmt.Errorf("member %s: %w: already removed", id, ErrNotFound)
 	}
-	return Member{}, fmt.Errorf("member %s: %w: a turn is still running", id, ErrConflict)
+	return Member{}, fmt.Errorf("member %s: %w", id, stillRunning())
 }
 
 // removeMember marks the member removed and ends its open session with it:
@@ -392,6 +407,9 @@ func (s *Store) removeMember(ctx context.Context, id pgtype.UUID) (db.Member, er
 		return db.Member{}, err
 	}
 	if _, err := q.EndOpenSession(ctx, db.EndOpenSessionParams{MemberID: id, EndReason: string(SessionMemberRemoved)}); err != nil {
+		return db.Member{}, err
+	}
+	if err := q.ClearWikiMaintainer(ctx, id); err != nil {
 		return db.Member{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -449,15 +467,37 @@ func mapPGError(op string, err error) error {
 	if !errors.As(err, &pgErr) {
 		return fmt.Errorf("%s: %w", op, err)
 	}
-	switch pgErr.Code {
-	case "23505": // unique_violation
-		return fmt.Errorf("%s: %w: %s", op, ErrConflict, pgErr.ConstraintName)
-	case "23503": // foreign_key_violation
-		return fmt.Errorf("%s: %w (%s)", op, ErrNotFound, pgErr.ConstraintName)
-	case "23514": // check_violation
-		return fmt.Errorf("%s: %w: %s", op, ErrInvalidInput, pgErr.ConstraintName)
+	if p := constraintProblem(pgErr); p != nil {
+		return fmt.Errorf("%s: %w", op, p)
 	}
 	return fmt.Errorf("%s: %w", op, err)
+}
+
+// constraintProblems are the constraints a person can run into, as the
+// problems they are.
+var constraintProblems = map[string]Problem{
+	"agents_name_key":            {Kind: ErrConflict, Code: "agentNameTaken", Text: "another agent already has this name"},
+	"members_name_per_room":      {Kind: ErrConflict, Code: "memberNameTaken", Text: "another member of this chat already has this name"},
+	"attachments_filename_check": {Kind: ErrInvalidInput, Code: "attachmentUnnamed", Text: "an attachment needs a file name"},
+}
+
+// constraintProblem is why the database refused a write, as a Problem:
+// one a person can run into by its code, the others, which only a bug
+// reaches, by the kind of constraint and its name. Nil for an error that
+// is no constraint's.
+func constraintProblem(pgErr *pgconn.PgError) *Problem {
+	if p, ok := constraintProblems[pgErr.ConstraintName]; ok {
+		return &p
+	}
+	switch pgErr.Code {
+	case "23505": // unique_violation
+		return &Problem{Kind: ErrConflict, Text: "it clashes with one already there (" + pgErr.ConstraintName + ")"}
+	case "23503": // foreign_key_violation
+		return &Problem{Kind: ErrNotFound, Text: "something it refers to is gone (" + pgErr.ConstraintName + ")"}
+	case "23514": // check_violation
+		return &Problem{Kind: ErrInvalidInput, Text: "a value is not allowed (" + pgErr.ConstraintName + ")"}
+	}
+	return nil
 }
 
 // marshalOptions encodes runtime options for the jsonb column; nil becomes {}.
@@ -492,9 +532,45 @@ func toAgent(row db.Agent, machineName string, projects []string) (Agent, error)
 		RoleCard:         row.RoleCard,
 		PermissionPreset: PermissionPreset(row.PermissionPreset),
 		RuntimeOptions:   options,
+		Skills:           nonNil(row.Skills),
 		CreatedAt:        row.CreatedAt.Time,
 		UpdatedAt:        row.UpdatedAt.Time,
 	}, nil
+}
+
+// AgentRef names an agent, for lists of them.
+type AgentRef struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// SetAgentSkill installs a skill for an agent, or takes it off.
+func (s *Store) SetAgentSkill(ctx context.Context, agentID, skill string, installed bool) error {
+	id, err := parseUUID(agentID)
+	if err != nil {
+		return err
+	}
+	n, err := s.q.SetAgentSkill(ctx, db.SetAgentSkillParams{ID: id, Skill: skill, Installed: installed})
+	if err != nil {
+		return fmt.Errorf("set skill %s of agent %s: %w", skill, agentID, err)
+	}
+	if n == 0 {
+		return fmt.Errorf("agent %s: %w", agentID, ErrNotFound)
+	}
+	return nil
+}
+
+// ListSkillAgents names the agents a skill is installed for.
+func (s *Store) ListSkillAgents(ctx context.Context, skill string) ([]AgentRef, error) {
+	rows, err := s.q.ListSkillAgents(ctx, skill)
+	if err != nil {
+		return nil, fmt.Errorf("list the agents of skill %s: %w", skill, err)
+	}
+	out := make([]AgentRef, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, AgentRef{ID: uuidString(r.ID), Name: r.Name})
+	}
+	return out, nil
 }
 
 func toMember(row db.Member) Member {

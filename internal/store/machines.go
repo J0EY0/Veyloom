@@ -168,7 +168,7 @@ func marshalRuntimes(runtimes []runtime.Info) ([]byte, error) {
 func parseUUID(s string) (pgtype.UUID, error) {
 	var u pgtype.UUID
 	if err := u.Scan(s); err != nil {
-		return u, fmt.Errorf("%w: %q", ErrInvalidID, s)
+		return u, fmt.Errorf("%w: %q is not an id", ErrInvalidID, s)
 	}
 	return u, nil
 }

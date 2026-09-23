@@ -148,6 +148,38 @@ func TestThreadForMessage_CreatesOnceAndFollowsReplies(t *testing.T) {
 	}
 }
 
+func TestThreadOfMessage_FindsWithoutStarting(t *testing.T) {
+	f := newChatFixture(t)
+	ctx := context.Background()
+	alone := f.post(t, "nothing came of this", "")
+	root := f.post(t, "root", "")
+
+	// A top-level message nothing came of has no thread, and asking does
+	// not start one: the next topic still gets the next number.
+	if _, err := f.s.ThreadOfMessage(ctx, alone.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Fatalf("got %v, want ErrNotFound", err)
+	}
+	thread, err := f.s.ThreadForMessage(ctx, root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if thread.Number != 1 {
+		t.Errorf("the first topic is #%d, want #1", thread.Number)
+	}
+
+	// The root finds the thread it started, a reply the thread it is in.
+	reply := f.post(t, "reply", thread.ID)
+	for _, id := range []string{root.ID, reply.ID} {
+		got, err := f.s.ThreadOfMessage(ctx, id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.ID != thread.ID {
+			t.Errorf("message %s is in thread %s, want %s", id, got.ID, thread.ID)
+		}
+	}
+}
+
 func TestCreateMessage_ThreadMustBelongToRoom(t *testing.T) {
 	f := newChatFixture(t)
 	ctx := context.Background()

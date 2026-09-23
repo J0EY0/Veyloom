@@ -24,6 +24,10 @@ const (
 	EventApprovalRequested EventKind = "approval_requested"
 	// EventApprovalDecided carries an approval that left pending.
 	EventApprovalDecided EventKind = "approval_decided"
+	// EventWikiChanged says the project wiki changed: pages written,
+	// confirmed or undone, by an agent, a person or an editor. It names
+	// the project, not the pages; whoever shows the wiki reads it again.
+	EventWikiChanged EventKind = "wiki_changed"
 )
 
 // Event is one thing that happened in a room, as pushed to live
@@ -41,6 +45,20 @@ type Event struct {
 	TurnID    string               `json:"turn_id,omitempty"`
 	TurnEvent *runtime.Event       `json:"turn_event,omitempty"`
 	Approval  *store.Approval      `json:"approval,omitempty"`
+	// ProjectID accompanies wiki_changed, naming the project whose wiki
+	// changed; Scope is library instead when it was the skill library.
+	ProjectID string `json:"project_id,omitempty"`
+	Scope     string `json:"scope,omitempty"`
+}
+
+// wikiChangedEvent is the live event for a change to a project's wiki, or
+// with projectID empty to the skill library.
+func wikiChangedEvent(projectID, roomID string) Event {
+	ev := Event{Kind: EventWikiChanged, RoomID: roomID, At: time.Now(), ProjectID: projectID, Scope: string(store.WikiProject)}
+	if projectID == "" {
+		ev.Scope = string(store.WikiLibrary)
+	}
+	return ev
 }
 
 // Subscription delivers a room's events to one consumer.

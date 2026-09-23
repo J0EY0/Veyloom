@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 
@@ -115,6 +116,10 @@ func TestSetupThenLogin(t *testing.T) {
 	if _, _, err := s.Setup(ctx, "jinghao", "short"); !errors.Is(err, ErrWeakPassword) {
 		t.Errorf("short password: got %v, want ErrWeakPassword", err)
 	}
+	// bcrypt takes 72 bytes at most: 25 Chinese characters are 75, 24 are 72.
+	if _, _, err := s.Setup(ctx, "jinghao", strings.Repeat("长", 25)); !errors.Is(err, ErrLongPassword) {
+		t.Errorf("long password: got %v, want ErrLongPassword", err)
+	}
 	if _, _, err := s.Setup(ctx, "  ", "long enough"); !errors.Is(err, store.ErrInvalidInput) {
 		t.Errorf("blank name: got %v, want ErrInvalidInput", err)
 	}
@@ -186,6 +191,15 @@ func TestChangePassword_SignsOtherBrowsersOut(t *testing.T) {
 
 	if _, err := s.ChangePassword(ctx, user.ID, "wrong", "battery staple"); !errors.Is(err, ErrBadCredentials) {
 		t.Errorf("wrong current password: got %v", err)
+	}
+	if _, err := s.ChangePassword(ctx, user.ID, "correct horse", strings.Repeat("长", 25)); !errors.Is(err, ErrLongPassword) {
+		t.Errorf("long new password: got %v, want ErrLongPassword", err)
+	}
+	if _, err := s.ChangePassword(ctx, user.ID, "correct horse", strings.Repeat("长", 24)); err != nil {
+		t.Errorf("a new password of 72 bytes: %v", err)
+	}
+	if _, err := s.ChangePassword(ctx, user.ID, strings.Repeat("长", 24), "correct horse"); err != nil {
+		t.Fatalf("back to the first: %v", err)
 	}
 	if _, err := s.ChangePassword(ctx, user.ID, "correct horse", "short"); !errors.Is(err, ErrWeakPassword) {
 		t.Errorf("weak new password: got %v", err)

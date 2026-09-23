@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -32,6 +33,9 @@ func (f *fakeAuth) Setup(_ context.Context, name, password string) (store.User, 
 	}
 	if len(password) < auth.MinPasswordLen {
 		return store.User{}, "", auth.ErrWeakPassword
+	}
+	if len(password) > auth.MaxPasswordBytes {
+		return store.User{}, "", auth.ErrLongPassword
 	}
 	u := store.User{ID: "u1", Name: name}
 	f.account, f.password = &u, password
@@ -64,6 +68,9 @@ func (f *fakeAuth) ChangePassword(_ context.Context, _ string, current, next str
 	}
 	if len(next) < auth.MinPasswordLen {
 		return "", auth.ErrWeakPassword
+	}
+	if len(next) > auth.MaxPasswordBytes {
+		return "", auth.ErrLongPassword
 	}
 	f.password = next
 	f.sessions = map[string]store.User{}
@@ -135,8 +142,17 @@ func TestAuth_SetupSignsInAndGuardsTheRest(t *testing.T) {
 		t.Errorf("status before setup: %+v", status)
 	}
 
-	if rec := send(t, handler, http.MethodPost, "/api/v1/auth/setup", `{"name":"jinghao","password":"short"}`, ""); rec.Code != http.StatusBadRequest {
-		t.Errorf("weak password: %d %s", rec.Code, rec.Body.String())
+	// Named by a code, for the web client to tell in the person's language.
+	short := send(t, handler, http.MethodPost, "/api/v1/auth/setup", `{"name":"jinghao","password":"short"}`, "")
+	var weak ErrorResponse
+	if json.Unmarshal(short.Body.Bytes(), &weak); short.Code != http.StatusBadRequest || weak.Code != "weakPassword" || weak.Params["min"] != strconv.Itoa(auth.MinPasswordLen) || weak.Error == "" {
+		t.Errorf("weak password: %d %s", short.Code, short.Body.String())
+	}
+	// bcrypt takes 72 bytes at most: 25 Chinese characters are 75.
+	long := send(t, handler, http.MethodPost, "/api/v1/auth/setup", `{"name":"jinghao","password":"`+strings.Repeat("长", 25)+`"}`, "")
+	var tooLong ErrorResponse
+	if json.Unmarshal(long.Body.Bytes(), &tooLong); long.Code != http.StatusBadRequest || tooLong.Code != "passwordTooLong" || tooLong.Params["max"] != "72" {
+		t.Errorf("a password over 72 bytes: %d %s", long.Code, long.Body.String())
 	}
 	if rec := send(t, handler, http.MethodPost, "/api/v1/auth/setup", `{"name":"  ","password":"correct horse"}`, ""); rec.Code != http.StatusBadRequest {
 		t.Errorf("blank name: %d", rec.Code)

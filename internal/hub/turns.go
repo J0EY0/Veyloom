@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -51,6 +52,24 @@ type TurnManager struct {
 	// relays counts, per thread, the agent-to-agent turns since a person
 	// last spoke there.
 	relays map[string]int
+	// wikis are the project wikis the wiki tools reach.
+	wikis *wikiShelf
+	// upkeepWaiting are the projects whose maintainer has an upkeep queued
+	// that has not started yet; once started, the turn itself says so.
+	upkeepWaiting map[string]bool
+	// upkeepTurns caps the turns one upkeep goes over.
+	upkeepTurns int
+	// attachmentDir is where the files people send are kept: the room tools
+	// and an upkeep's brief say where to open them, and a page of the wiki
+	// may keep one (docs/design.md 5.16).
+	attachmentDir string
+	// residentBudget is what a brief carries of resident pages, which the
+	// health check measures them against.
+	residentBudget int
+	// trialUses is how many turns keep a skill's change (design.md 5.15);
+	// trialMu keeps a trial from being ended two ways at once.
+	trialUses int
+	trialMu   sync.Mutex
 }
 
 // memberState serialises a member's turns: one runs at a time and the
@@ -62,10 +81,12 @@ type memberState struct {
 }
 
 // trigger is a message waiting to be answered. A zero thread means the
-// message is top-level and its turn opens a new topic.
+// message is top-level and its turn opens a new topic. With upkeep set the
+// message announces a wiki upkeep, which runs as a turn of its own.
 type trigger struct {
 	msg    store.Message
 	thread store.Thread
+	upkeep *upkeep
 }
 
 // activeTurn is a turn between dispatch and completion.
@@ -110,11 +131,15 @@ type activeTurn struct {
 	// order first touched; fileSeen tells which are in.
 	files    []string
 	fileSeen map[string]bool
+	// skillsUsed are the library's skills its tool calls used, each once.
+	skillsUsed []string
 	// position is where the room stood when the brief of the run in flight
-	// was put together: how far the session will have read once it has
-	// taken the brief in. compactions counts those the runtime reported.
-	position    int64
-	compactions int
+	// was put together, and wikiPosition the project wiki: how far the
+	// session will have read once it has taken the brief in. compactions
+	// counts those the runtime reported.
+	position     int64
+	wikiPosition time.Time
+	compactions  int
 	// output is everything streamed, kept for the no-segments fallback.
 	output strings.Builder
 	// segment is the text streamed since the last tool call.
@@ -142,6 +167,15 @@ type activeTurn struct {
 	// against enqueueing after completion.
 	work   chan func()
 	closed bool
+
+	// wikis are the turn's holds on its project's wiki and on the skill
+	// library, each taken on its first wiki tool call for that scope; what
+	// the turn wrote to each is committed when it ends.
+	wikiMu sync.Mutex
+	wikis  map[store.WikiScope]*turnWiki
+
+	// upkeep is set on a wiki maintainer's upkeep turn: what it goes over.
+	upkeep *upkeep
 }
 
 // relayTarget is a member named in a reply, and that reply.
@@ -169,6 +203,7 @@ func newTurnManager(st Store, brief *briefBuilder, connFor func(string) (protoco
 		approvals:       make(map[string]*activeTurn),
 		relays:          make(map[string]int),
 		relayBudget:     relayBudget,
+		upkeepWaiting:   make(map[string]bool),
 	}
 }
 
@@ -201,7 +236,7 @@ func (m *TurnManager) TriggerIn(ctx context.Context, member store.Member, msg st
 	st.starting = true
 	m.mu.Unlock()
 
-	m.start(ctx, member.ID, thread, []store.Message{msg})
+	m.start(ctx, member.ID, thread, []store.Message{msg}, nil)
 	return nil
 }
 
@@ -216,13 +251,19 @@ func (m *TurnManager) state(memberID string) *memberState {
 }
 
 // start runs one turn for memberID answering triggers in thread, opening
-// a topic first when thread is zero. The caller has marked the member as
+// a topic first when thread is zero; with up set, the turn is that wiki
+// upkeep instead, answering its note. The caller has marked the member as
 // starting; start always ends by either registering the running turn or
 // releasing the member via advance.
 //
 // The member is re-read here rather than passed in so that the session
 // reference saved by the previous turn is the one resumed.
-func (m *TurnManager) start(ctx context.Context, memberID string, thread store.Thread, triggers []store.Message) {
+func (m *TurnManager) start(ctx context.Context, memberID string, thread store.Thread, triggers []store.Message, up *upkeep) {
+	if up != nil {
+		// Queued no longer: from here on the turn, or its failure to start,
+		// is what says how the upkeep went.
+		defer m.upkeepStarted(up.project.ID)
+	}
 	member, err := m.store.GetMember(ctx, memberID)
 	if err != nil {
 		m.abort(ctx, memberID, thread, "", err)
@@ -230,8 +271,13 @@ func (m *TurnManager) start(ctx context.Context, memberID string, thread store.T
 	}
 	if member.Removed() {
 		// Taken out of its project between being asked and starting: what
-		// else it was asked in the meantime goes with it.
+		// else it was asked in the meantime goes with it, an upkeep too.
 		m.mu.Lock()
+		for _, p := range m.state(memberID).pending {
+			if p.upkeep != nil {
+				delete(m.upkeepWaiting, p.upkeep.project.ID)
+			}
+		}
 		m.state(memberID).pending = nil
 		m.mu.Unlock()
 		m.abort(ctx, memberID, thread, member.DisplayName, errRemoved)
@@ -280,11 +326,20 @@ func (m *TurnManager) start(ctx context.Context, memberID string, thread store.T
 	}
 
 	// The member's one conversation with its runtime: resumed when it still
-	// fits where the member runs now, replaced when it does not.
-	session, follows, err := m.sessionFor(ctx, member, agent)
-	if err != nil {
-		m.abort(ctx, memberID, thread, member.DisplayName, err)
-		return
+	// fits where the member runs now, replaced when it does not. An upkeep
+	// runs in a session of its own, new every time: what the member keeps
+	// in mind for the chat is no business of the wiki's, nor the other way
+	// round, and the wiki it keeps is its memory.
+	var session store.MemberSession
+	var follows newSession
+	kind := store.TurnChat
+	if up == nil {
+		if session, follows, err = m.sessionFor(ctx, member, agent); err != nil {
+			m.abort(ctx, memberID, thread, member.DisplayName, err)
+			return
+		}
+	} else {
+		kind = store.TurnUpkeep
 	}
 
 	turn, err := m.store.CreateTurn(ctx, store.NewTurn{
@@ -295,6 +350,7 @@ func (m *TurnManager) start(ctx context.Context, memberID string, thread store.T
 		MachineID:        member.MachineID,
 		Runtime:          agent.Runtime,
 		SessionID:        session.ID,
+		Kind:             kind,
 	})
 	if err != nil {
 		m.abort(ctx, memberID, thread, member.DisplayName, err)
@@ -313,6 +369,7 @@ func (m *TurnManager) start(ctx context.Context, memberID string, thread store.T
 		resumed:    session.Started(),
 		pending:    make(map[string]*pendingApproval),
 		work:       make(chan func(), workQueue),
+		upkeep:     up,
 	}
 
 	// From here on every failure is recorded against the turn.
@@ -322,13 +379,22 @@ func (m *TurnManager) start(ctx context.Context, memberID string, thread store.T
 		m.failHere(at, "machine is offline")
 		return
 	}
-	b, err := m.brief.Build(ctx, briefInput{Member: member, Thread: thread, Triggers: triggers, Session: session, NewSession: follows.Reason})
+	skills := m.skillSet(ctx, agent)
+	var b brief
+	if up == nil {
+		b, err = m.brief.Build(ctx, briefInput{
+			Member: member, Thread: thread, Triggers: triggers, Session: session, NewSession: follows.Reason,
+			Skills: skills.Names(), Busy: m.busyIn(thread.RoomID, member.ID),
+		})
+	} else {
+		b.Prompt, err = m.upkeepBrief(ctx, up, member, thread)
+	}
 	if err != nil {
 		m.register(at)
-		m.failHere(at, err.Error())
+		m.failHere(at, store.Reason(err))
 		return
 	}
-	at.position = b.Position
+	at.position, at.wikiPosition = b.Position, b.Wiki
 	spec := runtime.TurnSpec{
 		SystemPrompt: agent.RoleCard,
 		Prompt:       b.Prompt,
@@ -337,6 +403,17 @@ func (m *TurnManager) start(ctx context.Context, memberID string, thread store.T
 		Permission:   firstNonEmpty(string(member.PermissionPreset), string(agent.PermissionPreset)),
 		Session:      sessionSpec(session),
 		Options:      agent.RuntimeOptions,
+		Skills:       skills,
+	}
+	// The memory tools while the person uses a memory (design.md 5.19).
+	if m.wikis != nil && m.wikis.root != "" && m.wikis.memoryPrefs().UsesAny() {
+		spec.ExtraTools = append(spec.ExtraTools, runtime.MemoryToolNames...)
+	}
+	if up != nil {
+		// A session of one turn, under a name of the hub's so the runtimes
+		// that take one keep it where they keep the member's others.
+		spec.Session = runtime.Session{Key: turn.ID}
+		spec.ExtraTools = append(spec.ExtraTools, runtime.UpkeepToolNames...)
 	}
 
 	at.spec = spec
@@ -345,11 +422,11 @@ func (m *TurnManager) start(ctx context.Context, memberID string, thread store.T
 	tx, err := openTranscript(path)
 	if err != nil {
 		m.register(at)
-		m.failHere(at, err.Error())
+		m.failHere(at, store.Reason(err))
 		return
 	}
 	at.transcript = tx
-	if err := tx.write(transcriptLine{Kind: "start", TurnID: turn.ID, Runtime: agent.Runtime, Spec: &spec}); err != nil {
+	if err := tx.write(transcriptLine{Kind: "start", TurnID: turn.ID, Runtime: agent.Runtime, Spec: transcriptSpec(spec)}); err != nil {
 		m.logger.Warn("transcript", "turn", turn.ID, "err", err)
 	}
 	m.register(at)
@@ -459,7 +536,7 @@ func (m *TurnManager) abort(ctx context.Context, memberID string, thread store.T
 	}
 	m.logger.Error("turn could not start", "member", memberID, "err", err)
 	if thread.ID != "" {
-		m.postSystem(ctx, thread, "", fmt.Sprintf("%s could not start a turn: %v", name, err))
+		m.postSystem(ctx, thread, "", fmt.Sprintf("%s could not start a turn: %s", name, store.Reason(err)))
 	}
 	m.mu.Lock()
 	m.state(memberID).starting = false
@@ -498,6 +575,11 @@ func (m *TurnManager) OnEvent(turnID string, ev runtime.Event) {
 		}
 		at.fileSeen[ev.Path] = true
 		at.files = append(at.files, ev.Path)
+	}
+	for _, name := range skillsIn(ev, at.spec.Skills) {
+		if !slices.Contains(at.skillsUsed, name) {
+			at.skillsUsed = append(at.skillsUsed, name)
+		}
 	}
 	at.mu.Unlock()
 
@@ -617,6 +699,7 @@ func (m *TurnManager) complete(at *activeTurn, done protocol.TurnDone) {
 	defer cancel()
 
 	m.abandonApprovals(ctx, at)
+	m.commitWiki(ctx, at)
 
 	at.mu.Lock()
 	if at.transcript != nil {
@@ -634,11 +717,11 @@ func (m *TurnManager) complete(at *activeTurn, done protocol.TurnDone) {
 	at.mu.Unlock()
 
 	at.mu.Lock()
-	fresh, spent, files := at.fresh, at.spent, at.files
+	fresh, spent, files, skills := at.fresh, at.spent, at.files, at.skillsUsed
 	at.fresh = nil
 	at.mu.Unlock()
 
-	outcome := store.TurnOutcome{TranscriptPath: filepath.Join(m.transcripts, at.turn.ID+".jsonl"), Usage: spent.Plus(done.Result.Usage), FilesChanged: files}
+	outcome := store.TurnOutcome{TranscriptPath: filepath.Join(m.transcripts, at.turn.ID+".jsonl"), Usage: spent.Plus(done.Result.Usage), FilesChanged: files, SkillsUsed: skills}
 	name := at.member.DisplayName
 	switch {
 	case done.Error == "":
@@ -684,6 +767,17 @@ func (m *TurnManager) complete(at *activeTurn, done protocol.TurnDone) {
 		m.settleReading(ctx, at)
 	}
 
+	if at.upkeep != nil && outcome.Status == store.TurnDone {
+		// Gone over: the next upkeep starts after them. One that failed or
+		// was cancelled leaves them for the next.
+		if err := m.store.RecordWikiReviews(ctx, at.upkeep.project.ID, at.turn.ID, at.upkeep.turnIDs()); err != nil {
+			m.logger.Error("record the upkeep", "turn", at.turn.ID, "err", err)
+		}
+		// What people said up to where the chat stood as it was planned.
+		if err := m.store.SetProjectWikiSeen(ctx, at.upkeep.project.ID, at.upkeep.position); err != nil {
+			m.logger.Error("record how far the upkeep went", "turn", at.turn.ID, "err", err)
+		}
+	}
 	finished, err := m.store.FinishTurn(ctx, at.turn.ID, outcome)
 	if err != nil {
 		m.logger.Error("finish turn", "turn", at.turn.ID, "err", err)
@@ -694,7 +788,10 @@ func (m *TurnManager) complete(at *activeTurn, done protocol.TurnDone) {
 		finished.EndedAt = &now
 	}
 	m.publish(Event{Kind: EventTurnFinished, RoomID: finished.RoomID, Turn: &finished})
-	if done.Error == "" {
+	m.noteTrialUses(ctx, finished)
+	if done.Error == "" && at.upkeep == nil {
+		// An upkeep hands nothing over: the members it names are named in
+		// passing, not asked.
 		m.relay(ctx, at)
 	}
 	m.advance(ctx, at.member.ID)
@@ -836,11 +933,20 @@ func (m *TurnManager) advance(ctx context.Context, memberID string) {
 		m.mu.Unlock()
 		return
 	}
-	thread := st.pending[0].thread
+	next := st.pending[0]
+	if next.upkeep != nil {
+		// An upkeep runs on its own.
+		st.pending = st.pending[1:]
+		st.starting = true
+		m.mu.Unlock()
+		m.start(ctx, memberID, next.thread, []store.Message{next.msg}, next.upkeep)
+		return
+	}
+	thread := next.thread
 	var msgs []store.Message
 	var rest []trigger
 	for i, p := range st.pending {
-		if (thread.ID == "" && i == 0) || (thread.ID != "" && p.thread.ID == thread.ID) {
+		if p.upkeep == nil && ((thread.ID == "" && i == 0) || (thread.ID != "" && p.thread.ID == thread.ID)) {
 			msgs = append(msgs, p.msg)
 		} else {
 			rest = append(rest, p)
@@ -850,7 +956,7 @@ func (m *TurnManager) advance(ctx context.Context, memberID string) {
 	st.starting = true
 	m.mu.Unlock()
 
-	m.start(ctx, memberID, thread, msgs)
+	m.start(ctx, memberID, thread, msgs, nil)
 }
 
 // Cancel asks the machine running turnID to stop it. The turn completes
@@ -864,7 +970,7 @@ func (m *TurnManager) Cancel(ctx context.Context, turnID string) error {
 	}
 	conn, ok := m.connFor(at.member.MachineID)
 	if !ok {
-		return fmt.Errorf("cancel turn %s: machine is offline", turnID)
+		return fmt.Errorf("cancel turn %s: %w", turnID, store.Conflicting("machineOffline", nil, "the machine running it is offline"))
 	}
 	return conn.Send(ctx, protocol.CancelTurn{TurnID: turnID})
 }

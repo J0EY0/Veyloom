@@ -21,7 +21,9 @@ type piEvent struct {
 	Success bool   `json:"success"`
 	Error   string `json:"error"`
 	Data    *struct {
-		SessionID string `json:"sessionId"`
+		SessionID    string `json:"sessionId"`
+		IsStreaming  bool   `json:"isStreaming"`
+		IsCompacting bool   `json:"isCompacting"`
 	} `json:"data"`
 	// message events
 	Message               *piMessage `json:"message"`
@@ -38,6 +40,8 @@ type piEvent struct {
 	// compaction_end, auto_retry_start
 	Aborted      bool   `json:"aborted"`
 	ErrorMessage string `json:"errorMessage"`
+	// compaction_end: whether pi runs the agent again after it
+	WillRetry bool `json:"willRetry"`
 	// auto_retry_start and auto_retry_end (which reuses Success)
 	Attempt     int     `json:"attempt"`
 	MaxAttempts int     `json:"maxAttempts"`
@@ -46,6 +50,13 @@ type piEvent struct {
 	// extension_error (which reuses Error)
 	ExtensionPath string `json:"extensionPath"`
 	Event         string `json:"event"`
+}
+
+// compacted reports whether a compaction_end has the summary in place.
+// Without a result the session is as it was (pi may try again, which it
+// then announces anew).
+func (ev piEvent) compacted() bool {
+	return !ev.Aborted && ev.ErrorMessage == "" && len(ev.Result) > 0 && string(ev.Result) != "null"
 }
 
 type piMessage struct {
@@ -130,12 +141,10 @@ func (p *piParser) handle(ev piEvent) {
 	case "compaction_start":
 		p.emit(Event{Kind: EventCompaction, Phase: CompactionStart})
 	case "compaction_end":
-		// A result means the summary is in place; without one the session
-		// is as it was (pi may try again, which it then announces anew).
-		if ev.Aborted || ev.ErrorMessage != "" || len(ev.Result) == 0 || string(ev.Result) == "null" {
-			p.emit(Event{Kind: EventCompaction, Phase: CompactionFailed, Text: ev.ErrorMessage})
-		} else {
+		if ev.compacted() {
 			p.emit(Event{Kind: EventCompaction, Phase: CompactionEnd})
+		} else {
+			p.emit(Event{Kind: EventCompaction, Phase: CompactionFailed, Text: ev.ErrorMessage})
 		}
 	case "message_update":
 		if e := ev.AssistantMessageEvent; e != nil && e.Type == "text_delta" && e.Delta != "" {

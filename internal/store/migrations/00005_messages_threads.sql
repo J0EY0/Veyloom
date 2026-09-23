@@ -46,12 +46,26 @@ ALTER TABLE messages
     ADD CONSTRAINT messages_thread_id_fkey
     FOREIGN KEY (thread_id) REFERENCES threads (id) ON DELETE CASCADE;
 
+-- The project's "wiki" topic in its chat, where changes other projects
+-- propose to the skills it owns wait for a person, and where its wiki's
+-- maintainer works (docs/design.md 5.10, 5.12). Opened the first time it
+-- is needed.
+ALTER TABLE projects
+    ADD COLUMN wiki_thread_id uuid REFERENCES threads (id) ON DELETE SET NULL;
+
+-- The note in the project's chat that offered a wiki maintainer, once
+-- enough topics waited to be gone over and none was chosen (design.md
+-- 5.16); the chat draws it as a card. Offered once.
+ALTER TABLE projects
+    ADD COLUMN wiki_offer_message_id uuid REFERENCES messages (id) ON DELETE SET NULL;
+
 -- Room timeline: top-level messages in order.
 CREATE INDEX messages_room_timeline ON messages (room_id, seq) WHERE thread_id IS NULL;
 -- Thread view: replies in order.
 CREATE INDEX messages_by_thread ON messages (thread_id, seq) WHERE thread_id IS NOT NULL;
 
 -- +goose Down
+ALTER TABLE projects DROP COLUMN wiki_offer_message_id, DROP COLUMN wiki_thread_id;
 ALTER TABLE messages DROP CONSTRAINT messages_thread_id_fkey;
 DROP TABLE threads;
 DROP TABLE messages;

@@ -109,7 +109,7 @@ func newFakeRoom() *fakeRoomStore {
 
 func ask(t *testing.T, st roomStore, q runtime.RoomQuery) string {
 	t.Helper()
-	text, err := answerRoomQuery(context.Background(), st, "r1", q)
+	text, err := answerRoomQuery(context.Background(), st, "r1", "/var/veyloom/attachments", q)
 	if err != nil {
 		t.Fatalf("%+v: %v", q, err)
 	}
@@ -152,6 +152,37 @@ func TestRoomRead_ListTopics(t *testing.T) {
 	}
 }
 
+// A file a person sent is named with the id that keeps it in the wiki and
+// the path that opens it (design.md 5.16).
+func TestRoomRead_NamesTheFilesPeopleSent(t *testing.T) {
+	st := newFakeRoom()
+	sent := stamped(user("m2", "the diagram"), 11, 1)
+	sent.Attachments = []store.Attachment{{ID: "at1", Filename: "arch.png", MediaType: "image/png", Size: 1234, Path: "r1/at1.png"}}
+	st.replies = []store.Message{sent}
+	got := ask(t, st, runtime.RoomQuery{Tool: runtime.RoomToolReadTopic, Topic: 7})
+	if !strings.Contains(got, "(attached arch.png, image/png, 1234 bytes; file at1 at /var/veyloom/attachments/r1/at1.png)") {
+		t.Errorf("the file is not named so an agent can open or keep it:\n%s", got)
+	}
+}
+
+// A topic an agent's reply opened starts from the question in the room the
+// reply answers; a turn that changed nothing is named all the same.
+func TestRoomRead_ReadTopicOpenedByAReply(t *testing.T) {
+	st := newFakeRoom()
+	root := stamped(agent("m1", "a1", "ok"), 10, 0)
+	root.TurnID = "turn-0"
+	st.messages["m1"] = root
+	st.messages["m0"] = stamped(user("m0", "@Claude remember the word saffron"), 9, 0)
+	st.turns = []store.Turn{{ID: "turn-0", TriggerMessageID: "m0"}}
+	got := ask(t, st, runtime.RoomQuery{Tool: runtime.RoomToolReadTopic, Topic: 7})
+	wantInOrder(t, got,
+		`Topic #7 "ok", oldest first:`,
+		"(asked in the room) 2026-09-18 12:00 [alice] @Claude remember the word saffron\n",
+		"[Claude] ok\n",
+		"     (turn turn-0)\n",
+	)
+}
+
 func TestRoomRead_ReadTopic(t *testing.T) {
 	st := newFakeRoom()
 	first := stamped(agent("m2", "a1", "I will start with the tokens."), 11, 1)
@@ -167,12 +198,13 @@ func TestRoomRead_ReadTopic(t *testing.T) {
 		"2026-09-18 12:00 [alice] plan the auth refactor\n",
 		"2026-09-18 12:01 [Claude] I will start with the tokens.\n",
 		"2026-09-18 12:02 [Claude] Tokens are done.\n",
-		// Once, after the last thing the turn said.
-		"     (this turn changed: auth/token.go, auth/token_test.go)\n",
+		// Once, after the last thing the turn said: its id, for read_turn,
+		// and the files it changed.
+		"     (turn turn-1; it changed: auth/token.go, auth/token_test.go)\n",
 		"2026-09-18 12:03 [alice] thanks\n",
 	)
-	if strings.Count(got, "this turn changed") != 1 {
-		t.Errorf("a turn's files are said once:\n%s", got)
+	if strings.Count(got, "(turn turn-1") != 1 || strings.Contains(got, "asked in the room") {
+		t.Errorf("a turn is named once, and a topic a person opened has no question before it:\n%s", got)
 	}
 
 	// The latest page of a longer topic says where the rest is and leaves
@@ -189,7 +221,7 @@ func TestRoomRead_ReadTopic(t *testing.T) {
 	}
 
 	for _, q := range []runtime.RoomQuery{{Tool: runtime.RoomToolReadTopic}, {Tool: runtime.RoomToolReadTopic, Topic: 99}} {
-		if _, err := answerRoomQuery(context.Background(), st, "r1", q); err == nil || !strings.Contains(err.Error(), "topic") {
+		if _, err := answerRoomQuery(context.Background(), st, "r1", "", q); err == nil || !strings.Contains(err.Error(), "topic") {
 			t.Errorf("%+v: err = %v, want one that says what is wrong", q, err)
 		}
 	}
@@ -238,13 +270,13 @@ func TestRoomRead_Search(t *testing.T) {
 		"room 2026-09-18 12:04 [alice] what about a rate limit?\n",
 		`(older hits: search_messages with text="rate limit" before=15)`,
 	)
-	if _, err := answerRoomQuery(context.Background(), st, "r1", runtime.RoomQuery{Tool: runtime.RoomToolSearch}); err == nil {
+	if _, err := answerRoomQuery(context.Background(), st, "r1", "", runtime.RoomQuery{Tool: runtime.RoomToolSearch}); err == nil {
 		t.Error("a search for nothing should say so")
 	}
 }
 
 func TestRoomRead_UnknownTool(t *testing.T) {
-	if _, err := answerRoomQuery(context.Background(), newFakeRoom(), "r1", runtime.RoomQuery{Tool: "delete_everything"}); err == nil {
+	if _, err := answerRoomQuery(context.Background(), newFakeRoom(), "r1", "", runtime.RoomQuery{Tool: "delete_everything"}); err == nil {
 		t.Error("an unknown tool should be turned down")
 	}
 }

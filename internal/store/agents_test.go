@@ -173,8 +173,8 @@ func TestAgent_Errors(t *testing.T) {
 	ctx := context.Background()
 
 	_, err := f.s.CreateAgent(ctx, store.NewAgent{Name: "Reviewer", MachineID: f.machineID, Runtime: "pi", PermissionPreset: store.PermissionReadOnly})
-	if !errors.Is(err, store.ErrConflict) {
-		t.Errorf("duplicate name: got %v, want ErrConflict", err)
+	if !errors.Is(err, store.ErrConflict) || store.Reason(err) != "another agent already has this name" {
+		t.Errorf("duplicate name: got %v, want ErrConflict saying so", err)
 	}
 	_, err = f.s.CreateAgent(ctx, store.NewAgent{Name: "Bad", MachineID: f.machineID, Runtime: "pi", PermissionPreset: "yolo"})
 	if !errors.Is(err, store.ErrInvalidInput) {
@@ -210,8 +210,8 @@ func TestDeleteAgent(t *testing.T) {
 	if err := f.s.DeleteAgent(ctx, spare.ID); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("delete twice: got %v, want ErrNotFound", err)
 	}
-	if err := f.s.DeleteAgent(ctx, "not-a-uuid"); !errors.Is(err, store.ErrInvalidID) {
-		t.Errorf("bad id: got %v, want ErrInvalidID", err)
+	if err := f.s.DeleteAgent(ctx, "not-a-uuid"); !errors.Is(err, store.ErrInvalidID) || store.Reason(err) != `"not-a-uuid" is not an id` {
+		t.Errorf("bad id: got %v, want ErrInvalidID saying so", err)
 	}
 
 	// While it is a member of a project the agent stays, and the error
@@ -398,8 +398,8 @@ func TestMember_Errors(t *testing.T) {
 	if _, err := f.s.CreateMember(ctx, base); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := f.s.CreateMember(ctx, base); !errors.Is(err, store.ErrConflict) {
-		t.Errorf("duplicate display name in room: got %v, want ErrConflict", err)
+	if _, err := f.s.CreateMember(ctx, base); !errors.Is(err, store.ErrConflict) || store.Reason(err) != "another member of this chat already has this name" {
+		t.Errorf("duplicate display name in room: got %v, want ErrConflict saying so", err)
 	}
 
 	tests := map[string]store.NewMember{

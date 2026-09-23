@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -176,6 +177,19 @@ func TestClaude_ReadOnlyTurnsDownWithoutAsking(t *testing.T) {
 	notices := eventsOf(events, EventNotice)
 	if len(notices) != 1 || notices[0].Level != NoticeWarning ||
 		notices[0].Text != "Claude Code asked to run `make test`; the member is read-only, so it was turned down without asking anyone" {
+		t.Errorf("notices = %+v", notices)
+	}
+}
+
+// Veyloom's own tools are let through in every preset, plan mode's
+// included, without asking anyone: the wiki is not the project.
+func TestClaude_OwnToolsPassEvenReadOnly(t *testing.T) {
+	events, answers := runScripted(t, "[wiki]", PermissionReadOnly, func(ev Event) *Decision {
+		t.Errorf("nobody should be asked: %+v", ev)
+		return nil
+	})
+	answerIs(t, answers, "[wiki]", `{"behavior":"allow","updatedInput":{"type":"Fact","slug":"go-version","title":"Go","description":"d","body":"b"},"toolUseID":"tu-wiki"}`)
+	if notices := eventsOf(events, EventNotice); len(notices) != 0 {
 		t.Errorf("notices = %+v", notices)
 	}
 }
@@ -359,8 +373,8 @@ func TestClaude_ProxySubprocessEndToEnd(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(tools.Tools) != len(RoomToolNames) {
-		t.Fatalf("tools through the proxy = %+v, want the room tools", tools.Tools)
+	if len(tools.Tools) != len(AgentToolNames) {
+		t.Fatalf("tools through the proxy = %+v, want Veyloom's tools", tools.Tools)
 	}
 	res, err := session.CallTool(ctx, &mcp.CallToolParams{Name: "list_topics", Arguments: map[string]any{}})
 	if err != nil || textOf(t, res) != "answer to list_topics" {
@@ -387,5 +401,27 @@ func TestClaude_AnswerAfterTheTurn(t *testing.T) {
 	drain(t, turn)
 	if err := turn.Answer(req.ApprovalID, Decision{Allow: true}); !errors.Is(err, ErrUnknownApproval) {
 		t.Errorf("late answer: %v, want ErrUnknownApproval", err)
+	}
+}
+
+// A maintainer's upkeep turn gets its two tools on its endpoint, allowed up
+// front like Veyloom's other tools; they pass plan mode, since they read.
+func TestClaude_UpkeepTurnsGetTheMaintainersTools(t *testing.T) {
+	runner := NewClaudeRunner(ClaudeConfig{ProxyBinary: "/opt/veyloom"})
+	t.Cleanup(func() { runner.Close() })
+	argsPath, _ := fakeClaudeCLI(t, claudeFixture, 0, "")
+	turn, err := runner.StartTurn(context.Background(), TurnSpec{Prompt: "a", Permission: PermissionReadOnly, Host: &recordingHost{}, ExtraTools: UpkeepToolNames})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, turn)
+	allowed := strings.Split(flagValue(claudeArgs(t, argsPath), "--allowedTools"), ",")
+	for _, name := range append(append([]string{}, AgentToolNames...), UpkeepToolNames...) {
+		if !slices.Contains(allowed, claudeToolName(name)) {
+			t.Errorf("%s not allowed: %v", name, allowed)
+		}
+	}
+	if !isVeyloomTool(claudeToolName(UpkeepToolListTurns)) {
+		t.Error("list_turns is not taken for one of Veyloom's tools")
 	}
 }

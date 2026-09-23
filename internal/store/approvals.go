@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -297,7 +298,7 @@ func (s *Store) DecideApproval(ctx context.Context, id string, out ApprovalOutco
 		if getErr != nil {
 			return Approval{}, getErr
 		}
-		return Approval{}, fmt.Errorf("approval %s: %w: already %s", id, ErrConflict, current.Status)
+		return Approval{}, fmt.Errorf("approval %s: %w", id, approvalSettled(current.Status))
 	}
 	if err != nil {
 		return Approval{}, mapPGError("decide approval", err)
@@ -438,4 +439,15 @@ func toApproval(row db.Approval) (Approval, error) {
 		a.DecidedAt = &decided
 	}
 	return a, nil
+}
+
+// approvalSettled is what a decision on an approval that is not pending
+// any more is told, by how it was settled: allowed, denied, expired or
+// cancelled (approvalAllowed and so on).
+func approvalSettled(status ApprovalStatus) error {
+	code := "approvalSettled"
+	if s := string(status); s != "" {
+		code = "approval" + strings.ToUpper(s[:1]) + s[1:]
+	}
+	return Conflicting(code, Params{"status": string(status)}, "already %s", status)
 }

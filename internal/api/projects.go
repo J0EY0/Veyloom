@@ -2,12 +2,14 @@ package api
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"unicode/utf8"
 
+	"github.com/J0EY0/veyloom/internal/hub"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
@@ -21,6 +23,12 @@ type CreateProjectRequest struct {
 	// with it. Optional.
 	Description string   `json:"description"`
 	AgentIDs    []string `json:"agent_ids"`
+	// WikiMaintainerAgentID, one of AgentIDs, has that agent's member keep
+	// the wiki from the start (docs/design.md 5.16), running as
+	// WikiMaintainerTrigger, daily when empty. Optional: without one the
+	// chat offers a maintainer later.
+	WikiMaintainerAgentID string              `json:"wiki_maintainer_agent_id"`
+	WikiMaintainerTrigger store.UpkeepTrigger `json:"wiki_maintainer_trigger"`
 }
 
 // maxProjectDescription bounds the description: it goes into every brief,
@@ -34,6 +42,18 @@ type UpdateProjectRequest struct {
 	Name        *string `json:"name"`
 	RepoPath    *string `json:"repo_path"`
 	Description *string `json:"description"`
+	// WikiMaintainerMemberID is the member who keeps the wiki (docs/design.md
+	// 5.12), one of the project's; "" is none.
+	WikiMaintainerMemberID *string `json:"wiki_maintainer_member_id"`
+	// WikiMaintainerTrigger is when it runs: idle, daily, every_3_days,
+	// weekly or manual.
+	WikiMaintainerTrigger *store.UpkeepTrigger `json:"wiki_maintainer_trigger"`
+	// WikiOfferDeclined, true, records that a person said no to the wiki
+	// maintainer the chat offered: it is not offered again.
+	WikiOfferDeclined *bool `json:"wiki_offer_declined"`
+	// WikiExternalBundles are the folders of the OKF bundles the wiki
+	// mounts, read-only, all of them: an empty list mounts none.
+	WikiExternalBundles *[]string `json:"wiki_external_bundles"`
 }
 
 // ProjectResponse is the body of project endpoints: the project and its
@@ -66,12 +86,12 @@ type RoomsResponse struct {
 func (h *handlers) createProject(w http.ResponseWriter, r *http.Request) {
 	var req CreateProjectRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	name, err := requireName("name", req.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 
@@ -87,14 +107,16 @@ func (h *handlers) createProject(w http.ResponseWriter, r *http.Request) {
 
 	description, err := cleanDescription(req.Description)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	project, mainRoom, err := h.deps.Projects.CreateProject(r.Context(), store.NewProject{
-		Name:        name,
-		RepoPath:    cleanRepoPath(req.RepoPath),
-		Description: description,
-		AgentIDs:    agentIDs,
+		Name:                  name,
+		RepoPath:              cleanRepoPath(req.RepoPath),
+		Description:           description,
+		AgentIDs:              agentIDs,
+		WikiMaintainerAgentID: strings.TrimSpace(req.WikiMaintainerAgentID),
+		WikiMaintainerTrigger: req.WikiMaintainerTrigger,
 	})
 	if err != nil {
 		h.writeStoreError(w, r, err)
@@ -132,14 +154,14 @@ func (h *handlers) getProject(w http.ResponseWriter, r *http.Request) {
 func (h *handlers) updateProject(w http.ResponseWriter, r *http.Request) {
 	var req UpdateProjectRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	var patch store.ProjectPatch
 	if req.Name != nil {
 		name, err := requireName("name", *req.Name)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeReason(w, http.StatusBadRequest, err)
 			return
 		}
 		patch.Name = &name
@@ -151,10 +173,20 @@ func (h *handlers) updateProject(w http.ResponseWriter, r *http.Request) {
 	if req.Description != nil {
 		description, err := cleanDescription(*req.Description)
 		if err != nil {
-			writeError(w, http.StatusBadRequest, err.Error())
+			writeReason(w, http.StatusBadRequest, err)
 			return
 		}
 		patch.Description = &description
+	}
+	patch.WikiMaintainer, patch.WikiMaintainerTrigger = req.WikiMaintainerMemberID, req.WikiMaintainerTrigger
+	patch.DeclineWikiOffer = req.WikiOfferDeclined != nil && *req.WikiOfferDeclined
+	if req.WikiExternalBundles != nil {
+		mounts, err := hub.CleanWikiMounts(*req.WikiExternalBundles)
+		if err != nil {
+			writeReason(w, http.StatusBadRequest, err)
+			return
+		}
+		patch.WikiExternalBundles = &mounts
 	}
 
 	id := r.PathValue("id")
@@ -181,6 +213,12 @@ func (h *handlers) deleteProject(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.dropProjectFiles(remains)
+	if h.deps.Wikis != nil {
+		// What the team learned is put aside, not deleted.
+		if err := h.deps.Wikis.ArchiveProjectWiki(remains.ProjectID, remains.WikiSlug); err != nil {
+			h.deps.Logger.Error("archive a deleted project's wiki", "project", remains.ProjectID, "err", err)
+		}
+	}
 	w.WriteHeader(http.StatusNoContent)
 }
 
@@ -219,11 +257,12 @@ func (h *handlers) dropProjectFiles(remains store.ProjectRemains) {
 }
 
 // cleanDescription trims a project's description and turns down one too
-// long to open every brief with.
+// long to open every brief with. It counts characters, as the web client's
+// field does.
 func cleanDescription(text string) (string, error) {
 	text = strings.TrimSpace(text)
-	if len(text) > maxProjectDescription {
-		return "", fmt.Errorf("description is %d bytes, at most %d", len(text), maxProjectDescription)
+	if n := utf8.RuneCountInString(text); n > maxProjectDescription {
+		return "", store.Invalid("descriptionTooLong", store.Params{"max": strconv.Itoa(maxProjectDescription)}, "description is %d characters, at most %d", n, maxProjectDescription)
 	}
 	return text, nil
 }
@@ -241,12 +280,12 @@ func cleanRepoPath(path string) string {
 func (h *handlers) createRoom(w http.ResponseWriter, r *http.Request) {
 	var req CreateRoomRequest
 	if err := decodeJSON(r, &req); err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 	name, err := requireName("name", req.Name)
 	if err != nil {
-		writeError(w, http.StatusBadRequest, err.Error())
+		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
 

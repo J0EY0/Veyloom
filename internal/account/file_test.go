@@ -139,6 +139,33 @@ func TestFile_Sessions(t *testing.T) {
 	}
 }
 
+// The memory switches (docs/design.md 5.19) start all on and are kept
+// with the account.
+func TestFile_MemoryPrefs(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "account.json")
+	f, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := f.MemoryPrefs(); got != store.DefaultMemoryPrefs {
+		t.Errorf("before any are set: %+v", got)
+	}
+	off := store.MemoryPrefs{Enabled: true, Personal: false, Project: true}
+	if err := f.SetMemoryPrefs(off); err != nil {
+		t.Fatal(err)
+	}
+	again, err := Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := again.MemoryPrefs(); got != off || got.UsesPersonal() || !got.UsesProject() {
+		t.Errorf("after a reopen: %+v", got)
+	}
+	if all := (store.MemoryPrefs{Personal: true, Project: true}); all.UsesAny() {
+		t.Error("the switch for memory as a whole turns both off")
+	}
+}
+
 func TestOpen_RejectsABrokenFile(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "account.json")
 	if err := os.WriteFile(path, []byte("{not json"), 0o600); err != nil {
