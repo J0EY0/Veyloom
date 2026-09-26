@@ -54,7 +54,7 @@ describe('RoomPage', () => {
     // Opening Veyloom comes back to this chat.
     expect(lastChat()).toBe('r1')
 
-    await userEvent.click(screen.getByRole('button', { name: /完成 · 1 轮/ }))
+    await userEvent.click(screen.getByRole('button', { name: /完成/ }))
     expect(router.state.location.search).toBe('?thread=t1')
     expect(await screen.findByRole('complementary', { name: '话题' })).toBeInTheDocument()
 
@@ -133,7 +133,7 @@ describe('RoomPage side panels', () => {
     expect(router.state.location.search).toBe('?panel=members')
 
     // A topic is wider: the chat gives up all the room it takes.
-    await userEvent.click(screen.getByRole('button', { name: /完成 · 1 轮/ }))
+    await userEvent.click(screen.getByRole('button', { name: /完成/ }))
     expect(await screen.findByRole('complementary', { name: '话题' })).toBeInTheDocument()
     expect(chat().style.paddingRight).toBe('26.25rem')
   })
@@ -170,7 +170,7 @@ describe('RoomPage side panels', () => {
     await waitFor(() => expect(router.state.location.search).toBe(''))
 
     // A topic footer opens its topic rather than counting as outside.
-    await userEvent.click(screen.getByRole('button', { name: /完成 · 1 轮/ }))
+    await userEvent.click(screen.getByRole('button', { name: /完成/ }))
     expect(router.state.location.search).toBe('?thread=t1')
     expect(await screen.findByRole('complementary', { name: '话题' })).toBeInTheDocument()
     await userEvent.click(reply)

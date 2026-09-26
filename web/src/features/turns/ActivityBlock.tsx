@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { ChevronRightIcon, FileTextIcon, ShieldCheckIcon, TerminalIcon } from 'lucide-react'
 import { Task, TaskContent, TaskItem, TaskItemFile, TaskTrigger } from '@/components/ai-elements/task'
 import { StatusDot } from '@/components/shared/status-dot'
@@ -12,26 +13,51 @@ export interface ActivityBlockProps {
   duration?: string
   // Opens the turn's full record.
   onOpen?: () => void
+  // The turn is under way: its latest steps stay in sight, folded or not.
+  live?: boolean
 }
 
+// liveSteps is how many of a running turn's latest steps are in sight.
+const liveSteps = 3
+
 const approvalKeys = ['pending', 'allowed', 'denied', 'expired', 'cancelled'] as const
+
+// How a call's state reads, by colour.
+const toolTones = { running: 'text-status-run', waiting: 'text-status-wait', done: 'text-subtle', failed: 'text-status-fail' } as const
 
 // A turn's tool activity folded into one quiet line of its answer, as an
 // AI Elements task: what it did and how long it took. Opened, one row per
 // file or command with its outcome, and the way to the turn's full record
 // (docs/webui.md §4.2).
-export function ActivityBlock({ items, duration, onOpen }: ActivityBlockProps) {
+export function ActivityBlock({ items, duration, onOpen, live }: ActivityBlockProps) {
   const t = useT()
+  const [open, setOpen] = useState(false)
   if (items.length === 0) return null
-  const summary = duration ? `${summarize(items)} · ${duration}` : summarize(items)
+  const summary = [t('activity.process'), summarize(items), duration].filter(Boolean).join(' · ')
+  const latest = live && !open ? items.slice(-liveSteps) : []
   return (
-    <Task defaultOpen={false} className="mt-0.5 mb-1 text-xs">
+    <Task open={open} onOpenChange={setOpen} className="mt-0.5 mb-1 text-xs">
       <TaskTrigger title={summary}>
         <button type="button" className="flex max-w-full items-center gap-1 rounded-sm text-subtle transition-colors hover:text-muted-foreground">
           <ChevronRightIcon className="size-3.5 flex-none transition-transform duration-200 group-data-[state=open]:rotate-90" />
           <span className="truncate">{summary}</span>
         </button>
       </TaskTrigger>
+      {latest.length > 0 ? (
+        // While the turn runs, what it is doing now, without opening.
+        <div className="mt-1 rounded-lg bg-muted px-3 py-1.5">
+          {items.length > latest.length ? (
+            <button type="button" onClick={() => setOpen(true)} className="flex h-6 items-center text-[0.75rem] text-subtle hover:text-muted-foreground">
+              {t('activity.earlier', { n: items.length - latest.length })}
+            </button>
+          ) : null}
+          {latest.map((item, index) => (
+            <div key={index} className="flex h-6 items-center gap-2 text-[0.75rem] text-muted-foreground">
+              <Row item={item} />
+            </div>
+          ))}
+        </div>
+      ) : null}
       <TaskContent className="[&>div]:mt-1 [&>div]:space-y-0 [&>div]:rounded-lg [&>div]:border-l-0 [&>div]:bg-muted [&>div]:px-3 [&>div]:py-1.5">
         {items.map((item, index) => (
           <TaskItem key={index} className="flex h-6 items-center gap-2 text-[0.75rem] text-muted-foreground">
@@ -65,14 +91,7 @@ function Row({ item }: { item: ActivityItem }) {
           <span className="min-w-0 truncate font-mono" translate="no">
             {describeTool(item.tool, item.input)}
           </span>
-          <span
-            className={cn(
-              'ml-auto flex-none text-xs',
-              item.status === 'failed' ? 'text-status-fail' : item.status === 'running' ? 'text-status-run' : 'text-subtle',
-            )}
-          >
-            {item.status === 'running' ? t('activity.running') : item.status === 'failed' ? t('activity.failed') : t('activity.done')}
-          </span>
+          <span className={cn('ml-auto flex-none text-xs', toolTones[item.status])}>{t(`activity.${item.status}`)}</span>
         </>
       )
     case 'approval':

@@ -1,8 +1,8 @@
-import { useCallback, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { InboxIcon } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { usePendingApprovalsAll } from '@/api/approvals'
-import { useInbox } from '@/api/inbox'
+import { useInbox, useMarkInboxRead } from '@/api/inbox'
 import { Panel } from '@/components/layout/Panel'
 import { PanelHeader } from '@/components/layout/PanelHeader'
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
@@ -16,16 +16,24 @@ import { InboxList } from './InboxList'
 import { errorText } from '@/api/errorText'
 
 // What waits for you, across every project: requests to approve first,
-// then everything that mentioned you, newest first. A list on the left and
-// the picked entry's topic on the right, the way a mail client reads; on a
-// phone one of the two at a time. No read state yet (docs/webui.md §8).
+// then everything that mentioned you, newest first, what you have not read
+// marked. A list on the left and the picked entry's topic on the right,
+// the way a mail client reads; on a phone one of the two at a time.
+// Opening a mention reads it (docs/webui.md 4.19).
 export function InboxPage() {
   const t = useT()
   useDocumentTitle(t('inbox.title'))
   const user = useCurrentUser()
   const approvals = usePendingApprovalsAll()
   const inbox = useInbox(user?.id ?? '')
-  const entries = useMemo(() => toEntries(approvals.data ?? [], inbox.data?.pages.flat() ?? [], user?.name ?? ''), [approvals.data, inbox.data, user?.name])
+  const { mutate: markRead } = useMarkInboxRead(user?.id ?? '')
+  const entries = useMemo(
+    () => toEntries(approvals.data ?? [], inbox.data?.pages.flatMap((page) => page.items) ?? [], user?.name ?? '', t),
+    [approvals.data, inbox.data, user?.name, t],
+  )
+  const unread = inbox.data?.pages[0]?.unread ?? 0
+  // Everything listed is read at once, up to the newest mention in sight.
+  const newest = entries.find((entry) => entry.kind === 'mention')?.seq
 
   // The picked entry lives in the URL, so it survives a reload and Back
   // returns to the list.
@@ -46,6 +54,10 @@ export function InboxPage() {
     })
   }, [setParams])
   useEscape(close, itemId !== '')
+  const opened = found?.kind === 'mention' && found.unread ? found.id : undefined
+  useEffect(() => {
+    if (opened) markRead({ message_ids: [opened] })
+  }, [opened, markRead])
 
   const loading = inbox.isPending || approvals.isPending
   // Nothing waits, and nothing is open: no list to search or narrow, only
@@ -72,6 +84,8 @@ export function InboxPage() {
     <Panel className="flex-row">
       <InboxList
         entries={entries}
+        unread={unread}
+        onReadAll={newest !== undefined ? () => markRead({ up_to: newest }) : undefined}
         selectedId={itemId}
         loading={loading}
         error={inbox.isError ? errorText(inbox.error) : undefined}

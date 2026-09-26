@@ -1,12 +1,13 @@
 import { useId, useState, type FormEvent } from 'react'
-import { useMemberSession, useUpdateMember } from '@/api/agents'
+import { useAgents, useMemberSession, useUpdateMember } from '@/api/agents'
 import type { Member } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { inheritPreset, presetFromForm, presetLabel, presets } from './presets'
+import { MemberRules } from './MemberRules'
+import { PresetField } from './PresetField'
+import { presetFromForm } from './presets'
 import { formatAgo } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import { errorText } from '@/api/errorText'
@@ -18,10 +19,12 @@ export interface EditMemberDialogProps {
 }
 
 // Edits what may change after a member is added: name, repository,
-// permission and model overrides.
+// permission and model overrides; and lists the commands people allowed it
+// always, each of which can be taken back (docs/design.md 4.6).
 export function EditMemberDialog({ roomId, member, onClose }: EditMemberDialogProps) {
   const update = useUpdateMember(roomId)
   const session = useMemberSession(member.id)
+  const agent = useAgents().data?.find((a) => a.id === member.agent_id)
   const [error, setError] = useState<string>()
   const id = useId()
   const t = useT()
@@ -46,7 +49,7 @@ export function EditMemberDialog({ roomId, member, onClose }: EditMemberDialogPr
 
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
-      <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-md" aria-describedby={undefined}>
         <form onSubmit={onSubmit}>
           <DialogHeader>
             <DialogTitle>{t('member.editTitle', { name: member.display_name })}</DialogTitle>
@@ -71,35 +74,19 @@ export function EditMemberDialog({ roomId, member, onClose }: EditMemberDialogPr
                   belongs to the directory it was opened in. */}
               {session.data?.session ? <FieldDescription>{t('member.repoPathHint')}</FieldDescription> : null}
             </Field>
-            <div className="grid grid-cols-2 gap-4">
-              <Field>
-                <FieldLabel htmlFor={`${id}-permission`}>{t('member.permission')}</FieldLabel>
-                <Select name="permission_preset" defaultValue={member.permission_preset || inheritPreset}>
-                  <SelectTrigger id={`${id}-permission`} className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value={inheritPreset}>{t('member.followAgent')}</SelectItem>
-                    {presets.map((p) => (
-                      <SelectItem key={p} value={p}>
-                        {presetLabel(p)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </Field>
-              <Field>
-                <FieldLabel htmlFor={`${id}-model`}>{t('member.model')}</FieldLabel>
-                <Input
-                  id={`${id}-model`}
-                  name="model"
-                  defaultValue={member.model}
-                  autoComplete="off"
-                  spellCheck={false}
-                  placeholder={t('member.modelPlaceholder')}
-                />
-              </Field>
-            </div>
+            <PresetField idPrefix={`${id}-permission`} defaultValue={member.permission_preset} agentPreset={agent?.permission_preset} />
+            <MemberRules memberId={member.id} runtime={agent?.runtime} />
+            <Field>
+              <FieldLabel htmlFor={`${id}-model`}>{t('member.model')}</FieldLabel>
+              <Input
+                id={`${id}-model`}
+                name="model"
+                defaultValue={member.model}
+                autoComplete="off"
+                spellCheck={false}
+                placeholder={t('member.modelPlaceholder')}
+              />
+            </Field>
           </FieldGroup>
           {/* The member's conversation with its runtime. It looks after
               itself; this only says how long it has been going. */}

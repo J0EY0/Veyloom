@@ -37,8 +37,14 @@ describe('MaintainerCard', () => {
     let started = false
     let patched: unknown
     stubApi({
+      '/projects': { projects: [{ ...project('p1', 'Veyloom'), wiki_upkeep: true, wiki_maintainer_member_id: 'm1', leader_id: 'm2' }] },
       '/projects/p1/wiki/maintainer': { upkeep: keeping },
-      '/rooms/r1/members': { members: [{ id: 'm1', display_name: 'Keeper', enabled: true }] },
+      '/rooms/r1/members': {
+        members: [
+          { id: 'm1', display_name: 'Keeper', enabled: true },
+          { id: 'm2', display_name: 'Lead', enabled: true },
+        ],
+      },
       '/projects/p1/wiki/maintain': () => {
         started = true
         return { upkeep: { ...keeping, queued: true } }
@@ -52,8 +58,17 @@ describe('MaintainerCard', () => {
     const user = userEvent.setup()
     renderWithProviders(<MaintainerCard projectId="p1" roomId="r1" onOpenThread={onOpenThread} />)
     expect(await screen.findByRole('heading', { name: 'Keeper 在维护这个 wiki' })).toBeInTheDocument()
-    // Who and how often are changed right here (docs/design.md 5.16).
-    expect(await screen.findByRole('combobox', { name: 'Wiki 维护员' })).toHaveTextContent('Keeper')
+    // Who and how often are changed right here (docs/design.md 5.16): the
+    // leader, someone else, or nobody, which turns upkeep off.
+    const who = await screen.findByRole('combobox', { name: 'Wiki 维护员' })
+    await waitFor(() => expect(who).toHaveTextContent('Keeper'))
+    await user.click(who)
+    expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['不开', '组长（Lead）', 'Keeper', 'Lead'])
+    await user.click(screen.getByRole('option', { name: '组长（Lead）' }))
+    await waitFor(() => expect(patched).toEqual({ wiki_maintainer_member_id: '' }))
+    await user.click(who)
+    await user.click(await screen.findByRole('option', { name: '不开' }))
+    await waitFor(() => expect(patched).toEqual({ wiki_upkeep: false }))
     const how = screen.getByRole('combobox', { name: '什么时候整理' })
     expect(how).toHaveTextContent('话题静置 30 分钟后')
     await user.click(how)
@@ -72,17 +87,29 @@ describe('MaintainerCard', () => {
     expect(screen.getByRole('button', { name: '现在整理' })).toBeDisabled()
   })
 
+  it('says when the leader keeps the wiki', async () => {
+    stubApi({ '/projects/p1/wiki/maintainer': { upkeep: { ...keeping, leader: true } } })
+    renderWithProviders(<MaintainerCard projectId="p1" roomId="r1" onOpenThread={() => {}} />)
+    expect(await screen.findByRole('heading', { name: 'Keeper（组长）在维护这个 wiki' })).toBeInTheDocument()
+  })
+
   it('says so when the last upkeep did not finish', async () => {
     stubApi({ '/projects/p1/wiki/maintainer': { upkeep: { ...keeping, last: { ...keeping.last!, status: 'failed' } } } })
     renderWithProviders(<MaintainerCard projectId="p1" roomId="r1" onOpenThread={() => {}} />)
     expect(await screen.findByText(/上次整理没有完成/)).toBeInTheDocument()
   })
 
-  it('offers a maintainer once there is something to go over, until a person says no', async () => {
+  it('offers a maintainer once there is something to go over, the leader unless another is picked, until a person says no', async () => {
     let patched: unknown
     stubApi({
+      '/projects': { projects: [{ ...project('p1', 'Veyloom'), leader_id: 'm1' }] },
       '/projects/p1/wiki/maintainer': { upkeep: status({ waiting: { own: 3, uses: 0, settled: 3 } }) },
-      '/rooms/r1/members': { members: [{ id: 'm1', display_name: 'Keeper', enabled: true }] },
+      '/rooms/r1/members': {
+        members: [
+          { id: 'm1', display_name: 'Keeper', enabled: true },
+          { id: 'm2', display_name: 'Other', enabled: true },
+        ],
+      },
       '/projects/p1': async (req: Request) => {
         patched = await req.json()
         return { project: project('p1', 'Veyloom'), rooms: [room('r1', 'p1', 'main')] }
@@ -91,16 +118,20 @@ describe('MaintainerCard', () => {
     const user = userEvent.setup()
     renderWithProviders(<MaintainerCard projectId="p1" roomId="r1" onOpenThread={() => {}} />)
     expect(await screen.findByRole('heading', { name: '让一个成员来维护这个 wiki？' })).toBeInTheDocument()
+    const who = screen.getByRole('combobox', { name: '谁来整理' })
+    await waitFor(() => expect(who).toHaveTextContent('组长（Keeper）'))
     const enable = screen.getByRole('button', { name: '开启（每天一次）' })
-    expect(enable).toBeDisabled()
-    await user.click(screen.getByRole('combobox', { name: '选一个成员' }))
-    await user.click(await screen.findByRole('option', { name: 'Keeper' }))
     await user.click(enable)
-    await waitFor(() => expect(patched).toEqual({ wiki_maintainer_member_id: 'm1', wiki_maintainer_trigger: 'daily' }))
+    await waitFor(() => expect(patched).toEqual({ wiki_upkeep: true, wiki_maintainer_member_id: '', wiki_maintainer_trigger: 'daily' }))
+    await user.click(who)
+    await user.click(await screen.findByRole('option', { name: 'Other' }))
+    await user.click(enable)
+    await waitFor(() => expect(patched).toEqual({ wiki_upkeep: true, wiki_maintainer_member_id: 'm2', wiki_maintainer_trigger: 'daily' }))
   })
 
   it('warns that a read-only Codex member would write no wiki', async () => {
     stubApi({
+      '/projects': { projects: [{ ...project('p1', 'Veyloom'), leader_id: 'm2' }] },
       '/projects/p1/wiki/maintainer': { upkeep: status({ waiting: { own: 1, uses: 0, settled: 1 } }) },
       '/rooms/r1/members': {
         members: [
@@ -117,10 +148,10 @@ describe('MaintainerCard', () => {
     })
     const user = userEvent.setup()
     renderWithProviders(<MaintainerCard projectId="p1" roomId="r1" onOpenThread={() => {}} />)
-    await user.click(await screen.findByRole('combobox', { name: '选一个成员' }))
-    await user.click(await screen.findByRole('option', { name: 'Claude' }))
+    // The leader, a Claude, writes it.
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '谁来整理' })).toHaveTextContent('组长（Claude）'))
     expect(screen.queryByText(/只读的 Codex/)).toBeNull()
-    await user.click(screen.getByRole('combobox', { name: '选一个成员' }))
+    await user.click(screen.getByRole('combobox', { name: '谁来整理' }))
     await user.click(await screen.findByRole('option', { name: 'Codex' }))
     expect(await screen.findByText(/只读的 Codex/)).toBeInTheDocument()
   })

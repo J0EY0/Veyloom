@@ -82,7 +82,8 @@ test('ask, approve, read the report, find it in the inbox', async ({ page }) => 
   await expect(page.getByText('shot.png')).toBeVisible()
   await box.fill('起个服务做冒烟')
   await page.keyboard.press('Enter')
-  await expect(page.getByText('起个服务做冒烟')).toBeVisible()
+  // In the chat; the sidebar lists the topic it opens by the same words.
+  await expect(page.getByRole('main').getByText('起个服务做冒烟')).toBeVisible()
   const shot = page.getByRole('link', { name: '打开附件 shot.png' })
   await expect(shot).toBeVisible()
   const served = await request.get((await shot.getAttribute('href')) ?? '')
@@ -95,21 +96,24 @@ test('ask, approve, read the report, find it in the inbox', async ({ page }) => 
   await expect(page).toHaveTitle(`(1) ${project.name} · Veyloom`)
   await expect(page.getByRole('button', { name: /在等你审批/ })).toBeVisible()
 
-  // Allow it from the island; the turn finishes and reports back with an @.
+  // Allow it from the island; the turn finishes and reports back once, at
+  // the head of its topic, addressed to the person with an @.
   await island.getByRole('button', { name: '允许' }).click()
-  await expect(page.getByText('构建好了，服务起来了。')).toHaveCount(2, { timeout: 20_000 })
+  const answer = page.getByRole('listitem').filter({ hasText: '构建好了，服务起来了。' })
+  await expect(answer).toHaveCount(1, { timeout: 20_000 })
+  await expect(answer).toContainText(`${user.name} 构建好了，服务起来了。`)
   // Its reports lead with its picture, which only shows once the image has
   // loaded; the row of the person asking leads with an initial.
-  const face = page.getByRole('listitem').filter({ hasText: '构建好了，服务起来了。' }).locator(`:scope > [data-avatar] img[src$="/avatars/${avatar}"]`)
+  const face = page.getByRole('listitem').filter({ hasText: '构建好了，服务起来了。' }).locator(`[data-avatar] img[src$="/avatars/${avatar}"]`)
   await expect(face.first()).toBeVisible()
   await expect(island).toContainText('空闲')
   await expect(page).toHaveTitle(`${project.name} · Veyloom`)
 
-  // The topic is named by the answer it hangs from and reads as a chat: the
+  // The topic is named by what the person asked and reads as a chat: the
   // agent under its name, the settled request and one line of activity.
-  await page.getByRole('button', { name: /完成 · 1 轮/ }).click()
+  await page.getByRole('button', { name: /^完成/ }).click()
   const topic = page.getByRole('complementary', { name: '话题' })
-  await expect(topic.getByRole('heading', { name: '构建好了，服务起来了。' })).toBeVisible()
+  await expect(topic.getByRole('heading', { name: '起个服务做冒烟' })).toBeVisible()
   await expect(topic).toContainText(careful)
   await expect(topic).toContainText('运行了')
   await expect(topic).toContainText('make test')
@@ -128,7 +132,7 @@ test('ask, approve, read the report, find it in the inbox', async ({ page }) => 
   await report.click()
   await expect(page).toHaveURL(/\/inbox\?item=/)
   const picked = forMe.getByRole('complementary', { name: '话题' })
-  await expect(picked.getByRole('heading', { name: '构建好了，服务起来了。' })).toBeVisible()
+  await expect(picked.getByRole('heading', { name: '起个服务做冒烟' })).toBeVisible()
   await expect(picked).toContainText('1 次审批')
   await expect(picked.getByRole('link', { name: '在群聊里打开' })).toHaveAttribute('href', new RegExp(`^/rooms/${roomId}\\?thread=`))
 })

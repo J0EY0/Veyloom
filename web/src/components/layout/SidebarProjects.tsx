@@ -150,7 +150,12 @@ function ProjectItem({ project, active, topics, openThread, onRename, onDelete }
       {topics.length > 0 ? (
         <SidebarMenuSub className="mr-0 gap-0 border-l-0 pl-4">
           {topics.map((topic) => (
-            <TopicItem key={topic.thread_id} topic={topic} active={topic.thread_id === openThread} wiki={topic.thread_id === project.wiki_thread_id} />
+            <TopicItem
+              key={topic.thread_id}
+              topic={topic}
+              active={topic.thread_id === openThread}
+              named={topic.thread_id === project.wiki_thread_id ? 'wiki' : topic.thread_id === project.setup_thread_id ? 'setup' : undefined}
+            />
           ))}
         </SidebarMenuSub>
       ) : null}
@@ -160,9 +165,9 @@ function ProjectItem({ project, active, topics, openThread, onRename, onDelete }
 
 // A topic being worked on: a breathing dot and what was asked, opening
 // the topic in its chat. The project's wiki topic goes by its name.
-function TopicItem({ topic, active, wiki }: { topic: RunningTopic; active: boolean; wiki: boolean }) {
+function TopicItem({ topic, active, named }: { topic: RunningTopic; active: boolean; named?: 'wiki' | 'setup' }) {
   const t = useT()
-  const label = wiki ? t('wikiTopic.title') : topic.root_body.trim() || topic.members.join('、')
+  const label = named ? t(`${named}Topic.title`) : topic.ask || topic.root_body.trim() || topic.members.join('、')
   return (
     <SidebarMenuSubItem>
       <SidebarMenuSubButton asChild isActive={active} size="sm" className="h-6 gap-2 text-[0.78125rem] text-muted-foreground">

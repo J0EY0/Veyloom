@@ -8,7 +8,7 @@ import { askKind, waitingKeys } from '@/features/approvals/kinds'
 import { Button } from '@/components/ui/button'
 import type { Sender } from '@/features/rooms/useSenderNames'
 import { ActivityBlock } from '@/features/turns/ActivityBlock'
-import { activityFromEvents, activityFromTranscript, isNotice } from '@/features/turns/activity'
+import { activityFromEvents, activityFromTranscript, isNotice, withApprovals } from '@/features/turns/activity'
 import { NoticeList } from '@/features/turns/NoticeList'
 import { formatDuration } from '@/lib/format'
 import { useT } from '@/lib/i18n'
@@ -29,12 +29,15 @@ export interface TurnPartProps {
   names?: Map<string, string>
   onOpenTurn?: (turnId: string) => void
   target?: string
+  // The member whose message woke the turn, when an agent did
+  // (docs/design.md 5.22).
+  wokenBy?: string
 }
 
 // One agent's answer inside a topic, drawn as a chat message (docs/webui.md
 // §4.2): its face and name, one quiet line for the tools it used, what it
 // said, and while the turn runs the words arriving with a way to stop it.
-export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, target }: TurnPartProps) {
+export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, target, wokenBy }: TurnPartProps) {
   const t = useT()
   const running = turn.status === 'running'
   const approvals = useTurnApprovals(turn.id)
@@ -42,7 +45,7 @@ export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, 
   const live = useLiveTurn(running ? turn.id : undefined)
   const transcript = useTranscript(turn.id, first && !running)
   const cancel = useCancelTurn()
-  const activity = running ? activityFromEvents(live?.events ?? []) : activityFromTranscript(transcript.data ?? [])
+  const activity = running ? withApprovals(activityFromEvents(live?.events ?? []), approvals.data ?? []) : activityFromTranscript(transcript.data ?? [])
   // What the runtime told people stays in sight; the rest folds into a line.
   const notices = activity.filter(isNotice)
   const items = activity.filter((item) => !isNotice(item))
@@ -50,8 +53,12 @@ export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, 
   const waiting = (approvals.data ?? []).find((a) => a.status === 'pending')
 
   return (
-    <ThreadRow sender={who} time={messages[0]?.created_at ?? turn.started_at} label={turn.kind === 'upkeep' ? t('upkeep.badge') : undefined}>
-      {first ? <ActivityBlock items={items} duration={took} onOpen={onOpenTurn ? () => onOpenTurn(turn.id) : undefined} /> : null}
+    <ThreadRow
+      sender={who}
+      time={messages[0]?.created_at ?? turn.started_at}
+      label={turn.kind === 'upkeep' ? t('upkeep.badge') : turn.kind === 'setup' ? t('setup.badge') : wokenBy ? t('turn.wokenBy', { name: wokenBy }) : undefined}
+    >
+      {first ? <ActivityBlock items={items} duration={took} live={running} onOpen={onOpenTurn ? () => onOpenTurn(turn.id) : undefined} /> : null}
       {first ? <NoticeList notices={notices} /> : null}
       {messages.map((message) => (
         <ThreadMessage key={message.id} message={message} sender={who} approval={approvalByNote.get(message.id)} names={names} target={target} inTurn />

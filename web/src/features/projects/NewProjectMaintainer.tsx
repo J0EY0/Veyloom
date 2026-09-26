@@ -1,44 +1,53 @@
 import type { Agent } from '@/api/types'
-import { Field, FieldDescription, FieldLabel } from '@/components/ui/field'
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
+import { Field, FieldContent, FieldDescription, FieldLabel } from '@/components/ui/field'
+import { Switch } from '@/components/ui/switch'
 import { useT } from '@/lib/i18n'
-import { noMaintainer } from './MaintainerFields'
+import { byLeader, KeeperSelect } from './MaintainerFields'
 
 export interface NewProjectMaintainerProps {
   id: string
-  // The agents picked for the project, in the order they join.
+  // The agents picked for the project, in the order they join: the first
+  // leads it (docs/design.md 5.21).
   agents: Agent[]
-  // The agent chosen, or noMaintainer.
+  upkeep: boolean
+  // The agent chosen to keep the wiki, or byLeader.
   value: string
+  onUpkeep: (on: boolean) => void
   onChange: (agentId: string) => void
 }
 
-// The wiki maintainer a project may start with (docs/design.md 5.16): one of
-// the agents picked, keeping the wiki daily, or none yet, the default, in
-// which case the chat offers one after a few topics.
-export function NewProjectMaintainer({ id, agents, value, onChange }: NewProjectMaintainerProps) {
+// The wiki maintainer a project may start with (docs/design.md 5.16,
+// 5.21): off, the default, in which case the chat offers it after a few
+// topics; or on, daily, kept by the leader unless one of the agents picked
+// is chosen instead.
+export function NewProjectMaintainer({ id, agents, upkeep, value, onUpkeep, onChange }: NewProjectMaintainerProps) {
   const t = useT()
-  const chosen = agents.find((agent) => agent.id === value)
+  const chosen = agents.find((agent) => agent.id === value) ?? (value === byLeader ? agents[0] : undefined)
+  const candidates = agents.map((agent) => ({ id: agent.id, display_name: agent.name }))
   return (
-    <Field>
-      <FieldLabel htmlFor={`${id}-maintainer`}>{t('project.maintainer')}</FieldLabel>
-      <Select value={value} onValueChange={onChange}>
-        <SelectTrigger id={`${id}-maintainer`} className="w-full">
-          <SelectValue />
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={noMaintainer}>{t('project.maintainerNone')}</SelectItem>
-          {agents.map((agent) => (
-            <SelectItem key={agent.id} value={agent.id}>
-              {agent.name}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
-      <FieldDescription>{t('project.maintainerHint')}</FieldDescription>
-      {chosen?.runtime === 'codex' && chosen.permission_preset === 'read_only' ? (
-        <FieldDescription className="text-status-wait">{t('maintainer.readOnlyCodex')}</FieldDescription>
+    <>
+      <Field orientation="horizontal">
+        <FieldContent>
+          <FieldLabel htmlFor={`${id}-upkeep`}>{t('project.maintainer')}</FieldLabel>
+          <FieldDescription>{t('project.maintainerHint')}</FieldDescription>
+        </FieldContent>
+        <Switch id={`${id}-upkeep`} checked={upkeep} onCheckedChange={onUpkeep} />
+      </Field>
+      {upkeep ? (
+        <Field>
+          <FieldLabel htmlFor={`${id}-maintainer`}>{t('maintainer.who')}</FieldLabel>
+          <KeeperSelect
+            id={`${id}-maintainer`}
+            value={value}
+            leader={agents[0] ? { display_name: agents[0].name } : undefined}
+            candidates={candidates}
+            onChange={onChange}
+          />
+          {chosen?.runtime === 'codex' && chosen.permission_preset === 'read_only' ? (
+            <FieldDescription className="text-status-wait">{t('maintainer.readOnlyCodex')}</FieldDescription>
+          ) : null}
+        </Field>
       ) : null}
-    </Field>
+    </>
   )
 }

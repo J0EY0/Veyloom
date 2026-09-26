@@ -128,6 +128,35 @@ describe('MembersPanel', () => {
     expect(await screen.findByText('已停用')).toBeInTheDocument()
   })
 
+  it('marks the leader, and makes another member the leader from its menu', async () => {
+    let patched: unknown
+    const pi = { ...codex, id: 'a2', display_name: 'Pi Tester' }
+    const veyloom = project('p1', 'Veyloom', '/src/veyloom')
+    stubPanel({
+      '/rooms/r1/members': { members: [codex, pi] },
+      '/projects': { projects: [{ ...veyloom, leader_id: 'a1' }] },
+      '/projects/p1': async (req: Request) => {
+        patched = await req.json()
+        return { project: { ...veyloom, leader_id: 'a2', leader_member_id: 'a2' }, rooms: [room('r1', 'p1', 'main')] }
+      },
+    })
+    renderPanel()
+    const first = (await screen.findByText('Codex Implementer')).closest('[role=listitem]') as HTMLElement
+    const other = screen.getByText('Pi Tester').closest('[role=listitem]') as HTMLElement
+    await waitFor(() => expect(first).toHaveTextContent('组长'))
+    expect(other).not.toHaveTextContent('组长')
+    // The leader is not made the leader again.
+    await userEvent.click(within(first).getByRole('button', { name: '更多' }))
+    expect(await screen.findByRole('menuitem', { name: '编辑' })).toBeInTheDocument()
+    expect(screen.queryByRole('menuitem', { name: '设为组长' })).toBeNull()
+    await userEvent.keyboard('{Escape}')
+    await userEvent.click(within(other).getByRole('button', { name: '更多' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: '设为组长' }))
+    await waitFor(() => expect(patched).toEqual({ leader_member_id: 'a2' }))
+    await waitFor(() => expect(other).toHaveTextContent('组长'))
+    expect(first).not.toHaveTextContent('组长')
+  })
+
   it('adds a member from an agent, which runs on its own machine, in the project checkout', async () => {
     let posted: unknown
     stubPanel({
@@ -156,7 +185,7 @@ describe('MembersPanel', () => {
     await userEvent.click(agent)
     expect(screen.queryByLabelText('机器')).toBeNull()
     await userEvent.type(screen.getByLabelText('显示名'), 'Second')
-    await pickOption('权限', '全自动')
+    await pickOption('权限', '完全信任')
     await userEvent.click(screen.getByRole('button', { name: '添加到 main' }))
 
     await waitFor(() =>

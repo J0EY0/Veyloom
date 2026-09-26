@@ -102,7 +102,7 @@ export const api = {
   post: <T>(path: string, json: unknown, options?: RequestOptions) => request<T>(path, { ...options, method: 'POST', json }),
   patch: <T>(path: string, json: unknown, options?: RequestOptions) => request<T>(path, { ...options, method: 'PATCH', json }),
   put: <T>(path: string, json: unknown, options?: RequestOptions) => request<T>(path, { ...options, method: 'PUT', json }),
-  delete: (path: string, options?: RequestOptions) => request<void>(path, { ...options, method: 'DELETE' }),
+  delete: <T = void>(path: string, options?: RequestOptions) => request<T>(path, { ...options, method: 'DELETE' }),
   text: (path: string, options?: RequestOptions) => requestText(path, { ...options, method: 'GET' }),
   upload: <T>(path: string, form: FormData, options?: RequestOptions) => request<T>(path, { ...options, method: 'POST', form }),
   send: <T>(path: string, blob: Blob, options?: RequestOptions) => request<T>(path, { ...options, method: 'POST', blob }),

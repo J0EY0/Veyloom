@@ -3,6 +3,8 @@ import { cn } from '@/lib/utils'
 
 export const avatarSizes = {
   lg: 'size-9 text-[0.8125rem] rounded-lg',
+  // What a message's sender is drawn at, in the chat and its topics.
+  message: 'size-7 text-xs',
   md: 'size-6 text-[0.6875rem]',
   sm: 'size-5 text-[0.625rem]',
   xs: 'size-4 text-[0.5rem]',

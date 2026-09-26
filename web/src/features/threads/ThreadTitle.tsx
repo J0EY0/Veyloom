@@ -16,18 +16,20 @@ export interface ThreadTitleProps {
   // Whether the root shows in full at the top of the topic.
   open: boolean
   onToggle: () => void
+  // Names the topic instead of the root's words: what a person asked for.
+  title?: string
 }
 
 // The topic's name in the panel header: the words of the message it hangs
 // from in the chat, on one line, so that message is not repeated below.
 // When they do not fit, run over lines or bring files, the title is a
 // button that shows the whole message at the top of the topic.
-export function ThreadTitle({ number, root, fallback, open, onToggle }: ThreadTitleProps) {
+export function ThreadTitle({ number, root, fallback, open, onToggle, title }: ThreadTitleProps) {
   const t = useT()
   const [element, setElement] = useState<HTMLElement | null>(null)
   const [cut, setCut] = useState(false)
   const filled = root.body !== '' || (root.attachments?.length ?? 0) > 0
-  const text = (filled ? titleOf(root) : fallback ? titleOf(fallback) : '') || t('thread.label')
+  const text = title || (filled ? titleOf(root) : fallback ? titleOf(fallback) : '') || t('thread.label')
   useLayoutEffect(() => {
     if (!element) return
     const measure = () => setCut(element.scrollWidth > element.clientWidth)
@@ -37,16 +39,20 @@ export function ThreadTitle({ number, root, fallback, open, onToggle }: ThreadTi
     return () => observer.disconnect()
   }, [element, text])
 
-  const more = filled && (cut || root.body.trim().includes('\n') || (root.attachments?.length ?? 0) > 0)
+  // Named by the ask, the root is not in sight until opened.
+  const more = filled && (title !== undefined || cut || root.body.trim().includes('\n') || (root.attachments?.length ?? 0) > 0)
   const words = (
     <span ref={setElement} className="truncate">
       {text}
     </span>
   )
   return (
-    <h2 className="flex min-w-0 items-center gap-1.5 text-sm font-semibold">
+    <h2 className="flex min-w-0 items-center gap-2 text-[0.9375rem] font-semibold">
       {number ? (
-        <span className="flex-none font-normal text-subtle tabular-nums" translate="no">
+        <span
+          className="flex-none rounded-[0.3125rem] bg-muted px-1.5 font-mono text-[0.71875rem] leading-5 font-normal text-muted-foreground tabular-nums"
+          translate="no"
+        >
           #{number}
         </span>
       ) : null}
@@ -79,4 +85,24 @@ export function titleOf(message: Message): string {
     .replace(/\s+/g, ' ')
     .trim()
   return words || message.attachments?.[0]?.filename || ''
+}
+
+// askTitle names a topic by what a person asked in it: the first line of
+// their words, without the @s it began with, up to where the first
+// sentence or clause ends.
+export function askTitle(message: Message, names: ReadonlyMap<string, string>): string {
+  let line = message.body.split('\n').find((l) => l.trim() !== '') ?? ''
+  // Anyone in the chat, the ones it mentions or not: the @s lead the words.
+  const mentioned = [...new Set([...(message.mentions ?? []).map((m) => names.get(m.id)), ...names.values()])]
+    .filter((name): name is string => name !== undefined && name !== '')
+    .sort((a, b) => b.length - a.length)
+  for (;;) {
+    line = line.trimStart()
+    const name = mentioned.find((n) => line.startsWith(`@${n}`))
+    if (name === undefined) break
+    line = line.slice(name.length + 1)
+  }
+  const plain = titleOf({ ...message, body: line })
+  const end = plain.search(/[：:。！？!?；;]/)
+  return (end > 0 ? plain.slice(0, end) : plain).trim() || titleOf(message)
 }

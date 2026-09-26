@@ -1,9 +1,9 @@
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { setCurrentUser } from '@/lib/currentUser'
 import { stubApi } from '@/test/fetch'
-import { message, turn, user } from '@/test/fixtures'
+import { approval, message, turn, user } from '@/test/fixtures'
 import { renderWithProviders } from '@/test/render'
 import { ThreadPanel } from './ThreadPanel'
 
@@ -27,17 +27,17 @@ function stubTopic(extra: Record<string, unknown> = {}) {
 describe('ThreadPanel', () => {
   beforeEach(() => setCurrentUser({ id: 'u1', name: 'alice' }))
 
-  it('names the topic by the message it hangs from and reads the rest as a chat', async () => {
+  it('names the topic by what the person asked and reads the rest as a chat', async () => {
     stubTopic()
     const onClose = vi.fn()
     renderWithProviders(<ThreadPanel roomId="r1" roomName="main" threadId="t1" onClose={onClose} />)
 
-    // The agent's answer the topic hangs from in the chat is the title, once;
-    // it fits, so there is nothing to open. What it answered stays in the chat.
-    expect(await screen.findByRole('heading', { name: '好，我来补用例。' })).toBeInTheDocument()
-    expect(screen.getAllByText('好，我来补用例。')).toHaveLength(1)
-    expect(screen.queryByRole('button', { name: '好，我来补用例。' })).not.toBeInTheDocument()
-    expect(screen.queryByText('把掉队的处理补上测试。')).not.toBeInTheDocument()
+    // The person's ask, to where its first sentence ends, is the title; the
+    // agent's answer the topic hangs from in the chat opens from it.
+    const title = await screen.findByRole('button', { name: '把掉队的处理补上测试' })
+    expect(screen.queryByText('好，我来补用例。')).not.toBeInTheDocument()
+    await userEvent.click(title)
+    expect(screen.getByText('好，我来补用例。')).toBeInTheDocument()
     // No heading per turn: the agent's words under its name.
     expect(screen.queryByText(/第 1 轮/)).not.toBeInTheDocument()
     expect(await screen.findByText('补了两个用例。')).toBeInTheDocument()
@@ -46,6 +46,40 @@ describe('ThreadPanel', () => {
 
     await userEvent.click(screen.getByRole('button', { name: '关闭话题' }))
     expect(onClose).toHaveBeenCalledOnce()
+  })
+
+  it('reads, as it opens, what in the topic is addressed to the person, and nothing when none is', async () => {
+    const reads: unknown[] = []
+    const addressed = { ...agent, thread_id: 't1', body: '@alice 补了两个用例。', turn_id: 'x1', mentions: [{ kind: 'user' as const, id: 'u1' }] }
+    stubTopic({
+      '/threads/t1/messages': { messages: [message('m3', 3, addressed)] },
+      '/users/u1/inbox/read': async (req: Request) => (reads.push(await req.json()), { marked: 1, unread: 0 }),
+    })
+    const opened = renderWithProviders(<ThreadPanel roomId="r1" roomName="main" threadId="t1" onClose={vi.fn()} />)
+    await waitFor(() => expect(reads).toEqual([{ thread_id: 't1' }]))
+    opened.unmount()
+
+    stubTopic({ '/users/u1/inbox/read': async (req: Request) => (reads.push(await req.json()), { marked: 0, unread: 0 }) })
+    renderWithProviders(<ThreadPanel roomId="r1" roomName="main" threadId="t1" onClose={vi.fn()} />)
+    await screen.findByText('补了两个用例。')
+    expect(reads).toHaveLength(1)
+  })
+
+  it('names a topic a member was woken into by the task handed to it, less the @', async () => {
+    stubTopic({
+      '/threads/t1': {
+        thread: { id: 't1', room_id: 'r1', number: 7, root_message_id: 'm2' },
+        root: message('m2', 2, {
+          member_id: 'a2',
+          user_id: undefined,
+          body: '@Codex Implementer 请审查 tags 功能。重点看过滤',
+          mentions: [{ kind: 'agent', id: 'a1' }],
+        }),
+        turns: [turn('x1', 't1', { trigger_message_id: 'm2' })],
+      },
+    })
+    renderWithProviders(<ThreadPanel roomId="r1" roomName="main" threadId="t1" onClose={vi.fn()} />)
+    expect(await screen.findByRole('heading', { name: /^#7\s*请审查 tags 功能$/ })).toBeInTheDocument()
   })
 
   it('heads the topic with its number', async () => {
@@ -116,8 +150,8 @@ describe('ThreadPanel', () => {
     renderWithProviders(<ThreadPanel roomId="r1" roomName="main" threadId="t2" onClose={() => {}} />)
 
     // The ask brought a file, so its title opens to show it.
-    const title = await screen.findByRole('button', { name: '一起看看这个。' })
-    expect(screen.getAllByText('一起看看这个。')).toHaveLength(1)
+    const title = await screen.findByRole('button', { name: '一起看看这个' })
+    expect(screen.queryByText('一起看看这个。')).not.toBeInTheDocument()
     expect(await screen.findByText('我看协议。')).toBeInTheDocument()
     expect(screen.getByText('Codex Implementer')).toBeInTheDocument()
     expect(screen.getByText('Claude Architect')).toBeInTheDocument()
@@ -169,9 +203,33 @@ describe('ThreadPanel', () => {
     })
     renderWithProviders(<ThreadPanel roomId="r1" roomName="main" threadId="t1" onClose={() => {}} />)
 
-    expect(await screen.findByRole('heading', { name: '把掉队的处理补上测试。' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '把掉队的处理补上测试。' })).not.toBeInTheDocument()
+    expect(await screen.findByRole('heading', { name: '把掉队的处理补上测试' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '把掉队的处理补上测试' })).not.toBeInTheDocument()
     expect(screen.getByText('Codex Implementer')).toBeInTheDocument()
+  })
+
+  it('says while the rest of a turn is let through, how many went since when, and takes it back', async () => {
+    const calls = stubTopic({
+      '/threads/t1': {
+        thread: { id: 't1', room_id: 'r1', root_message_id: 'm2' },
+        root: message('m2', 2, { ...agent, body: '好，我来补用例。', turn_id: 'x1' }),
+        turns: [turn('x1', 't1', { trigger_message_id: 'm1', status: 'running', trusted_by: 'u1', trusted_at: '2026-09-14T02:05:00Z' })],
+      },
+      '/turns/x1/approvals': {
+        approvals: [
+          approval('ap1', { turn_id: 'x1', status: 'allowed', decided_by: 'u1', scope: 'turn' }),
+          approval('ap2', { turn_id: 'x1', status: 'allowed', decided_by: 'u1', reviewer: 'turn' }),
+          approval('ap3', { turn_id: 'x1', status: 'allowed', decided_by: 'u1', reviewer: 'turn' }),
+        ],
+      },
+      '/turns/x1/trust': { turn: turn('x1', 't1', { trigger_message_id: 'm1', status: 'running' }) },
+    })
+    renderWithProviders(<ThreadPanel roomId="r1" roomName="main" threadId="t1" onClose={vi.fn()} />)
+    const band = await screen.findByRole('status', { name: '本轮自动批准' })
+    await waitFor(() => expect(band).toHaveTextContent(/已放行 2 次 · 自 /))
+    await userEvent.click(within(band).getByRole('button', { name: '撤销' }))
+    await waitFor(() => expect(calls).toContain('DELETE /turns/x1/trust'))
+    await waitFor(() => expect(screen.queryByRole('status', { name: '本轮自动批准' })).toBeNull())
   })
 
   it('replies inside the topic', async () => {

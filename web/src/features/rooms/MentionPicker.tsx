@@ -41,7 +41,7 @@ export function MentionPicker({ items, active, onSelect, id }: MentionPickerProp
               }}
               className="h-8 gap-2.5"
             >
-              {item.look ? <AgentAvatar look={item.look} size="sm" /> : <UserAvatar name={item.name} size="sm" />}
+              {item.look ? <AgentAvatar look={item.look} name={item.name} size="sm" /> : <UserAvatar name={item.name} size="sm" />}
               <span className="min-w-0 truncate">{item.name}</span>
             </PromptInputCommandItem>
           ))}

@@ -14,7 +14,9 @@ export function MaintainerOfferNote({ projectId, roomId }: { projectId: string; 
   if (status?.member_id) {
     return (
       <div className="min-w-0">
-        <div className="mb-1 text-[0.8125rem] leading-tight font-medium text-foreground">{t('maintainer.keeps', { name: status.member_name ?? '' })}</div>
+        <div className="mb-1 text-[0.8125rem] leading-tight font-medium text-foreground">
+          {t(status.leader ? 'maintainer.keepsLeader' : 'maintainer.keeps', { name: status.member_name ?? '' })}
+        </div>
         <p className="text-[0.8125rem] text-muted-foreground">
           {t(triggerWhenKeys[status.trigger], { n: status.idle_minutes })}
           <span aria-hidden="true"> · </span>

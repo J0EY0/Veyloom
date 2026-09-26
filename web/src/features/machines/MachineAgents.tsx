@@ -65,7 +65,7 @@ function AgentRow({ row }: { row: MachineAgent }) {
   const content = (
     <>
       <ItemMedia>
-        <AgentAvatar look={agent} className="size-7" />
+        <AgentAvatar look={agent} name={agent.name} size="message" />
       </ItemMedia>
       <ItemContent className="min-w-0 gap-0.5">
         <ItemTitle className="max-w-full truncate">{agent.name}</ItemTitle>

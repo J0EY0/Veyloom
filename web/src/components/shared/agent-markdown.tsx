@@ -39,10 +39,42 @@ export function withMentionTags(text: string, mentions: Mention[] | null, names:
       .join('|')})`,
     'g',
   )
-  return text.replace(pattern, (_match, name: string) => {
-    const m = byName.get(name) as Mention & { name: string }
-    return `<mention kind="${m.kind}" id="${m.id}">@${name}</mention>`
-  })
+  return outsideCode(text, (prose) =>
+    prose.replace(pattern, (_match, name: string) => {
+      const m = byName.get(name) as Mention & { name: string }
+      return `<mention kind="${m.kind}" id="${m.id}">@${name}</mention>`
+    }),
+  )
+}
+
+// A fenced code block's opening or closing line, and a code span on a line.
+const fenceLine = /^ {0,3}(`{3,}|~{3,})/
+const inlineCode = /(`+[^`\n]*`+)/
+
+// outsideCode changes the prose of markdown alone: code, a fenced block or
+// a span, is shown as written, so a name in it is no mention (the hub reads
+// it the same way). A block left open, as while a reply streams in, runs
+// to the end.
+export function outsideCode(markdown: string, change: (prose: string) => string): string {
+  let fence = ''
+  return markdown
+    .split('\n')
+    .map((line) => {
+      const mark = fenceLine.exec(line)?.[1]
+      if (fence !== '') {
+        if (mark && mark[0] === fence[0] && mark.length >= fence.length) fence = ''
+        return line
+      }
+      if (mark) {
+        fence = mark
+        return line
+      }
+      return line
+        .split(inlineCode)
+        .map((piece, index) => (index % 2 === 1 ? piece : change(piece)))
+        .join('')
+    })
+    .join('\n')
 }
 
 // Agent text is markdown rendered by Streamdown (docs/webui.md §2), which

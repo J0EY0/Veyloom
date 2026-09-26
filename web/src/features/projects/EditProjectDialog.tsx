@@ -1,13 +1,14 @@
 import { useId, useRef, useState, type FormEvent } from 'react'
 import { useUpdateProject } from '@/api/projects'
-import type { Project, UpkeepTrigger } from '@/api/types'
+import type { Project, UpdateProjectRequest, UpkeepTrigger } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { useT } from '@/lib/i18n'
-import { MaintainerFields, noMaintainer } from './MaintainerFields'
+import { byLeader, MaintainerFields } from './MaintainerFields'
+import { relayChange, RelayLimitField, relayValue } from './RelayLimitField'
 import { errorText } from '@/api/errorText'
 
 export interface EditProjectDialogProps {
@@ -21,15 +22,18 @@ export interface EditProjectDialogProps {
 // under the checkout, so moving it moves them along (the hub does that,
 // 2026-09-17). The description opens every agent's brief (2026-09-18): what
 // the project is for, its goals, its stack, written once by a person. The
-// switch lets the members write to the project wiki (on by default,
-// docs/design.md 6.5); one member may be chosen to keep it (5.12).
+// wiki is kept once a person turns that on, by the leader unless another
+// member is chosen (docs/design.md 5.12, 5.21).
 export function EditProjectDialog({ project, rename = false, onClose }: EditProjectDialogProps) {
   const update = useUpdateProject(project.id)
   const nameRef = useRef<HTMLInputElement>(null)
   const [nameError, setNameError] = useState<string>()
   const [error, setError] = useState<string>()
-  const [maintainer, setMaintainer] = useState(project.wiki_maintainer_member_id || noMaintainer)
+  const [upkeep, setUpkeep] = useState(project.wiki_upkeep ?? false)
+  const [maintainer, setMaintainer] = useState(project.wiki_maintainer_member_id || byLeader)
   const [trigger, setTrigger] = useState<UpkeepTrigger>(project.wiki_maintainer_trigger ?? 'daily')
+  const [relay, setRelay] = useState(relayValue(project.relay_limit))
+  const [unlimited, setUnlimited] = useState(project.relay_limit === 0)
   const id = useId()
   const t = useT()
 
@@ -50,8 +54,9 @@ export function EditProjectDialog({ project, rename = false, onClose }: EditProj
           name,
           repo_path: String(data.get('repo_path') ?? '').trim(),
           description: String(data.get('description') ?? '').trim(),
-          ...maintainerChange(project, maintainer === noMaintainer ? '' : maintainer, trigger),
+          ...maintainerChange(project, upkeep, maintainer === byLeader ? '' : maintainer, trigger),
           ...mountsChange(project, String(data.get('external_bundles') ?? '')),
+          ...relayChange(project.relay_limit, relay, unlimited),
         }
     update.mutate(req, { onSuccess: onClose, onError: (err) => setError(errorText(err)) })
   }
@@ -107,8 +112,18 @@ export function EditProjectDialog({ project, rename = false, onClose }: EditProj
               </Field>
             )}
             {rename ? null : (
-              <MaintainerFields project={project} id={id} member={maintainer} trigger={trigger} onMember={setMaintainer} onTrigger={setTrigger} />
+              <MaintainerFields
+                project={project}
+                id={id}
+                upkeep={upkeep}
+                member={maintainer}
+                trigger={trigger}
+                onUpkeep={setUpkeep}
+                onMember={setMaintainer}
+                onTrigger={setTrigger}
+              />
             )}
+            {rename ? null : <RelayLimitField id={id} value={relay} unlimited={unlimited} onValue={setRelay} onUnlimited={setUnlimited} />}
             {rename ? null : (
               <Field>
                 <FieldLabel htmlFor={`${id}-mounts`}>{t('project.mounts')}</FieldLabel>
@@ -140,12 +155,15 @@ export function EditProjectDialog({ project, rename = false, onClose }: EditProj
   )
 }
 
-// maintainerChange is what the request says of the wiki maintainer: only
-// what changed.
-function maintainerChange(project: Project, member: string, trigger: UpkeepTrigger) {
-  const change: { wiki_maintainer_member_id?: string; wiki_maintainer_trigger?: UpkeepTrigger } = {}
+// maintainerChange is what the request says of the wiki's upkeep: only
+// what changed, and of who keeps it and when only while it is on. member
+// is "" for the leader.
+function maintainerChange(project: Project, upkeep: boolean, member: string, trigger: UpkeepTrigger) {
+  const change: Pick<UpdateProjectRequest, 'wiki_upkeep' | 'wiki_maintainer_member_id' | 'wiki_maintainer_trigger'> = {}
+  if (upkeep !== (project.wiki_upkeep ?? false)) change.wiki_upkeep = upkeep
+  if (!upkeep) return change
   if (member !== (project.wiki_maintainer_member_id ?? '')) change.wiki_maintainer_member_id = member
-  if (member !== '' && trigger !== (project.wiki_maintainer_trigger ?? 'daily')) change.wiki_maintainer_trigger = trigger
+  if (trigger !== (project.wiki_maintainer_trigger ?? 'daily')) change.wiki_maintainer_trigger = trigger
   return change
 }
 

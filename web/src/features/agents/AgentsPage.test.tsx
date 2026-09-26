@@ -24,7 +24,7 @@ describe('AgentsPage', () => {
     // Model and permission read as one line along the bottom.
     expect(row).toHaveTextContent('opus')
     expect(row).toHaveTextContent('只读')
-    expect(screen.getByText('需审批')).toBeInTheDocument()
+    expect(screen.getByText('需要审批')).toBeInTheDocument()
 
     await userEvent.click(row)
     expect(await screen.findByRole('dialog', { name: /Claude Architect/ })).toBeInTheDocument()
@@ -32,15 +32,16 @@ describe('AgentsPage', () => {
     expect(screen.getByRole('button', { name: '保存' })).toBeInTheDocument()
   })
 
-  it('leads each card with its avatar, and marks the runtime in the corner only beside a picture', async () => {
+  it("leads each card with its avatar: its picture, or else its name's letter; the runtime's mark in the corner", async () => {
     const picture = '0123456789abcdef0123456789abcdef.webp'
     stubApi({ '/agents': { agents: [agents[1], { ...agents[1], id: 't3', name: 'Fake Reviewer', avatar: picture }] }, '/machines': { machines: [] } })
     renderWithProviders(<AgentsPage />)
 
-    // No picture: the runtime's mark is the avatar, and once is enough.
+    // No picture: the name's letter, and the fake runtime's mark, its own
+    // letter, in the corner.
     const plain = await screen.findByRole('button', { name: /Fake Implementer/ })
     expect(plain.querySelector('[data-avatar]')).toBeNull()
-    expect(within(plain).getAllByText('F')).toHaveLength(1)
+    expect(within(plain).getAllByText('F')).toHaveLength(2)
     // A picture leads, and the corner still says which runtime it is.
     const pictured = screen.getByRole('button', { name: /Fake Reviewer/ })
     expect(pictured.querySelector(`[data-avatar="${picture}"]`)).not.toBeNull()

@@ -49,18 +49,21 @@ describe('NewProjectDialog', () => {
     const tester = await screen.findByRole('checkbox', { name: /Pi Tester/ })
     expect(screen.getByRole('checkbox', { name: /Codex Helper/ })).toHaveAccessibleName(/build-box（不在线） · Codex/)
     expect(tester).toHaveAccessibleName(/laptop · Pi/)
-    // Picked out of order, they are sent in the order of the list.
+    // They join in the order they were picked, and the first leads
+    // (docs/design.md 5.21): its chip says so.
     await userEvent.click(tester)
     await userEvent.click(screen.getByRole('checkbox', { name: /Claude Architect/ }))
     expect(screen.getByRole('group', { name: /Agent/ })).toHaveTextContent('已选 2')
+    expect(screen.getByRole('button', { name: '移除 Pi Tester' })).toHaveTextContent('Pi Tester组长')
+    expect(screen.getByRole('button', { name: '移除 Claude Architect' })).not.toHaveTextContent('组长')
     await userEvent.click(screen.getByRole('button', { name: '创建项目' }))
 
     await waitFor(() => expect(router.state.location.pathname).toBe('/rooms/r9'))
-    expect(posted).toEqual({ name: 'New', repo_path: '/src/new', agent_ids: ['ag1', 'ag2'] })
+    expect(posted).toEqual({ name: 'New', repo_path: '/src/new', agent_ids: ['ag2', 'ag1'] })
     expect(onClose).toHaveBeenCalledOnce()
   })
 
-  it('may start with one of the agents picked keeping the wiki, none by default', async () => {
+  it('may start with the wiki kept, by the leader unless one of the agents picked is chosen, off by default', async () => {
     const posted: unknown[] = []
     stub({
       '/projects': async (req: Request) => {
@@ -70,18 +73,40 @@ describe('NewProjectDialog', () => {
     })
     renderWithProviders(<NewProjectDialog open onClose={() => {}} />)
     await userEvent.type(screen.getByLabelText('名称'), 'New')
-    // Nothing to choose from before an agent is picked.
+    // Nothing to turn on before an agent is picked.
     const tester = await screen.findByRole('checkbox', { name: /Pi Tester/ })
-    expect(screen.queryByRole('combobox', { name: 'Wiki 维护员' })).toBeNull()
+    expect(screen.queryByRole('switch', { name: 'Wiki 维护员' })).toBeNull()
     await userEvent.click(tester)
     await userEvent.click(screen.getByRole('checkbox', { name: /Claude Architect/ }))
-    const keeper = screen.getByRole('combobox', { name: 'Wiki 维护员' })
-    expect(keeper).toHaveTextContent('暂不选')
+    const upkeep = screen.getByRole('switch', { name: 'Wiki 维护员' })
+    expect(upkeep).not.toBeChecked()
+    expect(screen.queryByRole('combobox', { name: '谁来整理' })).toBeNull()
+    await userEvent.click(upkeep)
+    const keeper = screen.getByRole('combobox', { name: '谁来整理' })
+    expect(keeper).toHaveTextContent('组长（Pi Tester）')
     await userEvent.click(keeper)
-    expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['暂不选', 'Claude Architect', 'Pi Tester'])
-    await userEvent.click(screen.getByRole('option', { name: 'Pi Tester' }))
+    expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['组长（Pi Tester）', 'Pi Tester', 'Claude Architect'])
+    await userEvent.click(screen.getByRole('option', { name: 'Claude Architect' }))
     await userEvent.click(screen.getByRole('button', { name: '创建项目' }))
-    await waitFor(() => expect(posted[0]).toMatchObject({ agent_ids: ['ag1', 'ag2'], wiki_maintainer_agent_id: 'ag2' }))
+    await waitFor(() =>
+      expect(posted[0]).toEqual({ name: 'New', repo_path: '', agent_ids: ['ag2', 'ag1'], wiki_upkeep: true, wiki_maintainer_agent_id: 'ag1' }),
+    )
+  })
+
+  it('leaves the wiki to the leader when nobody else is chosen', async () => {
+    const posted: unknown[] = []
+    stub({
+      '/projects': async (req: Request) => {
+        posted.push(await req.json())
+        return Response.json({ project: project('p9', 'New'), rooms: [room('r9', 'p9', 'main')] }, { status: 201 })
+      },
+    })
+    renderWithProviders(<NewProjectDialog open onClose={() => {}} />)
+    await userEvent.type(screen.getByLabelText('名称'), 'New')
+    await userEvent.click(await screen.findByRole('checkbox', { name: /Claude Architect/ }))
+    await userEvent.click(screen.getByRole('switch', { name: 'Wiki 维护员' }))
+    await userEvent.click(screen.getByRole('button', { name: '创建项目' }))
+    await waitFor(() => expect(posted[0]).toEqual({ name: 'New', repo_path: '', agent_ids: ['ag1'], wiki_upkeep: true }))
   })
 
   it('picks the way an IM starts a group chat: chips in the search box, Enter and Backspace', async () => {

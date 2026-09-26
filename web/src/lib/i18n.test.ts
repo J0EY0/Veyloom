@@ -18,7 +18,7 @@ describe('i18n', () => {
     expect(t('topic.done', { turns: 2, took: t('topic.took', { duration: '38s' }) })).toBe('Done · 2 turns · 38s')
     expect(t('topic.done', { turns: 1, took: '' })).toBe('Done · 1 turn')
     expect(t('topic.replies', { n: 1 })).toBe('1 reply')
-    expect(t('activity.tools', { n: 3 })).toBe('3 tool calls')
+    expect(t('activity.commands', { n: 3 })).toBe('ran 3 commands')
     expect(localStorage.getItem('veyloom.locale')).toBe('en')
     expect(document.documentElement.lang).toBe('en')
   })

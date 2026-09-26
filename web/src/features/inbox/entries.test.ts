@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import type { InboxItem, PendingApproval } from '@/api/types'
 import { approval, message } from '@/test/fixtures'
+import { t } from '@/lib/i18n'
 import { excerptOf, filterEntries, plainText, toEntries } from './entries'
 
 function mention(id: string, seq: number, overrides: Partial<InboxItem> = {}): InboxItem {
@@ -9,6 +10,7 @@ function mention(id: string, seq: number, overrides: Partial<InboxItem> = {}): I
     room_name: 'main',
     project_name: 'Veyloom',
     sender_name: 'Pi Tester',
+    read: false,
     ...overrides,
   }
 }
@@ -19,13 +21,13 @@ function pending(id: string, overrides: Partial<PendingApproval> = {}): PendingA
 
 describe('toEntries', () => {
   it('puts what waits for a decision first and says what it asks for', () => {
-    const entries = toEntries([pending('ap1')], [mention('m2', 2, { body: '@alice 看完了', turn_id: 'x2' })], 'alice')
+    const entries = toEntries([pending('ap1')], [mention('m2', 2, { body: '@alice 看完了', turn_id: 'x2' })], 'alice', t)
     expect(entries.map((entry) => [entry.kind, entry.id, entry.sender, entry.project, entry.excerpt])).toEqual([
       ['approval', 'ap1', 'Careful Builder', 'docs-site', 'make test'],
       ['mention', 'm2', 'Pi Tester', 'Veyloom', '看完了'],
     ])
     expect(entries[0]).toMatchObject({ roomId: 'r1', threadId: 't1' })
-    // A closing message names its turn, not a topic.
+    // The answer heading a topic names its turn, not a topic.
     expect(entries[1]).toMatchObject({ threadId: undefined, turnId: 'x2' })
   })
 
@@ -34,8 +36,20 @@ describe('toEntries', () => {
       { id: 'f1', room_id: 'r1', filename: 'shot.png', media_type: 'image/png', size: 1, created_at: '' },
       { id: 'f2', room_id: 'r1', filename: 'log.txt', media_type: 'text/plain', size: 1, created_at: '' },
     ]
-    const [entry] = toEntries([], [mention('m1', 1, { body: '@alice', attachments: files })], 'alice')
+    const [entry] = toEntries([], [mention('m1', 1, { body: '@alice', attachments: files })], 'alice', t)
     expect(entry.excerpt).toBe('shot.png、log.txt')
+  })
+
+  it('names Veyloom as the sender of its notes, put in the UI words', () => {
+    const note = mention('n1', 3, {
+      sender_kind: 'system',
+      member_id: undefined,
+      sender_name: '',
+      thread_id: 't1',
+      body: '@alice Pong mentioned Ping, but the last 3 turns agents woke in this piece of work only talked; it waits for a person now.',
+    })
+    const [entry] = toEntries([], [note], 'alice', t)
+    expect([entry.sender, entry.excerpt]).toEqual(['Veyloom', 'Pong 想叫醒 Ping，但最近 3 轮被叫醒的都只说话、没干活，等你决定'])
   })
 })
 
@@ -63,6 +77,7 @@ describe('filterEntries', () => {
     [pending('ap1')],
     [mention('m1', 1, { body: '@alice 审完了 InboxPage' }), mention('m2', 2, { body: '@alice 构建好了', project_name: 'docs-site' })],
     'alice',
+    t,
   )
 
   it('keeps only approvals when asked', () => {

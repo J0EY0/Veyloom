@@ -106,4 +106,40 @@ describe('applyTurn', () => {
     expect(rows(client)[0].thread).toMatchObject({ turns: 1, last_turn: { id: 'x1', status: 'done' } })
     expect(client.getQueryData<ThreadResponse>(threadKeys.one('t1'))?.turns).toEqual([turn('x1', 't1', { status: 'done' })])
   })
+
+  it('counts turns that overlap in a topic once each, the latest to start being its last', () => {
+    const client = seed([{ ...message('m2', 2), thread: summary('t1') }])
+    const a = { started_at: '2026-09-14T02:00:00Z', ended_at: undefined }
+    const b = { started_at: '2026-09-14T02:00:30Z', ended_at: undefined }
+    applyTurn(client, turn('x1', 't1', { ...a, status: 'running' }))
+    applyTurn(client, turn('x2', 't1', { ...b, status: 'running', member_id: 'a2' }))
+    // x1 hands on to x2 and ends while x2 runs.
+    applyTurn(client, turn('x1', 't1', { ...a, status: 'done', ended_at: '2026-09-14T02:00:40Z' }))
+    expect(rows(client)[0].thread).toMatchObject({ turns: 2, last_turn: { id: 'x2', status: 'running' } })
+    applyTurn(client, turn('x2', 't1', { ...b, status: 'done', member_id: 'a2', ended_at: '2026-09-14T02:01:00Z' }))
+    expect(rows(client)[0].thread).toMatchObject({ turns: 2, last_turn: { id: 'x2', status: 'done' } })
+  })
+
+  it('counts the piece of work under the topic that began it, whichever topic the turn is in', () => {
+    // t1 is where the person asked; t2 the topic a member was woken into.
+    const client = seed([
+      { ...message('m1', 1), thread: summary('t1') },
+      { ...message('m2', 2), thread: summary('t2') },
+    ])
+    client.setQueryData<ThreadResponse>(threadKeys.one('t2'), {
+      thread: { id: 't2', room_id: 'r1', root_message_id: 'm2', created_at: '' },
+      root: message('m2', 2),
+      turns: [],
+    })
+    const work = (turns: number, running: boolean) => ({ thread_id: 't1', thread_number: 1, chain: 'ask', turns, started_at: '2026-09-25T14:53:25Z', running })
+
+    applyTurn(client, turn('x1', 't1', { status: 'done' }), work(1, false))
+    expect(rows(client)[0].thread?.work).toMatchObject({ turns: 1, running: false })
+    applyTurn(client, turn('x2', 't2', { status: 'running', ended_at: undefined }), work(2, true))
+    // The origin's root counts it; the member's topic keeps to its own turns.
+    expect(rows(client)[0].thread?.work).toMatchObject({ turns: 2, running: true })
+    expect(rows(client)[1].thread?.work).toBeUndefined()
+    // The open member's topic knows which piece of work it is part of.
+    expect(client.getQueryData<ThreadResponse>(threadKeys.one('t2'))?.work).toMatchObject({ thread_id: 't1', thread_number: 1 })
+  })
 })

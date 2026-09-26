@@ -1,5 +1,5 @@
 import { useId, useMemo, useState } from 'react'
-import { InboxIcon, SearchXIcon } from 'lucide-react'
+import { CheckCheckIcon, InboxIcon, SearchXIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import { PanelHeader } from '@/components/layout/PanelHeader'
 import { StatusPill } from '@/components/shared/status-pill'
@@ -9,6 +9,7 @@ import { Label } from '@/components/ui/label'
 import { Sidebar, SidebarContent, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarInput } from '@/components/ui/sidebar'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Switch } from '@/components/ui/switch'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatTime } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
@@ -16,6 +17,9 @@ import { filterEntries, type InboxEntry } from './entries'
 
 export interface InboxListProps {
   entries: InboxEntry[]
+  // How many mentions, of all of them, are unread; and marking all read.
+  unread: number
+  onReadAll?: () => void
   selectedId: string
   loading: boolean
   // Set when the list could not be loaded.
@@ -29,9 +33,10 @@ export interface InboxListProps {
 
 // The list column of the inbox page, built as shadcn's sidebar-09 builds
 // its inbox: a title with a switch, a search box, then one row per entry
-// (who, when, where, what) with a rule between rows. The switch narrows
-// the list to the requests waiting for a decision.
-export function InboxList({ entries, selectedId, loading, error, hasMore, loadingMore, onLoadMore, className }: InboxListProps) {
+// (who, when, where, what) with a rule between rows, a mention not read
+// marked with a dot. The switch narrows the list to the requests waiting
+// for a decision; while any mention is unread, a button reads them all.
+export function InboxList({ entries, unread, onReadAll, selectedId, loading, error, hasMore, loadingMore, onLoadMore, className }: InboxListProps) {
   const t = useT()
   const switchId = useId()
   const [approvalsOnly, setApprovalsOnly] = useState(false)
@@ -54,6 +59,16 @@ export function InboxList({ entries, selectedId, loading, error, hasMore, loadin
           title={t('inbox.title')}
           trailing={
             <div className="flex items-center gap-2">
+              {unread > 0 && onReadAll ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <Button variant="ghost" size="icon-sm" aria-label={t('inbox.readAll')} onClick={onReadAll} className="text-subtle">
+                      <CheckCheckIcon />
+                    </Button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">{t('inbox.readAll')}</TooltipContent>
+                </Tooltip>
+              ) : null}
               <Label htmlFor={switchId} className="text-[0.8125rem] font-normal text-muted-foreground">
                 {t('inbox.approvalsOnly')}
               </Label>
@@ -126,7 +141,8 @@ function EntryRow({ entry, active }: { entry: InboxEntry; active: boolean }) {
       className="flex flex-col items-start gap-2 p-4 text-sm leading-tight outline-hidden transition-colors hover:bg-sidebar-accent/70 focus-visible:bg-sidebar-accent/70 focus-visible:ring-2 focus-visible:ring-sidebar-ring focus-visible:ring-inset data-active:bg-sidebar-accent"
     >
       <div className="flex w-full min-w-0 items-center gap-2">
-        <span className="truncate font-medium text-foreground">{entry.sender || t('common.unknown')}</span>
+        {entry.unread ? <span role="img" aria-label={t('inbox.unread')} className="size-2 flex-none rounded-full bg-status-run" /> : null}
+        <span className={cn('truncate text-foreground', entry.unread ? 'font-semibold' : 'font-medium')}>{entry.sender || t('common.unknown')}</span>
         {entry.kind === 'approval' ? <StatusPill tone="wait">{t('inbox.waiting')}</StatusPill> : null}
         <time dateTime={entry.createdAt} className="ml-auto flex-none text-xs text-subtle tabular-nums">
           {formatTime(entry.createdAt)}

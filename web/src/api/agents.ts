@@ -1,6 +1,8 @@
-import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { browserTimeZone } from '@/lib/format'
 import { ApiError, api } from './client'
+import { projectKeys } from './projects'
+import { upkeepKeys } from './upkeep'
 import type {
   Agent,
   AgentRequest,
@@ -146,12 +148,21 @@ export function useProbeMachines({ intervalMs = 1000, timeoutMs = 30_000 } = {})
   })
 }
 
+// Who leads a project, and so keeps its wiki unless someone else was
+// chosen, follows its members (docs/design.md 5.21): a member joining,
+// switched on or off, or taken out may change it.
+function refreshLeaders(client: QueryClient) {
+  void client.invalidateQueries({ queryKey: projectKeys.all })
+  void client.invalidateQueries({ queryKey: upkeepKeys.all })
+}
+
 export function useCreateMember(roomId: string) {
   const client = useQueryClient()
   return useMutation({
     mutationFn: async (req: CreateMemberRequest) => (await api.post<MemberResponse>(`/rooms/${roomId}/members`, req)).member,
     onSuccess: (member) => {
       client.setQueryData<Member[]>(memberKeys.room(roomId), (old) => (old ? [...old, member] : old))
+      refreshLeaders(client)
     },
   })
 }
@@ -162,6 +173,7 @@ export function useUpdateMember(roomId: string) {
     mutationFn: async ({ id, patch }: { id: string; patch: UpdateMemberRequest }) => (await api.patch<MemberResponse>(`/members/${id}`, patch)).member,
     onSuccess: (member) => {
       client.setQueryData<Member[]>(memberKeys.room(roomId), (old) => (old ? old.map((m) => (m.id === member.id ? member : m)) : old))
+      refreshLeaders(client)
     },
   })
 }
@@ -208,6 +220,7 @@ export function useRemoveMember(roomId: string) {
       client.setQueryData<Member[]>(memberKeys.room(roomId), (old) =>
         old ? old.map((m) => (m.id === id ? { ...m, removed_at: m.removed_at ?? now } : m)) : old,
       )
+      refreshLeaders(client)
     },
   })
 }

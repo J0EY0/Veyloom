@@ -30,5 +30,15 @@ export function problemText(code: string | undefined, params?: Record<string, st
 export function problemText(code: string | undefined, params: Record<string, string> | undefined, fallback: string): string
 export function problemText(code: string | undefined, params?: Record<string, string>, fallback?: string): string | undefined {
   const key = `error.${code ?? ''}`
-  return code !== undefined && key in zhCN ? t(key as MessageKey, params) : fallback
+  return code !== undefined && key in zhCN ? t(key as MessageKey, params && listed(params)) : fallback
+}
+
+// A param the server sends as lines, such as the files a merge names, is a
+// list, joined the way the language joins one.
+function listed(params: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {}
+  for (const [name, value] of Object.entries(params)) {
+    out[name] = value.includes('\n') ? value.split('\n').join(t('common.listSeparator')) : value
+  }
+  return out
 }

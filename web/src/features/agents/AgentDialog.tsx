@@ -112,7 +112,7 @@ export function AgentDialog({ agent, onClose }: AgentDialogProps) {
           </DialogHeader>
           <FieldGroup className="my-4 gap-4">
             <div className="flex items-start gap-4">
-              <AvatarField avatar={avatar} runtime={runtime || (agent?.runtime ?? '')} onChange={setAvatar} onBusyChange={setUploading} />
+              <AvatarField avatar={avatar} runtime={runtime || (agent?.runtime ?? '')} name={agent?.name} onChange={setAvatar} onBusyChange={setUploading} />
               <Field data-invalid={error ? true : undefined}>
                 <FieldLabel htmlFor={`${id}-name`}>{t('agent.name')}</FieldLabel>
                 <Input

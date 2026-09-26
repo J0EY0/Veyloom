@@ -9,6 +9,11 @@ export interface SidePanelProps {
   label: string
   // What the header shows before the close button.
   header: ReactNode
+  // A line under the header: how what the panel shows stands.
+  subheader?: ReactNode
+  // A strip across the panel under the header, for a state that holds
+  // until someone ends it.
+  band?: ReactNode
   // Extra header buttons, before the close button.
   headerActions?: ReactNode
   onClose: () => void
@@ -33,6 +38,8 @@ export interface SidePanelProps {
 export function SidePanel({
   label,
   header,
+  subheader,
+  band,
   headerActions,
   onClose,
   closeLabel,
@@ -68,6 +75,8 @@ export function SidePanel({
           <TooltipContent side="bottom">{closeLabel}</TooltipContent>
         </Tooltip>
       </header>
+      {subheader ? <div className="-mt-1.5 flex-none px-4 pb-3">{subheader}</div> : null}
+      {band}
       <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-4 pb-4">{children}</div>
       {footer}
     </aside>

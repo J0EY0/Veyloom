@@ -2,7 +2,7 @@ import { useMemo, useState } from 'react'
 import { ArrowDownIcon, MessageSquareDashedIcon } from 'lucide-react'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { usePendingApprovals } from '@/api/approvals'
-import type { Approval } from '@/api/types'
+import type { Approval, RoomMessage } from '@/api/types'
 import { useRoomMessages } from '@/api/messages'
 import { Conversation, ConversationContent, ConversationEmptyState } from '@/components/ai-elements/conversation'
 import { Button } from '@/components/ui/button'
@@ -20,20 +20,36 @@ import { errorText } from '@/api/errorText'
 export interface TimelineProps {
   roomId: string
   onOpenThread?: (threadId: string) => void
-  // The project's wiki topic, drawn by name rather than by its root's words.
+  // The project's wiki and setup topics, drawn by name rather than by
+  // their roots' words.
   wikiThreadId?: string
+  setupThreadId?: string
   // The project, and its note offering a wiki maintainer, drawn as a card.
   projectId?: string
   offerMessageId?: string
-  // Leaves room at the top for the status island floating over the feed.
-  inset?: boolean
+  // The topic open beside the chat, whose root is lifted a little.
+  openThreadId?: string
+  // The project's leader, whose messages say so.
+  leaderId?: string
+}
+
+// How long after a message the same sender's next one still goes under its
+// face.
+const GROUP_MS = 5 * 60_000
+
+// continues says the message follows on from the one before it: said by
+// the same person or member a moment later, neither a note of the system's.
+export function continues(previous: RoomMessage | undefined, message: RoomMessage): boolean {
+  if (!previous || previous.sender_kind !== message.sender_kind || message.sender_kind === 'system') return false
+  const same = message.sender_kind === 'agent' ? previous.member_id === message.member_id : previous.user_id === message.user_id
+  return same && Date.parse(message.created_at) - Date.parse(previous.created_at) < GROUP_MS
 }
 
 // The room's top-level messages, newest at the bottom, older pages loading
 // as the reader scrolls up. AI Elements' conversation keeps the view
 // pinned to the bottom while the reader is there, and offers the way back
 // once they have scrolled up.
-export function Timeline({ roomId, onOpenThread, wikiThreadId, projectId, offerMessageId, inset }: TimelineProps) {
+export function Timeline({ roomId, onOpenThread, wikiThreadId, setupThreadId, projectId, offerMessageId, openThreadId, leaderId }: TimelineProps) {
   const messages = useRoomMessages(roomId)
   const t = useT()
   const sender = useSenderNames(roomId)
@@ -59,7 +75,7 @@ export function Timeline({ roomId, onOpenThread, wikiThreadId, projectId, offerM
     <Conversation className="min-h-0 flex-1" initial="instant" resize="smooth">
       {/* With nothing to show, the content is as tall as the view, so the
           note takes the rest of it and sits in the middle. */}
-      <ConversationContent className={cn('gap-0 p-0 pb-2', inset ? 'pt-12' : 'pt-2', nothing && 'min-h-full')}>
+      <ConversationContent className={cn('gap-0 p-0 pt-3 pb-2', nothing && 'min-h-full')}>
         {messages.isPending ? (
           <p role="status" className="flex items-center gap-2 px-6 py-3 text-sm text-subtle">
             <Spinner className="size-3.5" />
@@ -92,14 +108,26 @@ export function Timeline({ roomId, onOpenThread, wikiThreadId, projectId, offerM
             ) : null}
             <MemberLooks.Provider value={looks}>
               <ol>
-                {list.map((message) => (
+                {list.map((message, index) => (
                   <MessageRow
                     key={message.id}
                     message={message}
                     sender={sender(message)}
                     names={names}
+                    continued={continues(list[index - 1], message)}
+                    selected={message.thread !== undefined && message.thread.id === openThreadId}
+                    leader={leaderId !== undefined && message.member_id === leaderId}
+                    worker={workerOf(message, names)}
                     approval={message.thread ? waitingByThread.get(message.thread.id) : undefined}
-                    wikiTopic={message.thread !== undefined && message.thread.id === wikiThreadId}
+                    systemTopic={
+                      message.thread === undefined
+                        ? undefined
+                        : message.thread.id === wikiThreadId
+                          ? 'wiki'
+                          : message.thread.id === setupThreadId
+                            ? 'setup'
+                            : undefined
+                    }
                     offerProjectId={offerMessageId !== undefined && message.id === offerMessageId ? projectId : undefined}
                     onOpenThread={onOpenThread}
                   />
@@ -112,6 +140,13 @@ export function Timeline({ roomId, onOpenThread, wikiThreadId, projectId, offerM
       <ScrollDown lastId={list[list.length - 1]?.id ?? ''} />
     </Conversation>
   )
+}
+
+// workerOf names the member whose turns a topic has, when it is not whoever
+// said the root: the member a leader's message woke.
+function workerOf(message: RoomMessage, names: Map<string, string>): string | undefined {
+  const member = message.thread?.last_turn?.member_id
+  return member && member !== message.member_id ? names.get(member) : undefined
 }
 
 // The button back to the bottom: once the reader has scrolled up, and

@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import { BotIcon, ChevronRightIcon, PlusIcon, SearchIcon } from 'lucide-react'
+import { toast } from 'sonner'
 import { useRoomMembers } from '@/api/agents'
-import { useProject } from '@/api/projects'
+import { useProject, useUpdateProject } from '@/api/projects'
 import { useRoom } from '@/api/rooms'
 import type { Member, Project } from '@/api/types'
 import { SidePanel } from '@/components/layout/SidePanel'
@@ -45,6 +46,7 @@ export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: Member
   // what is cached rather than asking again.
   const members = useRoomMembers(roomId)
   const states = useMemberStates(roomId)
+  const update = useUpdateProject(project?.id ?? '')
   const [adding, setAdding] = useState(false)
   const [editing, setEditing] = useState<Member>()
   const [removing, setRemoving] = useState<Member>()
@@ -53,6 +55,16 @@ export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: Member
   const sorted = [...states].sort((a, b) => byStatus(a.status, b.status))
   const needle = query.trim().toLowerCase()
   const shown = needle ? sorted.filter((state) => state.member.display_name.toLowerCase().includes(needle)) : sorted
+
+  function makeLeader(member: Member) {
+    update.mutate(
+      { leader_member_id: member.id },
+      {
+        onSuccess: () => toast.success(t('member.madeLeader', { name: member.display_name })),
+        onError: (err) => toast.error(t('member.makeLeaderFailed', { error: errorText(err) })),
+      },
+    )
+  }
 
   return (
     <SidePanel
@@ -132,7 +144,16 @@ export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: Member
           ) : (
             <ItemGroup className="-mx-1">
               {shown.map((state) => (
-                <MemberRow key={state.member.id} roomId={roomId} state={state} onEdit={setEditing} onRemove={setRemoving} onOpenThread={onOpenThread} />
+                <MemberRow
+                  key={state.member.id}
+                  roomId={roomId}
+                  state={state}
+                  leader={state.member.id === project?.leader_id}
+                  onEdit={setEditing}
+                  onMakeLeader={makeLeader}
+                  onRemove={setRemoving}
+                  onOpenThread={onOpenThread}
+                />
               ))}
             </ItemGroup>
           )}

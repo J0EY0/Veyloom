@@ -25,6 +25,16 @@ describe('withMentionTags', () => {
   it('leaves text alone without mentions', () => {
     expect(withMentionTags('plain @nobody', null, names)).toBe('plain @nobody')
   })
+
+  it('leaves names in code as written', () => {
+    const mentioned = [{ kind: 'user' as const, id: 'u1' }]
+    expect(withMentionTags('写 `@alice` 就能叫到，@alice 你看下', mentioned, names)).toBe(
+      '写 `@alice` 就能叫到，<mention kind="user" id="u1">@alice</mention> 你看下',
+    )
+    expect(withMentionTags('```\n@alice run\n```\n@alice', mentioned, names)).toBe('```\n@alice run\n```\n<mention kind="user" id="u1">@alice</mention>')
+    // Still arriving, a block not yet closed is code to its end.
+    expect(withMentionTags('see:\n```\n@alice', mentioned, names)).toBe('see:\n```\n@alice')
+  })
 })
 
 describe('AgentMarkdown', () => {

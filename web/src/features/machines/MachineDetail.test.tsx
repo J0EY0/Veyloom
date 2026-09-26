@@ -146,14 +146,15 @@ describe('MachineDetail', () => {
     const region = await screen.findByRole('region', { name: 'Agents' })
     const rows = await within(region).findAllByRole('listitem')
     // Running first, then the order they were made; nothing but running or idle.
+    // Each led by its avatar, its name's letter.
     expect(rows.map((row) => row.textContent)).toEqual([
-      'Pi TesterPi · Veyloom运行中',
-      'ReviewerPi · Veyloom运行中',
-      'FreshPi空闲',
-      'Claude ArchitectClaude Code空闲',
-      'Codex HelperCodex空闲',
-      'Release HelperPi · Veyloom空闲',
-      'Idle OnePi · docs-site空闲',
+      'PPi TesterPi · Veyloom运行中',
+      'RReviewerPi · Veyloom运行中',
+      'FFreshPi空闲',
+      'CClaude ArchitectClaude Code空闲',
+      'CCodex HelperCodex空闲',
+      'RRelease HelperPi · Veyloom空闲',
+      'IIdle OnePi · docs-site空闲',
     ])
     const link = (row: HTMLElement) => within(row).queryByRole('link')
     expect(link(rows[0])).toHaveAttribute('href', '/rooms/r1?thread=th1')

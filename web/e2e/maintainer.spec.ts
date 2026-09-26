@@ -1,10 +1,11 @@
 import { expect, test, type APIRequestContext } from '@playwright/test'
 
-// The wiki maintainer, as a person meets it (docs/design.md 5.12): once
-// there is something to go over, the Wiki tab offers to have a member keep
-// the wiki; one click turns it on, another runs an upkeep now; the upkeep
-// runs in the project's wiki topic, and what it wrote is in the wiki. The
-// fake runtime plays the agents.
+// The wiki maintainer, as a person meets it (docs/design.md 5.12, 5.21):
+// once there is something to go over, the Wiki tab offers to have the
+// wiki kept, by the leader unless another member is picked; one click
+// turns it on, another runs an upkeep now; the upkeep runs in the
+// project's wiki topic, and what it wrote is in the wiki. The fake runtime
+// plays the agents.
 
 const api = '/api/v1'
 
@@ -59,8 +60,11 @@ test('a member keeps the wiki: offered, turned on, run, written', async ({ page 
   await page.goto(`/rooms/${roomId}/wiki`)
   const offer = page.getByRole('region', { name: '让一个成员来维护这个 wiki？' })
   await expect(offer).toBeVisible()
-  await offer.getByRole('combobox', { name: '选一个成员' }).click()
-  await page.getByRole('option', { name: `Keeper ${stamp}` }).click()
+  // Coder joined first, and so leads, and would keep it; Keeper is picked.
+  const who = offer.getByRole('combobox', { name: '谁来整理' })
+  await expect(who).toHaveText(`组长（Coder ${stamp}）`)
+  await who.click()
+  await page.getByRole('option', { name: `Keeper ${stamp}`, exact: true }).click()
   await offer.getByRole('button', { name: '开启（每天一次）' }).click()
 
   // Daily by default, and changed right on the card (docs/design.md 5.16).

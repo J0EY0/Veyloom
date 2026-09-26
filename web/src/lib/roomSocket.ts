@@ -2,7 +2,7 @@ import { wsBase } from '@/api/base'
 import type { RoomEvent } from '@/api/types'
 import type { ConnectionStatus } from './connection'
 
-export interface RoomSocketHandlers {
+export interface EventSocketHandlers {
   onEvent: (event: RoomEvent) => void
   // Called each time the stream opens, the first time too: the page read
   // the room before the stream was listening, or while it was down, and
@@ -12,19 +12,24 @@ export interface RoomSocketHandlers {
   onStatus?: (status: ConnectionStatus) => void
 }
 
-export interface RoomSocket {
+export interface EventSocket {
   close: () => void
 }
 
 const initialDelay = 1_000
 const maxDelay = 30_000
 
-// connectRoomEvents keeps one WebSocket to a room's event stream open,
+// connectRoomEvents keeps one WebSocket to a room's event stream open.
+export function connectRoomEvents(roomId: string, handlers: EventSocketHandlers): EventSocket {
+  return connectEvents(`/rooms/${roomId}/events`, handlers)
+}
+
+// connectEvents keeps one WebSocket to an event stream of the API open,
 // reconnecting with exponential backoff until closed. A close with code
 // 1008 means the hub dropped a slow subscriber; it is handled like any
 // other drop, since the resync after reconnecting covers what was missed.
-export function connectRoomEvents(roomId: string, handlers: RoomSocketHandlers): RoomSocket {
-  const url = `${wsBase()}/rooms/${roomId}/events`
+export function connectEvents(path: string, handlers: EventSocketHandlers): EventSocket {
+  const url = `${wsBase()}${path}`
   let socket: WebSocket | undefined
   let timer: ReturnType<typeof setTimeout> | undefined
   let attempt = 0

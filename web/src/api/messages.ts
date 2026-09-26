@@ -11,6 +11,7 @@ import type {
   ThreadResponse,
   ThreadSummary,
   Turn,
+  WorkSummary,
 } from './types'
 
 export const PAGE_SIZE = 50
@@ -123,28 +124,46 @@ export function applyRoomMessage(client: QueryClient, message: Message, thread?:
 }
 
 // applyTurn records a turn starting or finishing on its topic's summary
-// and, if the topic is open, in its turn list.
-export function applyTurn(client: QueryClient, turn: Turn) {
+// and, if the topic is open, in its turn list; and the piece of work it is
+// part of, as the hub counts it now, under the topic that began it and in
+// the open topics it went through.
+export function applyTurn(client: QueryClient, turn: Turn, work?: WorkSummary) {
   updateRoom(client, turn.room_id, (pages) => {
-    const found = locate(pages, (m) => m.thread?.id === turn.thread_id)
-    if (!found) return pages
-    const root = pages[found.page][found.index]
-    const summary = root.thread as ThreadSummary
-    const isNew = summary.last_turn?.id !== turn.id
-    return replaceAt(pages, found, {
-      ...root,
-      thread: {
-        ...summary,
-        turns: isNew ? summary.turns + 1 : summary.turns,
-        last_turn: {
-          id: turn.id,
-          status: turn.status,
-          error: turn.error,
-          started_at: turn.started_at,
-          ended_at: turn.ended_at,
+    let next = pages
+    const found = locate(next, (m) => m.thread?.id === turn.thread_id)
+    if (found) {
+      const root = next[found.page][found.index]
+      const summary = root.thread as ThreadSummary
+      const last = summary.last_turn
+      // Turns of a topic can overlap, one handing on while it ends: the
+      // latest to start is its last turn, and a turn counts once, as it
+      // starts. The end of an earlier one changes neither.
+      const latest = !last || last.id === turn.id || turn.started_at >= last.started_at
+      const started = turn.status === 'running' && last?.id !== turn.id && latest
+      next = replaceAt(next, found, {
+        ...root,
+        thread: {
+          ...summary,
+          turns: started ? summary.turns + 1 : summary.turns,
+          last_turn: latest
+            ? { id: turn.id, member_id: turn.member_id, status: turn.status, error: turn.error, started_at: turn.started_at, ended_at: turn.ended_at }
+            : last,
+          // The topic's latest piece of work is this one now, begun here
+          // or elsewhere.
+          work: work === undefined ? summary.work : work.thread_id === turn.thread_id ? { ...work, members: undefined } : undefined,
         },
-      },
-    })
+      })
+    }
+    const origin = work && work.thread_id !== turn.thread_id ? locate(next, (m) => m.thread?.id === work.thread_id) : undefined
+    if (work && origin) {
+      const root = next[origin.page][origin.index]
+      const summary = root.thread as ThreadSummary
+      // A later piece of work of the topic that began this one wins.
+      if (summary.work === undefined || summary.work.chain === work.chain) {
+        next = replaceAt(next, origin, { ...root, thread: { ...summary, work: { ...work, members: undefined } } })
+      }
+    }
+    return next
   })
   patchQuery<ThreadResponse>(client, threadKeys.one(turn.thread_id), (old) => {
     if (!old) return old
@@ -155,8 +174,13 @@ export function applyTurn(client: QueryClient, turn: Turn) {
     } else {
       turns[index] = turn
     }
-    return { ...old, turns }
+    return { ...old, turns, work: work ?? old.work }
   })
+  if (work && work.thread_id !== turn.thread_id) {
+    patchQuery<ThreadResponse>(client, threadKeys.one(work.thread_id), (old) =>
+      old && (old.work === undefined || old.work.chain === work.chain) ? { ...old, work } : old,
+    )
+  }
 }
 
 export function usePostMessage(roomId: string) {
@@ -205,5 +229,5 @@ function replaceAt(pages: RoomMessage[][], at: Location, message: RoomMessage): 
 // that has just opened.
 function mergeSummary(existing: ThreadSummary | undefined, incoming: ThreadSummary | undefined): ThreadSummary | undefined {
   if (!incoming) return existing
-  return existing ? { ...existing, id: incoming.id } : incoming
+  return existing ? { ...existing, id: incoming.id, number: existing.number || incoming.number } : incoming
 }

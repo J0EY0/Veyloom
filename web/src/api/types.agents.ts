@@ -2,7 +2,25 @@
 
 import type { TokenUsage } from './types'
 
-export type PermissionPreset = 'read_only' | 'edit_with_approval' | 'full_auto'
+export type PermissionPreset = 'read_only' | 'edit_with_approval' | 'auto_review' | 'full_auto'
+
+// Something a member may always do without a person being asked, in its
+// runtime's terms: a Claude Code permission rule such as Bash(go test:*),
+// or a Codex command prefix as a JSON array such as ["go","test"]
+// (GET /members/{id}/rules).
+export interface MemberRule {
+  id: string
+  member_id: string
+  runtime: string
+  rule: string
+  approval_id?: string
+  created_by?: string
+  created_at: string
+}
+
+export interface MemberRulesResponse {
+  rules: MemberRule[]
+}
 
 // A member's conversation with its runtime (GET /members/{id}/session).
 // Sessions look after themselves: they are resumed turn after turn,
@@ -38,6 +56,12 @@ export interface Member {
   permission_preset: PermissionPreset | ''
   enabled: boolean
   created_at: string
+  // Its git worktree once made (docs/design.md 5.21): the folder, where in
+  // it the member works, the branch there, and when it was got ready.
+  worktree_dir?: string
+  work_dir?: string
+  branch?: string
+  prepared_at?: string
   // Set once the member is taken out of the project. The room still lists
   // it so its messages and turns keep a name; agent_id is empty once
   // the agent it came from is deleted.

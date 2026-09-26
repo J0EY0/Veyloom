@@ -56,7 +56,8 @@ export function InboxDetail({ entry, listEmpty, onClose, className }: InboxDetai
 
 function EntryTopic({ entry, onClose }: { entry: InboxEntry; onClose: () => void }) {
   const t = useT()
-  // A closing message names only its turn; the turn names the topic.
+  // The answer heading a topic names only its turn; the turn names the
+  // topic.
   const turn = useTurn(entry.threadId ? '' : (entry.turnId ?? ''))
   const threadId = entry.threadId ?? turn.data?.thread_id ?? ''
   useRoomEvents(entry.roomId)
@@ -129,7 +130,7 @@ function MessageAlone({ entry, onClose, actions }: { entry: InboxEntry; onClose:
       label={t('room.title')}
       header={
         <>
-          {look ? <AgentAvatar look={look} /> : <UserAvatar name={entry.sender || '?'} />}
+          {look ? <AgentAvatar look={look} name={entry.sender || '?'} size="message" /> : <UserAvatar name={entry.sender || '?'} size="message" />}
           <h2 className="truncate text-sm font-semibold">{entry.sender || t('common.unknown')}</h2>
           <time dateTime={entry.createdAt} className="flex-none text-xs text-subtle">
             {formatTime(entry.createdAt)}

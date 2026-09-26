@@ -17,6 +17,7 @@ import { MembersPanel } from '@/features/members/MembersPanel'
 import { ApprovalsPanel } from '@/features/approvals/ApprovalsPanel'
 import { ThreadPanel } from '@/features/threads/ThreadPanel'
 import { WikiView } from '@/features/wiki/WikiView'
+import { BranchesView } from '@/features/branches/BranchesView'
 import { TurnDrawer } from '@/features/turns/TurnDrawer'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
 import { useEscape } from '@/lib/useEscape'
@@ -46,6 +47,7 @@ export function RoomPage() {
   const pending = usePendingApprovals(roomId)
   // The Wiki tab is this page too: its part of the address picks the page.
   const wikiMatch = useMatch('/rooms/:roomId/wiki/*')
+  const branchesMatch = useMatch('/rooms/:roomId/branches')
   const projectId = room.data?.project_id ?? ''
   const wikiSpace = useMemo<WikiSpace>(() => ({ kind: 'project', projectId, roomId }), [projectId, roomId])
   const pendingCount = pending.data?.length ?? 0
@@ -170,11 +172,12 @@ export function RoomPage() {
         actions={
           <>
             <RoomMenu roomId={roomId} />
-            <RoomTabs roomId={roomId} wiki={wikiMatch !== null} />
+            <RoomTabs roomId={roomId} view={wikiMatch ? 'wiki' : branchesMatch ? 'branches' : 'chat'} />
           </>
         }
         trailing={
           <>
+            {memberStates.length > 0 ? <MemberIsland states={memberStates} onOpenThread={openThread} onOpenMembers={() => openPanel('members')} /> : null}
             <ConnectionHint />
             <Tooltip>
               <TooltipTrigger asChild>
@@ -212,18 +215,21 @@ export function RoomPage() {
         >
           {wikiMatch ? (
             <WikiView space={wikiSpace} rest={wikiMatch.params['*'] ?? ''} onOpenThread={openThread} />
+          ) : branchesMatch ? (
+            <BranchesView projectId={projectId} roomId={roomId} onOpenThread={openThread} />
           ) : (
             <>
               <div className="relative flex min-h-0 flex-1 flex-col">
-                {memberStates.length > 0 ? <MemberIsland states={memberStates} onOpenThread={openThread} onOpenMembers={() => openPanel('members')} /> : null}
                 <Timeline
                   key={roomId}
                   roomId={roomId}
                   onOpenThread={openThread}
                   wikiThreadId={project?.wiki_thread_id}
+                  setupThreadId={project?.setup_thread_id}
                   projectId={project?.id}
                   offerMessageId={project?.wiki_offer_message_id}
-                  inset={memberStates.length > 0}
+                  openThreadId={threadId}
+                  leaderId={project?.leader_id}
                 />
               </div>
               <Composer roomId={roomId} roomName={chatName} hint={soloMember ? t('composer.replyHint', { name: soloMember }) : undefined} />
@@ -251,6 +257,7 @@ export function RoomPage() {
                 onToggleWide={() => setWide((value) => !value)}
                 onClose={closeThread}
                 onOpenTurn={openTurn}
+                onOpenThread={openThread}
               />
             </ViewTransition>
           ) : null}

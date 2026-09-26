@@ -25,6 +25,12 @@ export type Part = { kind: 'message'; message: Message } | { kind: 'turn'; turn:
 // what a turn did folds into one line of its answer.
 export function ThreadTimeline({ root, replies, turns, sender, names, onOpenTurn, target, withRoot }: ThreadTimelineProps) {
   const parts = buildParts(root, replies, turns, withRoot)
+  const byId = new Map([root, ...replies].map((message) => [message.id, message]))
+  // Who woke a turn, when an agent did: whoever said the message it answers.
+  const wokenBy = (turn: Turn) => {
+    const trigger = turn.woken_by_turn_id ? byId.get(turn.trigger_message_id ?? '') : undefined
+    return trigger?.sender_kind === 'agent' ? sender(trigger).name : undefined
+  }
   return (
     <div className="flex flex-col">
       {parts.map((part, index) =>
@@ -39,6 +45,7 @@ export function ThreadTimeline({ root, replies, turns, sender, names, onOpenTurn
             names={names}
             onOpenTurn={onOpenTurn}
             target={target}
+            wokenBy={part.first ? wokenBy(part.turn) : undefined}
           />
         ) : (
           <ThreadMessage key={part.message.id} message={part.message} sender={sender(part.message)} names={names} target={target} />

@@ -344,9 +344,11 @@ export type UpkeepTrigger = 'idle' | 'daily' | 'every_3_days' | 'weekly' | 'manu
 
 // How a project's wiki upkeep stands (GET /projects/{id}/wiki/maintainer).
 export interface UpkeepStatus {
-  // The maintainer; absent when there is none.
+  // The maintainer; absent while upkeep is off or nobody can do it. leader
+  // says it is the project's leader, as nobody else was chosen.
   member_id?: string
   member_name?: string
+  leader?: boolean
   trigger: UpkeepTrigger
   // How long a topic stays quiet before an upkeep on quiet topics.
   idle_minutes: number

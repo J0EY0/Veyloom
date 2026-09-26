@@ -8,21 +8,21 @@ import { renderWithProviders } from '@/test/render'
 import { MaintainerOfferNote } from './MaintainerOfferNote'
 
 const waiting: UpkeepStatus = { trigger: 'daily', idle_minutes: 30, waiting: { own: 3, uses: 0, settled: 3 }, queued: false }
-const kept: UpkeepStatus = { ...waiting, member_id: 'm1', member_name: 'Keeper', waiting: { own: 0, uses: 0, settled: 0 } }
+const kept: UpkeepStatus = { ...waiting, member_id: 'm1', member_name: 'Keeper', leader: true, waiting: { own: 0, uses: 0, settled: 0 } }
 const members = { members: [{ id: 'm1', display_name: 'Keeper', enabled: true }] }
 
 // The chat's card offering a wiki maintainer (docs/design.md 5.16).
 describe('MaintainerOfferNote', () => {
-  it('offers a maintainer, daily, then says who keeps the wiki', async () => {
+  it('offers the upkeep, daily, by the leader, then says who keeps the wiki', async () => {
     let patched: unknown
     stubApi({
-      '/projects': { projects: [project('p1', 'Veyloom')] },
+      '/projects': { projects: [{ ...project('p1', 'Veyloom'), leader_id: 'm1' }] },
       '/projects/p1/wiki/maintainer': () => ({ upkeep: patched ? kept : waiting }),
       '/rooms/r1/members': members,
       '/projects/p1': async (req: Request) => {
         patched = await req.json()
         return {
-          project: { ...project('p1', 'Veyloom'), wiki_maintainer_member_id: 'm1', wiki_maintainer_trigger: 'daily' },
+          project: { ...project('p1', 'Veyloom'), leader_id: 'm1', wiki_upkeep: true, wiki_maintainer_trigger: 'daily' },
           rooms: [room('r1', 'p1', 'main')],
         }
       },
@@ -31,11 +31,10 @@ describe('MaintainerOfferNote', () => {
     renderWithProviders(<MaintainerOfferNote projectId="p1" roomId="r1" />)
     expect(await screen.findByText('让一个成员来维护这个 wiki？')).toBeInTheDocument()
     expect(await screen.findByText(/本群有 3 轮对话还没整理进 wiki/)).toBeInTheDocument()
-    await user.click(screen.getByRole('combobox', { name: '选一个成员' }))
-    await user.click(await screen.findByRole('option', { name: 'Keeper' }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '谁来整理' })).toHaveTextContent('组长（Keeper）'))
     await user.click(screen.getByRole('button', { name: '开启（每天一次）' }))
-    await waitFor(() => expect(patched).toEqual({ wiki_maintainer_member_id: 'm1', wiki_maintainer_trigger: 'daily' }))
-    expect(await screen.findByText('Keeper 在维护这个 wiki')).toBeInTheDocument()
+    await waitFor(() => expect(patched).toEqual({ wiki_upkeep: true, wiki_maintainer_member_id: '', wiki_maintainer_trigger: 'daily' }))
+    expect(await screen.findByText('Keeper（组长）在维护这个 wiki')).toBeInTheDocument()
     expect(screen.getByText(/每天整理一次/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '不开' })).toBeNull()
   })

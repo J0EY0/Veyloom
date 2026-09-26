@@ -63,7 +63,7 @@ export function SkillRow({ row, teams }: { row: Row; teams: WikiTeam[] }) {
           <AvatarGroup className="-space-x-1.5">
             {shown.map((agent) => (
               <span key={agent.id} className="rounded-full ring-2 ring-background">
-                <AgentAvatar look={agent} />
+                <AgentAvatar look={agent} name={agent.name} mark={false} />
               </span>
             ))}
             {row.installed.length > faces ? (

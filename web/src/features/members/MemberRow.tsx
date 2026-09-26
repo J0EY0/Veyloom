@@ -5,6 +5,7 @@ import type { Member } from '@/api/types'
 import { AgentAvatar } from '@/components/shared/agent-avatar'
 import { StatusDot } from '@/components/shared/status-dot'
 import { UserAvatar } from '@/components/shared/user-avatar'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Item, ItemContent, ItemDescription, ItemMedia, ItemTitle } from '@/components/ui/item'
@@ -16,18 +17,23 @@ import { useLiveTurn } from '@/lib/liveTurns'
 import { cn } from '@/lib/utils'
 import { errorText } from '@/api/errorText'
 
-// One member of the chat's info panel: what it is doing right now, and what
-// you do to it: edit, switch off, start a new session, take out.
+// One member of the chat's info panel: what it is doing right now, whether
+// it leads the project (docs/design.md 5.21), and what you do to it: edit,
+// make it the leader, switch off, start a new session, take out.
 export function MemberRow({
   roomId,
   state,
+  leader,
   onEdit,
+  onMakeLeader,
   onRemove,
   onOpenThread,
 }: {
   roomId: string
   state: MemberState
+  leader: boolean
   onEdit: (member: Member) => void
+  onMakeLeader: (member: Member) => void
   onRemove: (member: Member) => void
   onOpenThread: (threadId: string) => void
 }) {
@@ -54,7 +60,7 @@ export function MemberRow({
         <button type="button" onClick={() => onEdit(member)}>
           <ItemMedia>
             {state.look ? (
-              <AgentAvatar look={state.look} className={cn((status === 'offline' || status === 'disabled') && 'opacity-45')} />
+              <AgentAvatar look={state.look} name={state.member.display_name} className={cn((status === 'offline' || status === 'disabled') && 'opacity-45')} />
             ) : (
               <UserAvatar name={member.display_name} className={cn((status === 'offline' || status === 'disabled') && 'opacity-45')} />
             )}
@@ -62,6 +68,11 @@ export function MemberRow({
           <ItemContent className="min-w-0 gap-0.5">
             <ItemTitle className="w-full text-[0.8125rem]">
               <span className="truncate">{member.display_name}</span>
+              {leader ? (
+                <Badge variant="secondary" className="h-4 flex-none rounded px-1 text-[0.625rem] font-normal text-muted-foreground">
+                  {t('member.leader')}
+                </Badge>
+              ) : null}
             </ItemTitle>
             <ItemDescription className="flex items-center gap-1.5 text-[0.71875rem] text-subtle">
               <StatusDot tone={statusTone[status]} />
@@ -91,6 +102,7 @@ export function MemberRow({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="end" className="w-44">
           <DropdownMenuItem onSelect={() => onEdit(member)}>{t('common.edit')}</DropdownMenuItem>
+          {!leader && member.enabled ? <DropdownMenuItem onSelect={() => onMakeLeader(member)}>{t('member.makeLeader')}</DropdownMenuItem> : null}
           {threadId ? <DropdownMenuItem onSelect={() => onOpenThread(threadId)}>{t('approvals.openTopic')}</DropdownMenuItem> : null}
           <DropdownMenuItem
             disabled={update.isPending}

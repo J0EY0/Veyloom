@@ -2,35 +2,7 @@
 // structs in internal/store and internal/api; change both together.
 
 import type { FormAnswer, QuestionAnswers } from './types.approvals'
-import type { UpkeepTrigger } from './types.wiki'
-
-export interface Project {
-  id: string
-  name: string
-  // Where the code is checked out on the machines its members run on; the
-  // members a project starts with work there.
-  repo_path: string
-  // What the project is, in a paragraph; every agent's brief opens with it.
-  // Always sent by the API; optional here until the settings UI uses it.
-  description?: string
-  // The project's group chat: a project is one chat (docs/webui.md §3).
-  main_room_id: string
-  // The project's wiki topic in its chat, once there is one: where its
-  // wiki maintainer runs.
-  wiki_thread_id?: string
-  // The member a person chose to keep the wiki (docs/design.md 5.12), and
-  // when it runs.
-  wiki_maintainer_member_id?: string
-  wiki_maintainer_trigger?: UpkeepTrigger
-  // The note in the chat that offered a maintainer to a project without
-  // one, drawn as a card, and when a person said no to it (docs/design.md
-  // 5.16).
-  wiki_offer_message_id?: string
-  wiki_offer_declined_at?: string
-  // The folders of the OKF bundles the wiki mounts, read-only.
-  wiki_external_bundles?: string[]
-  created_at: string
-}
+import type { Project } from './types.projects'
 
 export type RoomKind = 'main' | 'topic'
 
@@ -82,34 +54,6 @@ export interface AuthStatus {
 
 export interface ErrorResponse {
   error: string
-}
-
-export interface CreateProjectRequest {
-  name: string
-  repo_path?: string
-  // What the project is, in a paragraph; every agent's brief opens with it.
-  description?: string
-  // The agents that join the chat as its first members.
-  agent_ids: string[]
-  // One of them to keep the wiki from the start, daily unless said
-  // otherwise; without one the chat offers a maintainer later.
-  wiki_maintainer_agent_id?: string
-  wiki_maintainer_trigger?: UpkeepTrigger
-}
-
-// An absent field keeps its value. Moving the checkout moves the project's
-// current members with it: they work under it.
-export interface UpdateProjectRequest {
-  name?: string
-  repo_path?: string
-  description?: string
-  // "" is none.
-  wiki_maintainer_member_id?: string
-  wiki_maintainer_trigger?: UpkeepTrigger
-  // All of them: an empty list mounts none.
-  wiki_external_bundles?: string[]
-  // A person said no to the maintainer the chat offered.
-  wiki_offer_declined?: boolean
 }
 
 export interface CreateRoomRequest {
@@ -216,11 +160,21 @@ export interface Turn {
   files_changed?: string[]
   // What the turn was for: the chat, or the wiki maintainer's upkeep.
   kind?: TurnKind
+  // The piece of work it is part of, and the turn whose message woke it
+  // when an agent did (docs/design.md 5.22); worked says it did work.
+  chain_message_id?: string
+  woken_by_turn_id?: string
+  worked?: boolean
+  // Who let the rest of the turn's requests through, and when; kept once
+  // the turn is over (docs/design.md 4.6).
+  trusted_by?: string
+  trusted_at?: string
   started_at: string
   ended_at?: string
 }
 
-export type TurnKind = 'chat' | 'upkeep'
+// setup: the project's leader setting it up for worktrees (docs/design.md 5.21).
+export type TurnKind = 'chat' | 'upkeep' | 'setup'
 
 // A topic with a turn in flight (GET /topics?status=running).
 export interface RunningTopic {
@@ -228,6 +182,8 @@ export interface RunningTopic {
   room_id: string
   root_message_id: string
   root_body: string
+  // What the topic was asked, in a line, without the @ that asked it.
+  ask: string
   members: string[]
   started_at: string
 }
@@ -238,6 +194,8 @@ export interface TopicsResponse {
 
 export interface TurnSummary {
   id: string
+  // Whose turn it is.
+  member_id?: string
   status: TurnStatus
   error?: string
   started_at: string
@@ -254,6 +212,27 @@ export interface ThreadSummary {
   last_reply_at?: string
   turns: number
   last_turn?: TurnSummary
+  // Under the topic a piece of work began in: that piece of work, across
+  // all its topics (docs/design.md 5.22).
+  work?: WorkSummary
+}
+
+// A piece of work: from what a person said, every turn it took, in
+// whichever topic.
+export interface WorkSummary {
+  // The topic it began in, and what that topic is called.
+  thread_id: string
+  thread_number?: number
+  // The message that began it.
+  chain: string
+  turns: number
+  started_at: string
+  // Once none of its turns runs.
+  ended_at?: string
+  running: boolean
+  // The members who took turns in it, in the order they first did; the
+  // room's summaries leave them out.
+  members?: string[]
 }
 
 // A top-level message as the room lists it: the message plus its topic.
@@ -279,6 +258,9 @@ export interface ThreadResponse {
   thread: Thread
   root: Message
   turns: Turn[]
+  // The piece of work the topic's latest turn is part of, which may have
+  // begun in another topic.
+  work?: WorkSummary
 }
 
 // 'session' is only in transcripts: the hub keeps it to itself instead of
@@ -346,10 +328,14 @@ interface EventBase {
 // The room's live stream, one JSON object per WebSocket frame.
 export type RoomEvent =
   | (EventBase & { kind: 'message'; message: Message; thread?: ThreadSummary })
-  | (EventBase & { kind: 'turn_started' | 'turn_finished'; turn: Turn })
+  | (EventBase & { kind: 'turn_started' | 'turn_finished'; turn: Turn; work?: WorkSummary })
+  // A person let the rest of a running turn's requests through, or took it back.
+  | (EventBase & { kind: 'turn_trust'; turn: Turn })
   | (EventBase & { kind: 'turn_event'; turn_id: string; turn_event: TurnEvent })
   | (EventBase & { kind: 'approval_requested' | 'approval_decided'; approval: Approval })
   | (EventBase & { kind: 'wiki_changed'; project_id?: string; scope?: 'project' | 'library' })
+  // The person read some of their inbox, here or in another tab.
+  | (EventBase & { kind: 'inbox_read'; user_id: string })
 
 export type ApprovalStatus = 'pending' | 'allowed' | 'denied' | 'expired' | 'cancelled'
 
@@ -370,15 +356,37 @@ export interface Approval {
   // The thread post that presents the request; the card replaces it.
   message_id?: string
   decided_by?: string
-  // Set when the runtime's own reviewer decided rather than a person, such
-  // as 'codex_auto_review'; nobody was asked (docs/design.md 4.6).
+  // Set when nobody was asked: the runtime's own reviewer, such as
+  // 'codex_auto_review', a rule of the member's ('rule'), or the hub for
+  // the person who let the rest of the turn through ('turn', decided_by
+  // being that person) (docs/design.md 4.6).
   reviewer?: string
   // What came with the decision: a question's answers, a form's content,
   // or a reviewer's findings such as {risk, authorization}.
   answer?: unknown
+  // What an allow can take in besides, as the runtime offered, and how far
+  // the person's allow went.
+  similar?: SimilarOffer
+  scope?: AllowScope
   created_at: string
   decided_at?: string
 }
+
+// What allowing a request can take in besides: Claude Code's rules
+// (Bash(go test *)), a permission mode, folders; or, for Codex, the same
+// request again and commands starting with the words it proposes. Rules
+// and the prefix can also be kept for the member (docs/design.md 4.6).
+export interface SimilarOffer {
+  rules?: string[]
+  mode?: string
+  dirs?: string[]
+  same?: boolean
+  prefix?: string[]
+}
+
+// How far an allow goes: the request alone; the like of it for the rest of
+// the turn, or from now on; or whatever else the turn asks for.
+export type AllowScope = 'once' | 'similar' | 'always' | 'turn'
 
 export interface ApprovalResponse {
   approval: Approval
@@ -402,23 +410,17 @@ export interface ApprovalsResponse {
 export interface DecideApprovalRequest {
   user_id: string
   allow: boolean
+  // With an allow: how far it goes; the request alone when left out.
+  scope?: AllowScope
   message: string
   // With an allowed question: what the person answered; with a form, what
   // they filled in.
   answer?: QuestionAnswers | FormAnswer
 }
 
-// A message that mentions the current user, as the inbox lists it.
-export interface InboxItem extends Message {
-  room_name: string
-  project_name: string
-  sender_name: string
-}
-
-export interface InboxResponse {
-  items: InboxItem[]
-}
-
 export * from './types.agents'
+export * from './types.inbox'
+export * from './types.projects'
+export * from './types.branches'
 export * from './types.approvals'
 export * from './types.wiki'

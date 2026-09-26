@@ -17,7 +17,7 @@ import { Spinner } from '@/components/ui/spinner'
 import { useT } from '@/lib/i18n'
 import { runtimeName } from '@/lib/runtimes'
 import { errorText } from '@/api/errorText'
-import { noMaintainer } from './MaintainerFields'
+import { byLeader } from './MaintainerFields'
 import { NewProjectMaintainer } from './NewProjectMaintainer'
 
 export interface NewProjectDialogProps {
@@ -37,13 +37,15 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
   const [nameError, setNameError] = useState<string>()
   const [error, setError] = useState<string>()
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set())
-  const [maintainer, setMaintainer] = useState(noMaintainer)
+  const [upkeep, setUpkeep] = useState(false)
+  const [maintainer, setMaintainer] = useState(byLeader)
   const id = useId()
   const t = useT()
-  // In the order the list shows them, which is the order they join.
-  const joining = (agents.data ?? []).filter((agent) => picked.has(agent.id))
+  // In the order they were picked, which is the order they join: the first
+  // leads the project (docs/design.md 5.21).
+  const joining = pickedAgents(agents.data, picked)
   // One taken off the list keeps the wiki no more.
-  const keeper = picked.has(maintainer) ? maintainer : noMaintainer
+  const keeper = picked.has(maintainer) ? maintainer : byLeader
 
   function toggle(agentId: string, on: boolean) {
     setPicked((current) => {
@@ -70,7 +72,7 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
         name,
         repo_path: String(data.get('repo_path') ?? '').trim(),
         agent_ids: joining.map((agent) => agent.id),
-        ...(keeper !== noMaintainer ? { wiki_maintainer_agent_id: keeper } : {}),
+        ...(upkeep ? { wiki_upkeep: true, ...(keeper !== byLeader ? { wiki_maintainer_agent_id: keeper } : {}) } : {}),
       },
       {
         onSuccess: ({ rooms }) => {
@@ -116,7 +118,9 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
               </FieldLegend>
               <AgentPicker id={id} agents={agents} picked={picked} onToggle={toggle} onLeave={onClose} />
             </FieldSet>
-            {joining.length > 0 ? <NewProjectMaintainer id={id} agents={joining} value={keeper} onChange={setMaintainer} /> : null}
+            {joining.length > 0 ? (
+              <NewProjectMaintainer id={id} agents={joining} upkeep={upkeep} value={keeper} onUpkeep={setUpkeep} onChange={setMaintainer} />
+            ) : null}
             {error ? <FieldError>{error}</FieldError> : null}
           </FieldGroup>
           <DialogFooter>
@@ -131,6 +135,12 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
       </DialogContent>
     </Dialog>
   )
+}
+
+// pickedAgents are the agents picked, in the order they were.
+function pickedAgents(agents: Agent[] | undefined, picked: ReadonlySet<string>): Agent[] {
+  const byId = new Map((agents ?? []).map((agent) => [agent.id, agent]))
+  return [...picked].flatMap((agentId) => byId.get(agentId) ?? [])
 }
 
 interface AgentPickerProps {
@@ -184,8 +194,7 @@ function AgentPicker({ id, agents, picked, onToggle, onLeave }: AgentPickerProps
 
   const online = machines.data ? new Set(machines.data.map((machine) => machine.id)) : undefined
   const where = (agent: Agent) => (online && !online.has(agent.machine_id) ? t('agent.machineOffline', { name: agent.machine_name }) : agent.machine_name)
-  const byId = new Map(agents.data.map((agent) => [agent.id, agent]))
-  const chips = [...picked].flatMap((agentId) => byId.get(agentId) ?? [])
+  const chips = pickedAgents(agents.data, picked)
   const words = query.toLowerCase().split(/\s+/).filter(Boolean)
   const shown = agents.data.filter((agent) => {
     const text = `${agent.name} ${agent.machine_name} ${runtimeName(agent.runtime)}`.toLowerCase()
@@ -211,11 +220,13 @@ function AgentPicker({ id, agents, picked, onToggle, onLeave }: AgentPickerProps
       {/* A click in the box's blank space goes to the search, as in a token field. */}
       <div className="flex cursor-text flex-wrap items-center gap-1.5 border-b px-2.5 py-1" onClick={() => searchRef.current?.focus()}>
         <SearchIcon aria-hidden="true" className="size-4 flex-none text-subtle" />
-        {chips.map((agent) => (
+        {chips.map((agent, index) => (
           <Badge key={agent.id} asChild variant="secondary" className="h-6 max-w-48 cursor-pointer gap-1 pr-1.5 pl-1 font-normal hover:bg-secondary/80">
             <button type="button" aria-label={t('project.unpick', { name: agent.name })} onClick={() => onToggle(agent.id, false)}>
-              <AgentAvatar look={agent} size="xs" />
+              <AgentAvatar look={agent} name={agent.name} size="xs" />
               <span className="min-w-0 truncate">{agent.name}</span>
+              {/* The first picked joins first, and so leads (docs/design.md 5.21). */}
+              {index === 0 ? <span className="flex-none text-[0.625rem] text-muted-foreground">{t('member.leader')}</span> : null}
               <XIcon className="text-subtle" />
             </button>
           </Badge>
@@ -247,7 +258,7 @@ function AgentPicker({ id, agents, picked, onToggle, onLeave }: AgentPickerProps
                   onCheckedChange={(checked) => onToggle(agent.id, checked === true)}
                   className="rounded-full"
                 />
-                <AgentAvatar look={agent} size="sm" />
+                <AgentAvatar look={agent} name={agent.name} size="sm" />
                 {/* One line: the name, then where it runs in the muted tone; both give way when long. */}
                 <ItemContent className="min-w-0 flex-row items-baseline gap-2">
                   <ItemTitle className="block max-w-[60%] shrink-0 truncate text-[0.8125rem]">{agent.name}</ItemTitle>

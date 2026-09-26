@@ -104,7 +104,7 @@ describe('AgentDialog', () => {
     expect(screen.getByLabelText('运行时')).toHaveTextContent('Claude Code')
     await pickOption('机器', 'build-box')
     expect(screen.getByLabelText('运行时')).toHaveTextContent('Pi')
-    await pickOption('权限', '全自动')
+    await pickOption('权限', '完全信任')
     await userEvent.type(screen.getByLabelText('角色卡'), 'Review carefully.')
     await userEvent.type(screen.getByLabelText('运行时选项'), '{{"approval": true}')
     // Pi is offered the skills for every runtime, not the retired one.

@@ -14,6 +14,8 @@ export interface AvatarFieldProps {
   avatar: string
   // The runtime picked in the dialog, whose mark shows while no picture is.
   runtime: string
+  // The name typed in the dialog, whose letter shows once there is one.
+  name?: string
   onChange: (avatar: string) => void
   // True while a picked picture is being squared and uploaded.
   onBusyChange: (busy: boolean) => void
@@ -22,7 +24,7 @@ export interface AvatarFieldProps {
 // The agent's picture beside its name. Clicking it picks an image, which is
 // cropped to a square, shrunk and uploaded straight away, so saving only
 // names it; taking it off shows the runtime's mark again.
-export function AvatarField({ avatar, runtime, onChange, onBusyChange }: AvatarFieldProps) {
+export function AvatarField({ avatar, runtime, name, onChange, onBusyChange }: AvatarFieldProps) {
   const input = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string>()
@@ -61,7 +63,7 @@ export function AvatarField({ avatar, runtime, onChange, onBusyChange }: AvatarF
         aria-label={avatar ? t('agent.avatarChange') : t('agent.avatarUpload')}
         className="group/pick relative rounded-full outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
       >
-        <AgentAvatar look={{ avatar, runtime }} className="size-16 text-base" />
+        <AgentAvatar look={{ avatar, runtime }} name={name?.trim() || undefined} mark={false} className="size-16 text-2xl" />
         <span
           aria-hidden="true"
           className={cn(

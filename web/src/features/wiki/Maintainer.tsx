@@ -20,10 +20,11 @@ export interface MaintainerCardProps {
 }
 
 // The project's wiki maintainer on the wiki's front page (docs/design.md
-// 5.12, 5.16): who keeps the wiki and how often, changed right here, how
-// the last upkeep went, what waits for the next, and a way to run one now.
-// A project with none is offered one, once there is something to go over,
-// until a person says no.
+// 5.12, 5.16, 5.21): who keeps the wiki, the leader unless someone else
+// was chosen, and how often, changed right here; how the last upkeep went,
+// what waits for the next, and a way to run one now. A project whose
+// upkeep is off is offered it, once there is something to go over, until
+// a person says no.
 export function MaintainerCard({ projectId, roomId, onOpenThread }: MaintainerCardProps) {
   const t = useT()
   const status = useUpkeepStatus(projectId)
@@ -51,7 +52,7 @@ export function MaintainerCard({ projectId, roomId, onOpenThread }: MaintainerCa
       <div className="flex min-w-0 items-center gap-2">
         <BookHeartIcon className="size-4 flex-none text-subtle" aria-hidden="true" />
         <h2 id="wiki-maintainer" className="min-w-0 text-sm font-semibold break-words">
-          {t('maintainer.keeps', { name })}
+          {t(data.leader ? 'maintainer.keepsLeader' : 'maintainer.keeps', { name })}
         </h2>
       </div>
       <MaintainerControls projectId={projectId} roomId={roomId} status={data} />

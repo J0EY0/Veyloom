@@ -3,6 +3,7 @@ import { toast } from 'sonner'
 import { api } from './client'
 import { errorText } from './errorText'
 import { patchQuery } from './live'
+import { applyTurn } from './messages'
 import type { Turn, TurnResponse, TurnsResponse } from './types'
 
 export const turnKeys = {
@@ -37,6 +38,20 @@ export function applyRunningTurn(client: QueryClient, turn: Turn) {
     return turn.status === 'running' ? [turn, ...rest] : rest
   })
   patchQuery<Turn>(client, turnKeys.one(turn.id), (old) => (old ? turn : old))
+}
+
+// Takes back letting the rest of a turn's requests through: people are
+// asked again. The turn comes back as it now stands, and so does the
+// turn_trust event.
+export function useUntrustTurn() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: async (turnId: string) => (await api.delete<TurnResponse>(`/turns/${turnId}/trust`)).turn,
+    onSuccess: (turn) => {
+      applyTurn(client, turn)
+      applyRunningTurn(client, turn)
+    },
+  })
 }
 
 // Cancelling is asynchronous: the server answers 202 and the turn ends

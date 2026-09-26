@@ -25,10 +25,11 @@ export interface MemberIslandProps {
   onOpenMembers: () => void
 }
 
-// The capsule floating over the feed (docs/webui.md §4.4): one avatar per
+// The capsule in the chat's top bar (docs/webui.md §4.4): one avatar per
 // member with a ring for state, and to its right the one thing worth
-// saying. Hovering the avatars lists every member; clicking a working one
-// opens the topic it is working in.
+// saying, in the wait colour when a person is waited for. Hovering the
+// avatars lists every member; clicking a working one opens the topic it is
+// working in.
 export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIslandProps) {
   const waiting = states.find((s) => s.status === 'waiting')
   const working = states.filter((s) => s.status === 'working')
@@ -44,7 +45,10 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
     <div
       role="status"
       aria-label={t('island.label')}
-      className="absolute top-2 left-1/2 z-[5] flex h-10 max-w-[calc(100%-2rem)] -translate-x-1/2 items-center gap-3 rounded-full border bg-popover/80 px-2 text-[0.78125rem] whitespace-nowrap shadow-pop backdrop-blur-md"
+      className={cn(
+        'flex h-8 max-w-[min(34rem,50vw)] min-w-0 items-center gap-2.5 rounded-full border px-1 text-[0.78125rem] whitespace-nowrap',
+        waiting ? 'border-status-wait/40 bg-status-wait/8' : 'border-border',
+      )}
     >
       <HoverCard openDelay={200} closeDelay={100}>
         <HoverCardTrigger asChild>
@@ -137,14 +141,18 @@ function Face({ state, first, onOpenThread }: { state: MemberState; first: boole
   const label = `${state.member.display_name} · ${t(statusLabelKey(state))}`
   const ring =
     state.status === 'working'
-      ? 'shadow-[0_0_0_2px_var(--popover),0_0_0_3.5px_var(--status-run)]'
+      ? 'shadow-[0_0_0_2px_var(--background),0_0_0_3.5px_var(--status-run)]'
       : state.status === 'waiting'
-        ? 'shadow-[0_0_0_2px_var(--popover),0_0_0_3.5px_var(--status-wait)]'
-        : 'shadow-[0_0_0_2px_var(--popover)]'
+        ? 'shadow-[0_0_0_2px_var(--background),0_0_0_3.5px_var(--status-wait)]'
+        : 'shadow-[0_0_0_2px_var(--background)]'
   const dim = state.status === 'idle' ? 'opacity-45' : state.status === 'working' || state.status === 'waiting' ? '' : 'opacity-30'
   const avatar = (
     <span className={cn('relative inline-flex', !first && '-ml-1.5')}>
-      {state.look ? <AgentAvatar look={state.look} className={cn(ring, dim)} /> : <UserAvatar name={state.member.display_name} className={cn(ring, dim)} />}
+      {state.look ? (
+        <AgentAvatar look={state.look} name={state.member.display_name} mark={false} className={cn(ring, dim)} />
+      ) : (
+        <UserAvatar name={state.member.display_name} className={cn(ring, dim)} />
+      )}
       {state.status === 'working' ? (
         <span aria-hidden="true" className="absolute -inset-1.5 animate-ripple rounded-full border-[1.5px] border-status-run" />
       ) : null}
@@ -175,7 +183,9 @@ function MemberRow({ state, onOpenThread }: { state: MemberState; onOpenThread: 
   const detail = state.approval ? approvalCommand(state.approval) : live?.tool
   const row = (
     <>
-      <ItemMedia>{state.look ? <AgentAvatar look={state.look} size="sm" /> : <UserAvatar name={state.member.display_name} size="sm" />}</ItemMedia>
+      <ItemMedia>
+        {state.look ? <AgentAvatar look={state.look} name={state.member.display_name} size="sm" /> : <UserAvatar name={state.member.display_name} size="sm" />}
+      </ItemMedia>
       <ItemContent className="min-w-0">
         <ItemTitle className="w-full text-[0.8125rem] font-normal">
           <span className="truncate">{state.member.display_name}</span>

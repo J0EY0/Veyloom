@@ -4,8 +4,7 @@ import { RequestCard } from '@/features/approvals/RequestCard'
 import { AgentBody } from '@/features/rooms/AgentBody'
 import { MessageBody } from '@/features/rooms/MessageBody'
 import type { Sender } from '@/features/rooms/useSenderNames'
-import { useT } from '@/lib/i18n'
-import { systemText } from './systemNote'
+import { ThreadNote } from './ThreadNote'
 import { ThreadRow } from './ThreadRow'
 
 export interface ThreadMessageProps {
@@ -24,13 +23,12 @@ export interface ThreadMessageProps {
 // name and time over what was said; inside an agent's turn just its words.
 // The system speaks in a quiet line, and a permission request is a card.
 export function ThreadMessage({ message, sender, approval, names, target = 'room', inTurn }: ThreadMessageProps) {
-  const t = useT()
   const known = names ?? new Map<string, string>()
   if (approval) {
     return <RequestCard approval={approval} names={known} />
   }
   if (message.sender_kind === 'system') {
-    return <p className="mt-1.5 text-xs text-subtle">{systemText(t, message.body)}</p>
+    return <ThreadNote message={message} />
   }
   const words =
     message.sender_kind === 'agent' ? (

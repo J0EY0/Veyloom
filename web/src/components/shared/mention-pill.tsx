@@ -41,5 +41,5 @@ export function TakeOverButton({ name, id, onClick }: TakeOverButtonProps) {
 
 function PillAvatar({ name, id }: { name: string; id?: string }) {
   const look = useMemberLook(id)
-  return look ? <AgentAvatar look={look} size="xs" /> : <UserAvatar name={name} size="xs" className="bg-background" />
+  return look ? <AgentAvatar look={look} name={name} size="xs" /> : <UserAvatar name={name} size="xs" className="bg-background" />
 }

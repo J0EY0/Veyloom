@@ -1,7 +1,6 @@
-import { EllipsisIcon, LockIcon, PencilIcon, ShieldIcon, Trash2Icon, UnlockIcon } from 'lucide-react'
+import { EllipsisIcon, LockIcon, PencilIcon, ShieldCheckIcon, ShieldIcon, Trash2Icon, UnlockIcon } from 'lucide-react'
 import type { Agent, PermissionPreset } from '@/api/types'
 import { AgentAvatar } from '@/components/shared/agent-avatar'
-import { RuntimeIcon } from '@/components/shared/runtime-icon'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card } from '@/components/ui/card'
@@ -19,11 +18,13 @@ const pillOf: Record<string, string> = {
   pi: 'bg-runtime-pi-wash text-runtime-pi-ink',
 }
 
-// Permission reads as a door: shut, guarded, open.
-const gates: Record<PermissionPreset, { Icon: typeof LockIcon; key: `presetShort.${PermissionPreset}`; hot?: boolean }> = {
-  read_only: { Icon: LockIcon, key: 'presetShort.read_only' },
-  edit_with_approval: { Icon: ShieldIcon, key: 'presetShort.edit_with_approval' },
-  full_auto: { Icon: UnlockIcon, key: 'presetShort.full_auto', hot: true },
+// Permission reads as a door: shut, guarded by a person, guarded by the
+// runtime's own reviewer, open.
+const gates: Record<PermissionPreset, { Icon: typeof LockIcon; hot?: boolean }> = {
+  read_only: { Icon: LockIcon },
+  edit_with_approval: { Icon: ShieldIcon },
+  auto_review: { Icon: ShieldCheckIcon },
+  full_auto: { Icon: UnlockIcon, hot: true },
 }
 
 export interface AgentCardProps {
@@ -45,7 +46,7 @@ export function AgentCard({ agent, onOpen, onDelete }: AgentCardProps) {
     <Card className="relative h-full gap-0 overflow-hidden py-0 transition-colors hover:border-input has-[[data-card-open]:focus-visible]:border-ring has-[[data-card-open]:focus-visible]:ring-[3px] has-[[data-card-open]:focus-visible]:ring-ring/50">
       <button type="button" data-card-open onClick={() => onOpen(agent)} className="flex h-full w-full flex-col gap-2 p-3.5 text-left outline-none">
         <span className="flex min-w-0 items-center gap-2 pr-6">
-          <AgentAvatar look={agent} />
+          <AgentAvatar look={agent} name={agent.name} />
           <Badge
             variant="secondary"
             className={cn(
@@ -65,13 +66,10 @@ export function AgentCard({ agent, onOpen, onDelete }: AgentCardProps) {
           ) : null}
           <span className={cn('inline-flex flex-none items-center gap-1.5', gate.hot && 'text-status-fail')}>
             <gate.Icon className="size-3.5" />
-            {t(gate.key)}
+            {t(`preset.${agent.permission_preset}`)}
           </span>
-          {/* Without a picture of its own the avatar already is the runtime's mark. */}
-          <span className="ml-auto inline-flex">
-            {agent.avatar ? <RuntimeIcon runtime={agent.runtime} /> : null}
-            <span className="sr-only">{runtimeName(agent.runtime)}</span>
-          </span>
+          {/* The avatar's corner shows the runtime's mark; this says it in words. */}
+          <span className="sr-only">{runtimeName(agent.runtime)}</span>
         </span>
       </button>
       <DropdownMenu>

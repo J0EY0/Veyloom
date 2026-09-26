@@ -1,5 +1,7 @@
 import type { InboxItem, PendingApproval } from '@/api/types'
 import { approvalCommand } from '@/features/approvals/describe'
+import { systemText } from '@/features/threads/systemNote'
+import type { t as translate } from '@/lib/i18n'
 
 // One row of the inbox: a request waiting for a decision, or a message that
 // mentioned you. Each leads to a topic.
@@ -7,8 +9,9 @@ export interface InboxEntry {
   kind: 'approval' | 'mention'
   id: string
   roomId: string
-  // The topic, when the record names it. A closing message sits at the top
-  // of the chat and names only its turn; the turn knows the topic.
+  // The topic, when the record names it. The answer heading a topic (and a
+  // closing message of old) sits at the top of the chat and names only its
+  // turn; the turn knows the topic.
   threadId?: string
   turnId?: string
   sender: string
@@ -16,13 +19,19 @@ export interface InboxEntry {
   // What the row shows under the names, as plain text; search reads it too.
   excerpt: string
   createdAt: string
+  // A mention the person has not read; a request is waiting as long as it
+  // is listed.
+  unread?: boolean
+  // Where it stands in the inbox: a mention's seq.
+  seq?: number
   // The message itself, for a mention that belongs to no topic.
   message?: InboxItem
 }
 
 // toEntries lists what waits for a decision first, the runtimes' requests,
-// then the mentions, each in the order the server sent them.
-export function toEntries(approvals: PendingApproval[], items: InboxItem[], me: string): InboxEntry[] {
+// then the mentions, each in the order the server sent them. A note of
+// Veyloom's own is in the UI's words.
+export function toEntries(approvals: PendingApproval[], items: InboxItem[], me: string, t: typeof translate): InboxEntry[] {
   return [
     ...approvals.map((approval): InboxEntry => ({
       kind: 'approval',
@@ -41,10 +50,13 @@ export function toEntries(approvals: PendingApproval[], items: InboxItem[], me: 
       roomId: item.room_id,
       threadId: item.thread_id,
       turnId: item.turn_id,
-      sender: item.sender_name,
+      sender: item.sender_kind === 'system' ? t('inbox.system') : item.sender_name,
       project: item.project_name,
-      excerpt: excerptOf(item.body, me) || (item.attachments ?? []).map((file) => file.filename).join('、'),
+      excerpt:
+        excerptOf(item.sender_kind === 'system' ? systemText(t, item.body) : item.body, me) || (item.attachments ?? []).map((file) => file.filename).join('、'),
       createdAt: item.created_at,
+      unread: !item.read,
+      seq: item.seq,
       message: item,
     })),
   ]

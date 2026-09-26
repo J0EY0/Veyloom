@@ -17,6 +17,7 @@ function mention(id: string, seq: number, overrides: Partial<InboxItem> = {}): I
     room_name: 'main',
     project_name: 'Veyloom',
     sender_name: 'Pi Tester',
+    read: false,
     ...overrides,
   }
 }
@@ -133,7 +134,7 @@ describe('InboxPage', () => {
     const topic = await screen.findByRole('complementary', { name: '话题' })
     // Before the agent says anything, the message that started it names the
     // topic; the agent is at work under its own name.
-    expect(await within(topic).findByRole('heading', { name: '@Careful Builder 起个服务做冒烟' })).toBeInTheDocument()
+    expect(await within(topic).findByRole('heading', { name: '起个服务做冒烟' })).toBeInTheDocument()
     expect(await within(topic).findByText('Careful Builder')).toBeInTheDocument()
     expect(within(topic).getByRole('link', { name: '在群聊里打开' })).toHaveAttribute('href', '/rooms/r1?thread=t1')
     expect(within(screen.getByRole('list')).getByRole('link')).toHaveAttribute('aria-current', 'true')
@@ -145,7 +146,7 @@ describe('InboxPage', () => {
     expect(router.state.location.search).toBe('?item=ap1')
   })
 
-  it('finds the topic of a closing message through its turn, and Escape puts it away', async () => {
+  it('finds the topic an answer heads through its turn, and Escape puts it away', async () => {
     stubApi({
       ...room,
       '/approvals': { approvals: [] },
@@ -167,8 +168,8 @@ describe('InboxPage', () => {
     expect(router.state.location.search).toBe('?item=m7')
     const topic = await screen.findByRole('complementary', { name: '话题' })
     expect(await within(topic).findByRole('link', { name: '在群聊里打开' })).toHaveAttribute('href', '/rooms/r1?thread=t2')
-    // Named by the message it hangs from in the chat.
-    expect(await within(topic).findByRole('heading', { name: '做完了' })).toBeInTheDocument()
+    // Named by what the person asked; the answer it hangs from opens from it.
+    expect(await within(topic).findByRole('button', { name: '收个尾' })).toBeInTheDocument()
 
     await userEvent.keyboard('{Escape}')
     await waitFor(() => expect(router.state.location.search).toBe(''))

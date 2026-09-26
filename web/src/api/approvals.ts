@@ -10,13 +10,12 @@ export const approvalKeys = {
 }
 
 // Everything waiting for a person, across every project, oldest first:
-// the inbox and the sidebar count. Polled, since only the open
-// chat has a live stream; that chat's own approval events update it too.
+// the inbox and the sidebar count. The inbox's stream keeps it current
+// (useInboxEvents), and so do the open chat's own approval events.
 export function usePendingApprovalsAll() {
   return useQuery({
     queryKey: approvalKeys.all,
     queryFn: async () => (await api.get<PendingApprovalsResponse>('/approvals?status=pending')).approvals,
-    refetchInterval: 10_000,
   })
 }
 

@@ -54,7 +54,8 @@
 
   /* Extra tiers the design uses beyond shadcn's two levels of text. */
   --body: #3c4149;
-  --subtle: #86848d;
+  /* Captions and times: 4.6:1 on white, the least small text needs. */
+  --subtle: #75747d;
   --selection: #ecebed;
   --status-run: #d9a514;
   --status-wait: #e08a2e;
@@ -80,23 +81,23 @@
 .dark {
   color-scheme: dark;
 
-  --background: #141516;
-  --foreground: #f7f8f8;
-  --card: #141516;
-  --card-foreground: #f7f8f8;
-  --popover: #1c1c1f;
-  --popover-foreground: #f7f8f8;
-  --primary: #f7f8f8;
-  --primary-foreground: #141516;
-  --secondary: #28282c;
-  --secondary-foreground: #f7f8f8;
-  --muted: #232326;
+  --background: #111215;
+  --foreground: #f1f2f4;
+  --card: #111215;
+  --card-foreground: #f1f2f4;
+  --popover: #16171a;
+  --popover-foreground: #f1f2f4;
+  --primary: #f1f2f4;
+  --primary-foreground: #111215;
+  --secondary: #222328;
+  --secondary-foreground: #f1f2f4;
+  --muted: #1b1c20;
   --muted-foreground: #8a8f98;
-  --accent: #232326;
-  --accent-foreground: #f7f8f8;
+  --accent: #1d1e22;
+  --accent-foreground: #f1f2f4;
   --destructive: #e0605b;
-  --border: #23252a;
-  --input: #34343a;
+  --border: #202125;
+  --input: #2c2d33;
   --ring: #62666d;
   --chart-1: #e5be3d;
   --chart-2: #ea9a4a;
@@ -104,18 +105,19 @@
   --chart-4: #e0605b;
   --chart-5: #8a8f98;
 
-  --sidebar: #0f1011;
-  --sidebar-foreground: #d0d6e0;
-  --sidebar-primary: #f7f8f8;
-  --sidebar-primary-foreground: #0f1011;
-  --sidebar-accent: #1c1c1f;
-  --sidebar-accent-foreground: #f7f8f8;
-  --sidebar-border: #23252a;
+  --sidebar: #0a0b0d;
+  --sidebar-foreground: #d0d3d8;
+  --sidebar-primary: #f1f2f4;
+  --sidebar-primary-foreground: #0a0b0d;
+  --sidebar-accent: #17181b;
+  --sidebar-accent-foreground: #f1f2f4;
+  --sidebar-border: #1d1e22;
   --sidebar-ring: #62666d;
 
-  --body: #d0d6e0;
-  --subtle: #62666d;
-  --selection: #28282c;
+  --body: #d0d3d8;
+  /* Captions and times: 4.6:1 on the panels, the least small text needs. */
+  --subtle: #7d818a;
+  --selection: #25262b;
   --status-run: #e5be3d;
   --status-wait: #ea9a4a;
   --status-ok: #52b384;
@@ -280,7 +282,7 @@
   @apply text-body;
   height: auto;
   font-size: 0.90625rem; /* 14.5px at the default size */
-  line-height: 1.6;
+  line-height: 1.65;
   overflow-wrap: anywhere;
 }
 .prose-agent > :not(:last-child) {

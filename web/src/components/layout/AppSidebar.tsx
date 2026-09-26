@@ -24,7 +24,6 @@ import { NewProjectDialog } from '@/features/projects/NewProjectDialog'
 import { useCurrentUser } from '@/lib/currentUser'
 import { useT } from '@/lib/i18n'
 import { openPalette } from '@/lib/palette'
-import { useNow } from '@/lib/useNow'
 import { cn } from '@/lib/utils'
 import { SidebarProjects } from './SidebarProjects'
 import { WorkspaceMenu } from './WorkspaceMenu'
@@ -36,15 +35,13 @@ import { WorkspaceMenu } from './WorkspaceMenu'
 export function AppSidebar() {
   const t = useT()
   const location = useLocation()
-  // The inbox counts every pending approval plus what mentioned you in the
-  // last day; there is no read state (docs/webui.md §8).
+  // The inbox counts every pending approval plus what mentioned you that
+  // you have not read (docs/webui.md 4.19).
   const pending = usePendingApprovalsAll()
   const pendingCount = pending.data?.length ?? 0
   const user = useCurrentUser()
   const inbox = useInbox(user?.id ?? '')
-  const now = useNow(inbox.data !== undefined, 60_000)
-  const dayAgo = now - 24 * 3600_000
-  const recent = inbox.data?.pages[0]?.filter((item) => new Date(item.created_at).getTime() > dayAgo).length ?? 0
+  const unread = inbox.data?.pages[0]?.unread ?? 0
   const [creating, setCreating] = useState(false)
 
   return (
@@ -87,7 +84,7 @@ export function AppSidebar() {
                 label={t('nav.inbox')}
                 icon={<InboxIcon />}
                 active={location.pathname === '/inbox'}
-                count={pendingCount + recent}
+                count={pendingCount + unread}
                 urgent={pendingCount > 0}
               />
             </SidebarMenu>

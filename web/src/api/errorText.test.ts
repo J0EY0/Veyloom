@@ -13,6 +13,13 @@ describe('errorText', () => {
     expect(errorText(weak)).toBe('A password needs at least 8 characters.')
   })
 
+  it('joins a list the server sends as lines the way the language joins one', () => {
+    const inTheWay = new ApiError(409, 'changes in the way', { error: '…', code: 'checkoutChanged', params: { files: 'README.md\nstore.go' } })
+    expect(errorText(inTheWay)).toBe('仓库目录里的 README.md、store.go 有没提交的改动，这次合并也要改它们：先提交这些改动，再合并。')
+    setLocale('en')
+    expect(errorText(inTheWay)).toContain('uncommitted changes to README.md, store.go, which')
+  })
+
   it('falls back on the server’s words for a code it does not know', () => {
     expect(errorText(new ApiError(409, 'a turn is still running', { error: 'a turn is still running', code: 'somethingNew' }))).toBe('a turn is still running')
     expect(errorText(new ApiError(400, 'name is required', { error: 'name is required' }))).toBe('name is required')
