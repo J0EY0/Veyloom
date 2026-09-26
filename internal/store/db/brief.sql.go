@@ -12,7 +12,7 @@ import (
 )
 
 const listRoomNews = `-- name: ListRoomNews :many
-SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id,
+SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id, m.title,
        coalesce(t.number, 0)::int AS topic_number,
        count(*) OVER () AS total
 FROM messages m
@@ -70,6 +70,7 @@ func (q *Queries) ListRoomNews(ctx context.Context, arg ListRoomNewsParams) ([]L
 			&i.Message.Mentions,
 			&i.Message.CreatedAt,
 			&i.Message.TurnID,
+			&i.Message.Title,
 			&i.TopicNumber,
 			&i.Total,
 		); err != nil {
@@ -84,7 +85,7 @@ func (q *Queries) ListRoomNews(ctx context.Context, arg ListRoomNewsParams) ([]L
 }
 
 const listThreadNews = `-- name: ListThreadNews :many
-SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id, count(*) OVER () AS total
+SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id, m.title, count(*) OVER () AS total
 FROM messages m
 LEFT JOIN turns tu ON tu.id = m.turn_id
 WHERE m.thread_id = $1
@@ -137,6 +138,7 @@ func (q *Queries) ListThreadNews(ctx context.Context, arg ListThreadNewsParams) 
 			&i.Message.Mentions,
 			&i.Message.CreatedAt,
 			&i.Message.TurnID,
+			&i.Message.Title,
 			&i.Total,
 		); err != nil {
 			return nil, err
@@ -150,7 +152,7 @@ func (q *Queries) ListThreadNews(ctx context.Context, arg ListThreadNewsParams) 
 }
 
 const listTopicNews = `-- name: ListTopicNews :many
-SELECT n.thread_id, n.number, n.new_count, n.total, r.id, r.seq, r.room_id, r.thread_id, r.sender_kind, r.user_id, r.member_id, r.body, r.mentions, r.created_at, r.turn_id, l.id, l.seq, l.room_id, l.thread_id, l.sender_kind, l.user_id, l.member_id, l.body, l.mentions, l.created_at, l.turn_id
+SELECT n.thread_id, n.number, n.new_count, n.total, r.id, r.seq, r.room_id, r.thread_id, r.sender_kind, r.user_id, r.member_id, r.body, r.mentions, r.created_at, r.turn_id, r.title, l.id, l.seq, l.room_id, l.thread_id, l.sender_kind, l.user_id, l.member_id, l.body, l.mentions, l.created_at, l.turn_id, l.title
 FROM (
     SELECT t.id AS thread_id, t.number, t.root_message_id,
            count(*) AS new_count,
@@ -225,6 +227,7 @@ func (q *Queries) ListTopicNews(ctx context.Context, arg ListTopicNewsParams) ([
 			&i.Message.Mentions,
 			&i.Message.CreatedAt,
 			&i.Message.TurnID,
+			&i.Message.Title,
 			&i.Message_2.ID,
 			&i.Message_2.Seq,
 			&i.Message_2.RoomID,
@@ -236,6 +239,7 @@ func (q *Queries) ListTopicNews(ctx context.Context, arg ListTopicNewsParams) ([
 			&i.Message_2.Mentions,
 			&i.Message_2.CreatedAt,
 			&i.Message_2.TurnID,
+			&i.Message_2.Title,
 		); err != nil {
 			return nil, err
 		}

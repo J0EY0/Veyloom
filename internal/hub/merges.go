@@ -57,6 +57,7 @@ func (h *Hub) Merge(ctx context.Context, memberID, message string, leave []strin
 		for _, m := range append([]store.Member{member}, held...) {
 			h.turns.forgetOverlaps(ctx, m)
 		}
+		h.recordMerge(ctx, member, held, res.Merge.Commit)
 		h.noteMerge(ctx, project, member, held, res.Merge.Commit, message)
 		h.followMerge(ctx, others)
 	}
@@ -116,6 +117,19 @@ func (h *Hub) followMerge(ctx context.Context, members []store.Member) {
 	}
 }
 
+// recordMerge keeps that a member's work went on the main line in a
+// commit, with the others' its branch held, for the task board.
+func (h *Hub) recordMerge(ctx context.Context, member store.Member, held []store.Member, commit string) {
+	if _, err := h.store.RecordBranchEvent(ctx, store.BranchEvent{MemberID: member.ID, Kind: store.BranchMerged, Commit: commit}); err != nil {
+		h.logger.Error("record a merge", "member", member.ID, "err", err)
+	}
+	for _, m := range held {
+		if _, err := h.store.RecordBranchEvent(ctx, store.BranchEvent{MemberID: m.ID, Kind: store.BranchMerged, Commit: commit, ViaMemberID: member.ID}); err != nil {
+			h.logger.Error("record a merge", "member", m.ID, "err", err)
+		}
+	}
+}
+
 // noteMerge says in the project's chat that a member's work went on the
 // main line, and whose it had in it, with the first line of the message.
 func (h *Hub) noteMerge(ctx context.Context, project store.Project, member store.Member, held []store.Member, commit, message string) {
@@ -153,6 +167,9 @@ func (h *Hub) SetAside(ctx context.Context, memberID string) (string, error) {
 		return "", refused(res, member.DisplayName)
 	}
 	h.turns.forgetOverlaps(ctx, member)
+	if _, err := h.store.RecordBranchEvent(ctx, store.BranchEvent{MemberID: member.ID, Kind: store.BranchReset, Ref: res.Ref}); err != nil {
+		h.logger.Error("record work set aside", "member", member.ID, "err", err)
+	}
 	project, err := h.store.RoomProject(ctx, member.RoomID)
 	if err != nil {
 		return res.Ref, nil

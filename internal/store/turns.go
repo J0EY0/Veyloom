@@ -53,6 +53,8 @@ type Turn struct {
 	// SkillsUsed are the library's skills the turn used, by name, each
 	// once; known once it ends.
 	SkillsUsed []string `json:"skills_used,omitempty"`
+	// WikiPages are the pages of the project's wiki it wrote, by path.
+	WikiPages []string `json:"wiki_pages,omitempty"`
 	// ChainMessageID is the piece of work the turn is part of (docs/
 	// design.md 5.22): the person's message it started from. WokenByTurnID
 	// is the turn whose message woke it, empty when a person did. Worked
@@ -118,6 +120,8 @@ type TurnOutcome struct {
 	FilesChanged []string
 	// SkillsUsed are the skills it used.
 	SkillsUsed []string
+	// WikiPages are the pages of the project's wiki it wrote.
+	WikiPages []string
 	// Worked says it did work: called a tool other than those that follow
 	// and talk in the chat, or changed a file.
 	Worked bool
@@ -207,6 +211,7 @@ func (s *Store) FinishTurn(ctx context.Context, id string, out TurnOutcome) (Tur
 		FilesChanged:     nonNil(out.FilesChanged),
 		Worked:           out.Worked,
 		SkillsUsed:       nonNil(out.SkillsUsed),
+		WikiPages:        nonNil(out.WikiPages),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		return Turn{}, fmt.Errorf("turn %s: %w", id, ErrNotFound)
@@ -465,6 +470,7 @@ func toTurn(row db.Turn) Turn {
 		Usage:            usageOf(row.InputTokens, row.CacheReadTokens, row.CacheWriteTokens, row.OutputTokens),
 		FilesChanged:     row.FilesChanged,
 		SkillsUsed:       row.SkillsUsed,
+		WikiPages:        row.WikiPages,
 		ChainMessageID:   uuidString(row.ChainMessageID),
 		WokenByTurnID:    uuidString(row.WokenByTurnID),
 		Worked:           row.Worked,

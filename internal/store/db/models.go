@@ -55,6 +55,16 @@ type Attachment struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type BranchEvent struct {
+	ID          pgtype.UUID
+	MemberID    pgtype.UUID
+	Kind        string
+	CommitSha   string
+	Ref         string
+	ViaMemberID pgtype.UUID
+	CreatedAt   pgtype.Timestamptz
+}
+
 type InboxRead struct {
 	UserID    pgtype.UUID
 	MessageID pgtype.UUID
@@ -128,6 +138,7 @@ type Message struct {
 	Mentions   []byte
 	CreatedAt  pgtype.Timestamptz
 	TurnID     pgtype.UUID
+	Title      string
 }
 
 type Project struct {
@@ -218,6 +229,7 @@ type Turn struct {
 	OutputTokens     int64
 	FilesChanged     []string
 	SkillsUsed       []string
+	WikiPages        []string
 	ChainMessageID   pgtype.UUID
 	WokenByTurnID    pgtype.UUID
 	Worked           bool

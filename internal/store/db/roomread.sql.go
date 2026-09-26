@@ -37,7 +37,7 @@ func (q *Queries) GetThreadByNumber(ctx context.Context, arg GetThreadByNumberPa
 }
 
 const listRoomTopics = `-- name: ListRoomTopics :many
-SELECT x.thread_id, x.number, x.reply_count, x.last_seq, r.id, r.seq, r.room_id, r.thread_id, r.sender_kind, r.user_id, r.member_id, r.body, r.mentions, r.created_at, r.turn_id, l.id, l.seq, l.room_id, l.thread_id, l.sender_kind, l.user_id, l.member_id, l.body, l.mentions, l.created_at, l.turn_id
+SELECT x.thread_id, x.number, x.reply_count, x.last_seq, r.id, r.seq, r.room_id, r.thread_id, r.sender_kind, r.user_id, r.member_id, r.body, r.mentions, r.created_at, r.turn_id, r.title, l.id, l.seq, l.room_id, l.thread_id, l.sender_kind, l.user_id, l.member_id, l.body, l.mentions, l.created_at, l.turn_id, l.title
 FROM (
     SELECT t.id AS thread_id, t.number, t.root_message_id,
            (SELECT count(*) FROM messages m WHERE m.thread_id = t.id) AS reply_count,
@@ -96,6 +96,7 @@ func (q *Queries) ListRoomTopics(ctx context.Context, arg ListRoomTopicsParams) 
 			&i.Message.Mentions,
 			&i.Message.CreatedAt,
 			&i.Message.TurnID,
+			&i.Message.Title,
 			&i.Message_2.ID,
 			&i.Message_2.Seq,
 			&i.Message_2.RoomID,
@@ -107,6 +108,7 @@ func (q *Queries) ListRoomTopics(ctx context.Context, arg ListRoomTopicsParams) 
 			&i.Message_2.Mentions,
 			&i.Message_2.CreatedAt,
 			&i.Message_2.TurnID,
+			&i.Message_2.Title,
 		); err != nil {
 			return nil, err
 		}
@@ -119,7 +121,7 @@ func (q *Queries) ListRoomTopics(ctx context.Context, arg ListRoomTopicsParams) 
 }
 
 const searchRoomMessages = `-- name: SearchRoomMessages :many
-SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id, coalesce(t.number, rt.number, 0)::int AS topic_number
+SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id, m.title, coalesce(t.number, rt.number, 0)::int AS topic_number
 FROM messages m
 LEFT JOIN threads t ON t.id = m.thread_id
 LEFT JOIN threads rt ON rt.root_message_id = m.id
@@ -171,6 +173,7 @@ func (q *Queries) SearchRoomMessages(ctx context.Context, arg SearchRoomMessages
 			&i.Message.Mentions,
 			&i.Message.CreatedAt,
 			&i.Message.TurnID,
+			&i.Message.Title,
 			&i.TopicNumber,
 		); err != nil {
 			return nil, err

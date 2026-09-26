@@ -16,8 +16,12 @@ import (
 // agent does not flood the chat.
 const sendsPerTurn = 10
 
-// sendTextMax caps the text of one message it posts, in characters.
-const sendTextMax = 20000
+// sendTextMax caps the text of one message it posts, in characters, and
+// sendTitleMax the title of the task it hands on.
+const (
+	sendTextMax  = 20000
+	sendTitleMax = 80
+)
 
 // answerSendMessage posts what a member says with send_message, in its
 // topic or in the room, and wakes the members it names at once, within the
@@ -26,8 +30,9 @@ const sendTextMax = 20000
 // woken members' turns start on their own, the answer not waiting on them.
 func (m *TurnManager) answerSendMessage(ctx context.Context, at *activeTurn, q runtime.RoomQuery) (string, error) {
 	var args struct {
-		Text string `json:"text"`
-		To   string `json:"to"`
+		Text  string `json:"text"`
+		To    string `json:"to"`
+		Title string `json:"title"`
 	}
 	if len(q.Args) > 0 {
 		if err := json.Unmarshal(q.Args, &args); err != nil {
@@ -44,6 +49,8 @@ func (m *TurnManager) answerSendMessage(ctx context.Context, at *activeTurn, q r
 		return "", fmt.Errorf("send_message takes at most %d characters", sendTextMax)
 	case args.To != "" && args.To != "topic" && args.To != "room":
 		return "", fmt.Errorf("send_message: to is topic or room, not %q", args.To)
+	case utf8.RuneCountInString(args.Title) > sendTitleMax:
+		return "", fmt.Errorf("send_message: a title takes at most %d characters", sendTitleMax)
 	}
 	toRoom := args.To == "room"
 	at.mu.Lock()
@@ -71,7 +78,7 @@ func (m *TurnManager) answerSendMessage(ctx context.Context, at *activeTurn, q r
 		defer close(done)
 		pctx, cancel := context.WithTimeout(context.Background(), m.storeTimeout)
 		defer cancel()
-		msg, thread, err = m.postSent(pctx, at, sent{text: text, mentions: mentions, toRoom: toRoom, names: len(named) > 0})
+		msg, thread, err = m.postSent(pctx, at, sent{text: text, title: strings.TrimSpace(args.Title), mentions: mentions, toRoom: toRoom, names: len(named) > 0})
 	}) {
 		return "", errors.New("the turn is over")
 	}
@@ -122,10 +129,11 @@ func (m *TurnManager) answerSendMessage(ctx context.Context, at *activeTurn, q r
 	return sentAnswer(toRoom, thread, woken, notWoken), nil
 }
 
-// sent is what a member sends: its text, the members it names, and
-// whether it goes to the room and names any member.
+// sent is what a member sends: its text and the title of the task it
+// hands on, the members it names, and whether it goes to the room and
+// names any member.
 type sent struct {
-	text          string
+	text, title   string
 	mentions      []store.Mention
 	toRoom, names bool
 }
@@ -135,7 +143,7 @@ type sent struct {
 func (m *TurnManager) postSent(ctx context.Context, at *activeTurn, s sent) (store.Message, store.Thread, error) {
 	in := store.NewMessage{
 		RoomID: at.thread.RoomID, SenderKind: store.SenderAgent, MemberID: at.member.ID,
-		Body: s.text, Mentions: s.mentions, TurnID: at.turn.ID,
+		Body: s.text, Title: s.title, Mentions: s.mentions, TurnID: at.turn.ID,
 	}
 	toRoom, names := s.toRoom, s.names
 	if !toRoom {

@@ -14,7 +14,7 @@ import (
 const clearTurnTrust = `-- name: ClearTurnTrust :one
 UPDATE turns SET trusted_by = NULL, trusted_at = NULL
 WHERE id = $1
-RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at
+RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at
 `
 
 // A person takes it back. A turn that ended trusted keeps who trusted it,
@@ -42,6 +42,7 @@ func (q *Queries) ClearTurnTrust(ctx context.Context, id pgtype.UUID) (Turn, err
 		&i.OutputTokens,
 		&i.FilesChanged,
 		&i.SkillsUsed,
+		&i.WikiPages,
 		&i.ChainMessageID,
 		&i.WokenByTurnID,
 		&i.Worked,
@@ -68,7 +69,7 @@ func (q *Queries) CountChainWakes(ctx context.Context, chainMessageID pgtype.UUI
 const createTurn = `-- name: CreateTurn :one
 INSERT INTO turns (member_id, room_id, thread_id, trigger_message_id, machine_id, runtime, transcript_path, session_id, kind, chain_message_id, woken_by_turn_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
-RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at
+RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at
 `
 
 type CreateTurnParams struct {
@@ -120,6 +121,7 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.OutputTokens,
 		&i.FilesChanged,
 		&i.SkillsUsed,
+		&i.WikiPages,
 		&i.ChainMessageID,
 		&i.WokenByTurnID,
 		&i.Worked,
@@ -134,7 +136,7 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 const failRunningTurns = `-- name: FailRunningTurns :many
 UPDATE turns SET status = 'failed', error = $1, ended_at = now()
 WHERE status = 'running'
-RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at
+RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at
 `
 
 // Turns still marked running when the hub starts were cut off by its last
@@ -168,6 +170,7 @@ func (q *Queries) FailRunningTurns(ctx context.Context, error string) ([]Turn, e
 			&i.OutputTokens,
 			&i.FilesChanged,
 			&i.SkillsUsed,
+			&i.WikiPages,
 			&i.ChainMessageID,
 			&i.WokenByTurnID,
 			&i.Worked,
@@ -199,9 +202,10 @@ UPDATE turns SET
     files_changed      = $10,
     skills_used        = $11,
     worked             = $12,
+    wiki_pages         = $13,
     ended_at           = now()
 WHERE id = $1
-RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at
+RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at
 `
 
 type FinishTurnParams struct {
@@ -217,6 +221,7 @@ type FinishTurnParams struct {
 	FilesChanged     []string
 	SkillsUsed       []string
 	Worked           bool
+	WikiPages        []string
 }
 
 func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) (Turn, error) {
@@ -233,6 +238,7 @@ func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) (Turn, e
 		arg.FilesChanged,
 		arg.SkillsUsed,
 		arg.Worked,
+		arg.WikiPages,
 	)
 	var i Turn
 	err := row.Scan(
@@ -255,6 +261,7 @@ func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) (Turn, e
 		&i.OutputTokens,
 		&i.FilesChanged,
 		&i.SkillsUsed,
+		&i.WikiPages,
 		&i.ChainMessageID,
 		&i.WokenByTurnID,
 		&i.Worked,
@@ -267,7 +274,7 @@ func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) (Turn, e
 }
 
 const getTurn = `-- name: GetTurn :one
-SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns WHERE id = $1
+SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns WHERE id = $1
 `
 
 func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
@@ -293,6 +300,7 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.OutputTokens,
 		&i.FilesChanged,
 		&i.SkillsUsed,
+		&i.WikiPages,
 		&i.ChainMessageID,
 		&i.WokenByTurnID,
 		&i.Worked,
@@ -361,7 +369,7 @@ func (q *Queries) ListMachineTurnsSince(ctx context.Context, arg ListMachineTurn
 }
 
 const listRoomTurns = `-- name: ListRoomTurns :many
-SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns WHERE room_id = $1 ORDER BY started_at DESC LIMIT $2
+SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns WHERE room_id = $1 ORDER BY started_at DESC LIMIT $2
 `
 
 type ListRoomTurnsParams struct {
@@ -399,6 +407,7 @@ func (q *Queries) ListRoomTurns(ctx context.Context, arg ListRoomTurnsParams) ([
 			&i.OutputTokens,
 			&i.FilesChanged,
 			&i.SkillsUsed,
+			&i.WikiPages,
 			&i.ChainMessageID,
 			&i.WokenByTurnID,
 			&i.Worked,
@@ -418,7 +427,7 @@ func (q *Queries) ListRoomTurns(ctx context.Context, arg ListRoomTurnsParams) ([
 }
 
 const listRoomTurnsByStatus = `-- name: ListRoomTurnsByStatus :many
-SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns WHERE room_id = $1 AND status = $2 ORDER BY started_at DESC LIMIT $3
+SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns WHERE room_id = $1 AND status = $2 ORDER BY started_at DESC LIMIT $3
 `
 
 type ListRoomTurnsByStatusParams struct {
@@ -458,6 +467,7 @@ func (q *Queries) ListRoomTurnsByStatus(ctx context.Context, arg ListRoomTurnsBy
 			&i.OutputTokens,
 			&i.FilesChanged,
 			&i.SkillsUsed,
+			&i.WikiPages,
 			&i.ChainMessageID,
 			&i.WokenByTurnID,
 			&i.Worked,
@@ -603,7 +613,7 @@ func (q *Queries) ListSkillUses(ctx context.Context, arg ListSkillUsesParams) ([
 }
 
 const listThreadTurns = `-- name: ListThreadTurns :many
-SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns
+SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns
 WHERE thread_id = $1
 ORDER BY started_at
 `
@@ -638,6 +648,7 @@ func (q *Queries) ListThreadTurns(ctx context.Context, threadID pgtype.UUID) ([]
 			&i.OutputTokens,
 			&i.FilesChanged,
 			&i.SkillsUsed,
+			&i.WikiPages,
 			&i.ChainMessageID,
 			&i.WokenByTurnID,
 			&i.Worked,
@@ -712,7 +723,7 @@ func (q *Queries) SetTurnSession(ctx context.Context, arg SetTurnSessionParams) 
 const setTurnTrust = `-- name: SetTurnTrust :one
 UPDATE turns SET trusted_by = $2, trusted_at = now()
 WHERE id = $1 AND status = 'running'
-RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at
+RETURNING id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at
 `
 
 type SetTurnTrustParams struct {
@@ -744,6 +755,7 @@ func (q *Queries) SetTurnTrust(ctx context.Context, arg SetTurnTrustParams) (Tur
 		&i.OutputTokens,
 		&i.FilesChanged,
 		&i.SkillsUsed,
+		&i.WikiPages,
 		&i.ChainMessageID,
 		&i.WokenByTurnID,
 		&i.Worked,

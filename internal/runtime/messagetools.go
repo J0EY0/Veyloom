@@ -22,6 +22,7 @@ var messageToolSpecs = []roomToolSpec{
 		Params: []roomToolParam{
 			{Name: "text", Type: "string", Required: true, Description: "The message, in markdown."},
 			{Name: "to", Type: "string", Enum: []string{"topic", "room"}, Description: "topic (the default) posts in the topic this turn is in; room posts in the project's room, starting something new."},
+			{Name: "title", Type: "string", Description: "When the message hands work on: a few words naming that task, in the language the chat is written in, such as \"Add tests for tags\". The project's task board shows it for the members the message wakes."},
 		},
 	},
 }

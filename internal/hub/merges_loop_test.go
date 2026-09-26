@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/J0EY0/veyloom/internal/store"
 )
@@ -54,6 +55,22 @@ func TestLoop_WorkMergedAlongGoesOnOnce(t *testing.T) {
 	want := "Merged Coder's work, which had Reviewer's in it, into the main line as " + merged.Commit[:7] + ": Add the feature"
 	if !slices.ContainsFunc(l.topLevel(), func(m store.Message) bool { return m.Body == want }) {
 		t.Errorf("the chat does not say %q", want)
+	}
+	// Kept for the task board: Coder's branch merged, Reviewer's work with
+	// it; Coder's task, which wrote a file, merged in that commit.
+	events, err := l.s.ListRoomBranchEvents(l.ctx, l.room.ID, time.Time{})
+	if err != nil || len(events) != 2 || events[0].MemberID != coder.ID || events[0].Commit != merged.Commit || events[0].ViaMemberID != "" ||
+		events[1].MemberID != reviewer.ID || events[1].ViaMemberID != coder.ID || events[1].Kind != store.BranchMerged {
+		t.Errorf("branch events: %+v %v", events, err)
+	}
+	tasks, err := l.s.ListRoomTasks(l.ctx, l.room.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, task := range tasks {
+		if task.MemberID == coder.ID && (task.Outcome == nil || task.Outcome.Commit != merged.Commit || task.State != store.TaskDone) {
+			t.Errorf("Coder's task: %+v (%+v)", task, task.Outcome)
+		}
 	}
 
 	b, err := l.h.Branches(l.ctx, l.room.ProjectID)
@@ -128,6 +145,9 @@ func TestLoop_ThePersonLeavesFilesOutAndSetsWorkAside(t *testing.T) {
 	want := "Reset Coder's branch veyloom/coder to the main line; its work is archived as " + ref + "."
 	if !slices.ContainsFunc(l.topLevel(), func(m store.Message) bool { return m.Body == want }) {
 		t.Errorf("the chat does not say %q", want)
+	}
+	if events, _ := l.s.ListRoomBranchEvents(l.ctx, l.room.ID, time.Time{}); len(events) != 2 || events[1].Kind != store.BranchReset || events[1].Ref != ref {
+		t.Errorf("branch events: %+v", events)
 	}
 	if _, err := os.Stat(filepath.Join(c.WorkDir, "app")); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("the build is still in Coder's worktree: %v", err)

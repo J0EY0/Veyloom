@@ -13,7 +13,7 @@ import (
 
 const chainWork = `-- name: ChainWork :one
 WITH c AS (
-    SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns WHERE chain_message_id = $1
+    SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns WHERE chain_message_id = $1
 ), origin AS (
     SELECT thread_id FROM c ORDER BY started_at LIMIT 1
 )
@@ -76,9 +76,9 @@ func (q *Queries) CountUnreadMentions(ctx context.Context, arg CountUnreadMentio
 }
 
 const createMessage = `-- name: CreateMessage :one
-INSERT INTO messages (room_id, thread_id, sender_kind, user_id, member_id, body, mentions, turn_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-RETURNING id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id
+INSERT INTO messages (room_id, thread_id, sender_kind, user_id, member_id, body, mentions, turn_id, title)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+RETURNING id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id, title
 `
 
 type CreateMessageParams struct {
@@ -90,6 +90,7 @@ type CreateMessageParams struct {
 	Body       string
 	Mentions   []byte
 	TurnID     pgtype.UUID
+	Title      string
 }
 
 func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (Message, error) {
@@ -102,6 +103,7 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 		arg.Body,
 		arg.Mentions,
 		arg.TurnID,
+		arg.Title,
 	)
 	var i Message
 	err := row.Scan(
@@ -116,12 +118,13 @@ func (q *Queries) CreateMessage(ctx context.Context, arg CreateMessageParams) (M
 		&i.Mentions,
 		&i.CreatedAt,
 		&i.TurnID,
+		&i.Title,
 	)
 	return i, err
 }
 
 const getMessage = `-- name: GetMessage :one
-SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id FROM messages WHERE id = $1
+SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id, title FROM messages WHERE id = $1
 `
 
 func (q *Queries) GetMessage(ctx context.Context, id pgtype.UUID) (Message, error) {
@@ -139,12 +142,13 @@ func (q *Queries) GetMessage(ctx context.Context, id pgtype.UUID) (Message, erro
 		&i.Mentions,
 		&i.CreatedAt,
 		&i.TurnID,
+		&i.Title,
 	)
 	return i, err
 }
 
 const lastAgentMessageInThread = `-- name: LastAgentMessageInThread :one
-SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id FROM messages
+SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id, title FROM messages
 WHERE sender_kind = 'agent'
   AND (thread_id = $1 OR id = (SELECT root_message_id FROM threads WHERE id = $1))
 ORDER BY seq DESC
@@ -168,12 +172,13 @@ func (q *Queries) LastAgentMessageInThread(ctx context.Context, threadID pgtype.
 		&i.Mentions,
 		&i.CreatedAt,
 		&i.TurnID,
+		&i.Title,
 	)
 	return i, err
 }
 
 const listRoomMessagesAfter = `-- name: ListRoomMessagesAfter :many
-SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id FROM messages
+SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id, title FROM messages
 WHERE room_id = $1 AND thread_id IS NULL AND seq > $2
 ORDER BY seq
 LIMIT $3
@@ -207,6 +212,7 @@ func (q *Queries) ListRoomMessagesAfter(ctx context.Context, arg ListRoomMessage
 			&i.Mentions,
 			&i.CreatedAt,
 			&i.TurnID,
+			&i.Title,
 		); err != nil {
 			return nil, err
 		}
@@ -219,7 +225,7 @@ func (q *Queries) ListRoomMessagesAfter(ctx context.Context, arg ListRoomMessage
 }
 
 const listRoomMessagesBefore = `-- name: ListRoomMessagesBefore :many
-SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id FROM messages
+SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id, title FROM messages
 WHERE room_id = $1 AND thread_id IS NULL AND seq < $2
 ORDER BY seq DESC
 LIMIT $3
@@ -254,6 +260,7 @@ func (q *Queries) ListRoomMessagesBefore(ctx context.Context, arg ListRoomMessag
 			&i.Mentions,
 			&i.CreatedAt,
 			&i.TurnID,
+			&i.Title,
 		); err != nil {
 			return nil, err
 		}
@@ -266,7 +273,7 @@ func (q *Queries) ListRoomMessagesBefore(ctx context.Context, arg ListRoomMessag
 }
 
 const listThreadMessagesAfter = `-- name: ListThreadMessagesAfter :many
-SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id FROM messages
+SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id, title FROM messages
 WHERE thread_id = $1 AND seq > $2
 ORDER BY seq
 LIMIT $3
@@ -301,6 +308,7 @@ func (q *Queries) ListThreadMessagesAfter(ctx context.Context, arg ListThreadMes
 			&i.Mentions,
 			&i.CreatedAt,
 			&i.TurnID,
+			&i.Title,
 		); err != nil {
 			return nil, err
 		}
@@ -313,7 +321,7 @@ func (q *Queries) ListThreadMessagesAfter(ctx context.Context, arg ListThreadMes
 }
 
 const listThreadMessagesBefore = `-- name: ListThreadMessagesBefore :many
-SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id FROM messages
+SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id, title FROM messages
 WHERE thread_id = $1 AND seq < $2
 ORDER BY seq DESC
 LIMIT $3
@@ -348,6 +356,7 @@ func (q *Queries) ListThreadMessagesBefore(ctx context.Context, arg ListThreadMe
 			&i.Mentions,
 			&i.CreatedAt,
 			&i.TurnID,
+			&i.Title,
 		); err != nil {
 			return nil, err
 		}
@@ -360,7 +369,7 @@ func (q *Queries) ListThreadMessagesBefore(ctx context.Context, arg ListThreadMe
 }
 
 const listUserMentions = `-- name: ListUserMentions :many
-SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id, r.name AS room_name, p.name AS project_name, coalesce(u.name, mb.display_name, '')::text AS sender_name,
+SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id, m.title, r.name AS room_name, p.name AS project_name, coalesce(u.name, mb.display_name, '')::text AS sender_name,
        (ir.message_id IS NOT NULL)::boolean AS read
 FROM messages m
 JOIN rooms r ON r.id = m.room_id
@@ -392,6 +401,7 @@ type ListUserMentionsRow struct {
 	Mentions    []byte
 	CreatedAt   pgtype.Timestamptz
 	TurnID      pgtype.UUID
+	Title       string
 	RoomName    string
 	ProjectName string
 	SenderName  string
@@ -426,6 +436,7 @@ func (q *Queries) ListUserMentions(ctx context.Context, arg ListUserMentionsPara
 			&i.Mentions,
 			&i.CreatedAt,
 			&i.TurnID,
+			&i.Title,
 			&i.RoomName,
 			&i.ProjectName,
 			&i.SenderName,
@@ -497,7 +508,7 @@ SELECT t.root_message_id,
        coalesce(w.running, false)::bool AS work_running
 FROM threads t
 LEFT JOIN LATERAL (
-    SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns tu WHERE tu.thread_id = t.id ORDER BY tu.started_at DESC LIMIT 1
+    SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns tu WHERE tu.thread_id = t.id ORDER BY tu.started_at DESC LIMIT 1
 ) lt ON true
 LEFT JOIN LATERAL (
     SELECT c.chain_message_id AS chain,
@@ -577,7 +588,7 @@ func (q *Queries) ThreadSummaries(ctx context.Context, dollar_1 []pgtype.UUID) (
 const updateMessageBody = `-- name: UpdateMessageBody :one
 UPDATE messages SET body = $2, turn_id = $3, mentions = $4
 WHERE id = $1
-RETURNING id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id
+RETURNING id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id, title
 `
 
 type UpdateMessageBodyParams struct {
@@ -609,6 +620,7 @@ func (q *Queries) UpdateMessageBody(ctx context.Context, arg UpdateMessageBodyPa
 		&i.Mentions,
 		&i.CreatedAt,
 		&i.TurnID,
+		&i.Title,
 	)
 	return i, err
 }

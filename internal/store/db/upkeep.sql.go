@@ -145,7 +145,7 @@ func (q *Queries) CountUpkeepsSince(ctx context.Context, arg CountUpkeepsSincePa
 }
 
 const lastUpkeep = `-- name: LastUpkeep :one
-SELECT t.id, t.member_id, t.room_id, t.thread_id, t.trigger_message_id, t.machine_id, t.session_id, t.runtime, t.kind, t.status, t.error, t.reply_message_id, t.transcript_path, t.input_tokens, t.cache_read_tokens, t.cache_write_tokens, t.output_tokens, t.files_changed, t.skills_used, t.chain_message_id, t.woken_by_turn_id, t.worked, t.trusted_by, t.trusted_at, t.started_at, t.ended_at FROM turns t
+SELECT t.id, t.member_id, t.room_id, t.thread_id, t.trigger_message_id, t.machine_id, t.session_id, t.runtime, t.kind, t.status, t.error, t.reply_message_id, t.transcript_path, t.input_tokens, t.cache_read_tokens, t.cache_write_tokens, t.output_tokens, t.files_changed, t.skills_used, t.wiki_pages, t.chain_message_id, t.woken_by_turn_id, t.worked, t.trusted_by, t.trusted_at, t.started_at, t.ended_at FROM turns t
 JOIN rooms r ON r.id = t.room_id
 WHERE r.project_id = $1 AND t.kind = 'upkeep'
 ORDER BY t.started_at DESC
@@ -176,6 +176,7 @@ func (q *Queries) LastUpkeep(ctx context.Context, projectID pgtype.UUID) (Turn, 
 		&i.OutputTokens,
 		&i.FilesChanged,
 		&i.SkillsUsed,
+		&i.WikiPages,
 		&i.ChainMessageID,
 		&i.WokenByTurnID,
 		&i.Worked,
@@ -499,7 +500,7 @@ func (q *Queries) ListUpkeepTurns(ctx context.Context, arg ListUpkeepTurnsParams
 }
 
 const nextPersonMessage = `-- name: NextPersonMessage :one
-SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id FROM messages
+SELECT id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id, title FROM messages
 WHERE thread_id = $1 AND sender_kind = 'user' AND created_at > $2
 ORDER BY seq
 LIMIT 1
@@ -527,6 +528,7 @@ func (q *Queries) NextPersonMessage(ctx context.Context, arg NextPersonMessagePa
 		&i.Mentions,
 		&i.CreatedAt,
 		&i.TurnID,
+		&i.Title,
 	)
 	return i, err
 }

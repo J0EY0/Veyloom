@@ -16,6 +16,7 @@ UPDATE turns SET
     files_changed      = $10,
     skills_used        = $11,
     worked             = $12,
+    wiki_pages         = sqlc.arg('wiki_pages'),
     ended_at           = now()
 WHERE id = $1
 RETURNING *;

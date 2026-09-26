@@ -121,17 +121,23 @@ func (m *TurnManager) turnWiki(ctx context.Context, at *activeTurn, scope store.
 }
 
 // commitWiki records what the turn wrote to each wiki as one commit,
-// whatever became of the turn: the pages were written as it went.
-func (m *TurnManager) commitWiki(ctx context.Context, at *activeTurn) {
+// whatever became of the turn: the pages were written as it went. It
+// returns the pages of the project's wiki the turn wrote.
+func (m *TurnManager) commitWiki(ctx context.Context, at *activeTurn) []string {
 	at.wikiMu.Lock()
 	holds := make([]*turnWiki, 0, len(at.wikis))
 	for _, tw := range at.wikis {
 		holds = append(holds, tw)
 	}
 	at.wikiMu.Unlock()
+	var pages []string
 	for _, tw := range holds {
-		if len(tw.writer.Pending()) == 0 {
+		pending := tw.writer.Pending()
+		if len(pending) == 0 {
 			continue
+		}
+		if tw.scope == store.WikiProject {
+			pages = append(pages, pending...)
 		}
 		subject := fmt.Sprintf("%s in topic #%d", at.member.DisplayName, at.thread.Number)
 		trailers := []wiki.Trailer{
@@ -155,6 +161,7 @@ func (m *TurnManager) commitWiki(ctx context.Context, at *activeTurn) {
 			m.wikis.notify(tw.project.ID, at.thread.RoomID)
 		}
 	}
+	return pages
 }
 
 // answerWiki answers a wiki tool call of a running turn.

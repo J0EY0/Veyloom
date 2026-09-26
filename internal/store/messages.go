@@ -62,7 +62,10 @@ type Message struct {
 	Attachments []Attachment `json:"attachments"`
 	// TurnID is set on messages the hub writes for a turn: a topic root once
 	// its text is known, the agent's later replies, and system notes.
-	TurnID    string    `json:"turn_id,omitempty"`
+	TurnID string `json:"turn_id,omitempty"`
+	// Title is what a member handing work on called it (send_message's
+	// title), the task of the members the message names; empty otherwise.
+	Title     string    `json:"title,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -85,6 +88,8 @@ type NewMessage struct {
 	AttachmentIDs []string
 	// TurnID links a hub-written message to its turn; empty for people.
 	TurnID string
+	// Title names the task a member hands on with the message.
+	Title string
 }
 
 // InboxItem is a message that mentions a user, with the names the inbox
@@ -238,6 +243,7 @@ func (s *Store) CreateMessage(ctx context.Context, m NewMessage) (Message, error
 		Body:       m.Body,
 		Mentions:   mentions,
 		TurnID:     turnID,
+		Title:      strings.TrimSpace(m.Title),
 	})
 	if err != nil {
 		return Message{}, mapMessageError(err)
@@ -667,6 +673,7 @@ func toMessage(row db.Message) (Message, error) {
 		Mentions:    mentions,
 		Attachments: []Attachment{},
 		TurnID:      uuidString(row.TurnID),
+		Title:       row.Title,
 		CreatedAt:   row.CreatedAt.Time,
 	}, nil
 }

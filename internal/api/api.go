@@ -136,6 +136,8 @@ type Deps struct {
 	Approvals ApprovalStore
 	// Rules keeps what people allowed members always; nil keeps none.
 	Rules RuleStore
+	// Work reads the task board, pieces of work and usage; nil reads none.
+	Work WorkStore
 	// Chat posts user messages, controls turns, settles approvals and
 	// streams room events; it is the hub.
 	Chat Chat
@@ -252,6 +254,9 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/v1/turns/{id}/transcript", h.turnTranscript)
 	mux.HandleFunc("GET /api/v1/rooms/{id}/turns", h.listRoomTurns)
 	mux.HandleFunc("GET /api/v1/topics", h.listTopics)
+	mux.HandleFunc("GET /api/v1/rooms/{id}/tasks", h.listRoomTasks)
+	mux.HandleFunc("GET /api/v1/works/{chain}", h.getWork)
+	mux.HandleFunc("GET /api/v1/usage", h.usage)
 
 	mux.HandleFunc("GET /api/v1/approvals", h.listApprovals)
 	mux.HandleFunc("GET /api/v1/approvals/{id}", h.getApproval)

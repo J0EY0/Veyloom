@@ -970,7 +970,7 @@ func (m *TurnManager) complete(at *activeTurn, done protocol.TurnDone) {
 	defer cancel()
 
 	m.abandonApprovals(ctx, at)
-	m.commitWiki(ctx, at)
+	wikiPages := m.commitWiki(ctx, at)
 
 	at.mu.Lock()
 	if at.transcript != nil {
@@ -994,7 +994,7 @@ func (m *TurnManager) complete(at *activeTurn, done protocol.TurnDone) {
 
 	outcome := store.TurnOutcome{
 		TranscriptPath: filepath.Join(m.transcripts, at.turn.ID+".jsonl"), Usage: spent.Plus(done.Result.Usage),
-		FilesChanged: files, SkillsUsed: skills, Worked: worked,
+		FilesChanged: files, SkillsUsed: skills, WikiPages: wikiPages, Worked: worked,
 	}
 	name := at.member.DisplayName
 	switch {

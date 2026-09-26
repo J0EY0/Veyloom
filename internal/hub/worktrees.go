@@ -36,6 +36,9 @@ type worktreeStore interface {
 	ClearMemberWorkspace(ctx context.Context, memberID string) error
 	SetMemberOverlaps(ctx context.Context, memberID string, files []string) error
 	AddMemberOverlaps(ctx context.Context, memberID string, files []string) error
+	// What became of a member's branch, for the task board (docs/webui.md
+	// 4.20).
+	RecordBranchEvent(ctx context.Context, e store.BranchEvent) (store.BranchEvent, error)
 }
 
 // prepareLimit bounds how long a turn waits for its member's worktree:

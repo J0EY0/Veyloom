@@ -125,6 +125,7 @@ func runServe(cmd *cobra.Command, cfg config.Config) error {
 		Turns:         s,
 		Approvals:     s,
 		Rules:         s,
+		Work:          s,
 		Chat:          h,
 		Events:        api.EventsOptions{AllowedOrigins: cfg.Server.AllowedOrigins, WriteTimeout: cfg.Server.WriteTimeout},
 		TranscriptDir: cfg.Hub.TranscriptDir,

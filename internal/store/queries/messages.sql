@@ -1,6 +1,6 @@
 -- name: CreateMessage :one
-INSERT INTO messages (room_id, thread_id, sender_kind, user_id, member_id, body, mentions, turn_id)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO messages (room_id, thread_id, sender_kind, user_id, member_id, body, mentions, turn_id, title)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, sqlc.arg('title'))
 RETURNING *;
 
 -- name: GetMessage :one

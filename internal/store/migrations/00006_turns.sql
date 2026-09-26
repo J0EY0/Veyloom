@@ -46,6 +46,9 @@ CREATE TABLE turns (
     -- its tool calls, not merely given (docs/design.md 5.10). How a skill's
     -- team learns where it was used and how that went.
     skills_used        text[]      NOT NULL DEFAULT '{}',
+    -- The pages of the project's wiki the turn wrote, by path, each once:
+    -- what the task board says a task left behind (docs/webui.md 4.20).
+    wiki_pages         text[]      NOT NULL DEFAULT '{}',
     -- The piece of work the turn is part of (design.md 5.22): the person's
     -- message it started from, or the note a person let a held wake go on
     -- from. A turn an agent woke carries on its waker's; woken_by_turn_id
@@ -93,6 +96,28 @@ CREATE TABLE relay_holds (
     continued_at       timestamptz
 );
 
+-- What became of a member's branch (design.md 5.21): its work put on the
+-- main line by a merge, or the branch reset to the main line with its work
+-- archived under a ref. A merged branch that held other members' work is a
+-- row for each of them too, via the member whose branch was merged. The
+-- task board tells from these which of a member's tasks were merged or set
+-- aside, and which still wait for it (docs/webui.md 4.20).
+CREATE TABLE branch_events (
+    id            uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    member_id     uuid        NOT NULL REFERENCES members (id) ON DELETE CASCADE,
+    kind          text        NOT NULL CHECK (kind IN ('merged', 'reset')),
+    -- merged: the commit on the main line; reset: the ref the work is
+    -- archived under.
+    commit_sha    text        NOT NULL DEFAULT '',
+    ref           text        NOT NULL DEFAULT '',
+    -- The member whose branch was merged, when it was not this one's.
+    via_member_id uuid        REFERENCES members (id) ON DELETE SET NULL,
+    created_at    timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX branch_events_by_member ON branch_events (member_id, created_at);
+
 -- +goose Down
+DROP TABLE branch_events;
 DROP TABLE relay_holds;
 DROP TABLE turns;
