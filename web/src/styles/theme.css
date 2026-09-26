@@ -12,9 +12,11 @@
 
 /* Design tokens: Linear's palette mapped onto shadcn's semantic names.
    Light is the base; .dark swaps every value. Nothing in the UI names a
-   raw colour. Chroma is limited to the four status colours and, since
+   raw colour. Chroma is limited to the status colours and, since
    2026-09-16, one hue per runtime — the latter only on a runtime's own
-   mark and the name pill that echoes it. */
+   mark and the name pill that echoes it, and in charts of what each
+   runtime spent. Since 2026-09-26 charts mark the one point they are about
+   in blue (docs/webui.md 4.20). */
 :root {
   color-scheme: light;
   --radius: 0.625rem;
@@ -61,6 +63,17 @@
   --status-wait: #e08a2e;
   --status-ok: #3f9c6a;
   --status-fail: #d9534f;
+  /* Work waiting to be merged, on the task board (docs/webui.md 4.20). */
+  --status-merge: #6e56cf;
+  /* Charts stay grey but for the one point a chart is about, in blue;
+     bars run on a track; a turn is slate, orange where it waited on a
+     person. Steps of the data-viz reference palette, checked against
+     both backgrounds (docs/webui.md 4.20). */
+  --chart-accent: #2a78d6;
+  --chart-mark: #8d9098;
+  --chart-track: #eeeff1;
+  --work-bar: #5e6a82;
+  --wait-bar: #cf7424;
   /* A runtime's own colour: the filled disc behind its mark, plus the
      wash and ink of the name pill that echoes it. The only hue in the UI
      besides the four status colours (docs/webui.md §0). */
@@ -122,6 +135,12 @@
   --status-wait: #ea9a4a;
   --status-ok: #52b384;
   --status-fail: #e0605b;
+  --status-merge: #a48bea;
+  --chart-accent: #3987e5;
+  --chart-mark: #6b6f77;
+  --chart-track: #232428;
+  --work-bar: #747d90;
+  --wait-bar: #ea9a4a;
   --runtime-claude: #d97757;
   --runtime-claude-wash: #35241d;
   --runtime-claude-ink: #e5a184;
@@ -180,6 +199,12 @@
   --color-status-wait: var(--status-wait);
   --color-status-ok: var(--status-ok);
   --color-status-fail: var(--status-fail);
+  --color-status-merge: var(--status-merge);
+  --color-chart-accent: var(--chart-accent);
+  --color-chart-mark: var(--chart-mark);
+  --color-chart-track: var(--chart-track);
+  --color-work-bar: var(--work-bar);
+  --color-wait-bar: var(--wait-bar);
   --color-runtime-claude: var(--runtime-claude);
   --color-runtime-claude-wash: var(--runtime-claude-wash);
   --color-runtime-claude-ink: var(--runtime-claude-ink);

@@ -9,6 +9,7 @@ import { InboxPage } from '@/features/inbox/InboxPage'
 import { RoomPage } from '@/features/rooms/RoomPage'
 import { AgentsPage } from '@/features/agents/AgentsPage'
 import { MachinesPage } from '@/features/machines/MachinesPage'
+import { UsagePage } from '@/features/usage/UsagePage'
 import { SettingsPage } from '@/features/settings/SettingsPage'
 import { LibraryPage } from '@/features/wiki/LibraryPage'
 import { WikisPage } from '@/features/wiki/wikis/WikisPage'
@@ -27,6 +28,9 @@ export const router = createBrowserRouter([
         children: [
           { index: true, Component: HomeRedirect },
           { path: 'rooms/:roomId', Component: RoomPage },
+          // The chat's Tasks tab: the board, and a piece of work by the
+          // message a person began it with.
+          { path: 'rooms/:roomId/tasks/*', Component: RoomPage },
           // The chat's Wiki tab: the overview, a page at its own path, the changes.
           { path: 'rooms/:roomId/wiki/*', Component: RoomPage },
           // The chat's Branches tab: the main line and each member's worktree.
@@ -51,6 +55,8 @@ export const router = createBrowserRouter([
           { path: 'workers', loader: () => redirect('/machines') },
           { path: 'runtime', loader: () => redirect('/machines') },
           { path: 'runtime/:machineId', loader: ({ params }) => redirect(`/machines/${params.machineId}`) },
+          // Where the tokens went, across every machine (docs/webui.md 4.20).
+          { path: 'usage', Component: UsagePage },
           { path: 'settings', Component: SettingsPage },
           { path: 'settings/:section', Component: SettingsPage },
           { path: '*', element: <PlaceholderPage titleKey="page.notFound" /> },

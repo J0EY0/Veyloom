@@ -14,10 +14,19 @@ import { refresh } from './refresh'
 import { invalidateUpkeep } from './upkeep'
 import { refreshRelayHolds } from './relays'
 import { invalidateWiki } from './wiki'
+import { workKeys } from './work'
 
 // applyRoomEvent writes one live event into the query cache, which is the
 // only store the UI reads (docs/webui.md §5.2).
 export function applyRoomEvent(client: QueryClient, event: RoomEvent) {
+  // The task board and the pieces of work move with the room's turns, its
+  // requests, and the notes of merges and resets.
+  if (event.kind !== 'turn_event' && event.kind !== 'wiki_changed' && event.kind !== 'inbox_read') {
+    if (event.kind !== 'message' || event.message.sender_kind === 'system') {
+      refresh(client, { queryKey: workKeys.tasks(event.room_id) })
+      refresh(client, { queryKey: workKeys.all })
+    }
+  }
   switch (event.kind) {
     case 'message':
       applyRoomMessage(client, event.message, event.thread)

@@ -1,5 +1,5 @@
 import { useEffect } from 'react'
-import { BotIcon, InboxIcon, ServerIcon, SettingsIcon } from 'lucide-react'
+import { BotIcon, ChartColumnIcon, InboxIcon, ServerIcon, SettingsIcon } from 'lucide-react'
 import { useNavigate } from 'react-router'
 import { useProjects } from '@/api/projects'
 import { ProjectMark } from '@/components/shared/project-mark'
@@ -56,6 +56,10 @@ export function CommandPalette() {
             <CommandItem value={t('nav.machines')} onSelect={() => go('/machines')}>
               <ServerIcon className="text-subtle" />
               {t('nav.machines')}
+            </CommandItem>
+            <CommandItem value={t('nav.usage')} onSelect={() => go('/usage')}>
+              <ChartColumnIcon className="text-subtle" />
+              {t('nav.usage')}
             </CommandItem>
             <CommandItem value={t('nav.settings')} onSelect={() => go('/settings')}>
               <SettingsIcon className="text-subtle" />

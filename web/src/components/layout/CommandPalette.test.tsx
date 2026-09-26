@@ -31,6 +31,7 @@ describe('CommandPalette', () => {
     setPaletteOpen(true)
     expect(await screen.findByRole('option', { name: /收件箱/ })).toBeInTheDocument()
     expect(screen.getByRole('option', { name: /机器/ })).toBeInTheDocument()
+    expect(screen.getByRole('option', { name: /用量/ })).toBeInTheDocument()
     expect(screen.queryByRole('option', { name: /全部项目/ })).not.toBeInTheDocument()
   })
 })

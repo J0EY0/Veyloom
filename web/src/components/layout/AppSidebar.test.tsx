@@ -64,6 +64,7 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/agents')
     expect(screen.getByRole('link', { name: '机器' })).toHaveAttribute('href', '/machines')
     expect(screen.getByRole('link', { name: 'Wiki' })).toHaveAttribute('href', '/wiki')
+    expect(screen.getByRole('link', { name: '用量' })).toHaveAttribute('href', '/usage')
   })
 
   it('marks the Wiki page on any of its addresses, not a chat’s Wiki tab', async () => {

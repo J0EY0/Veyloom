@@ -105,6 +105,8 @@ export interface Message {
   // Set on messages the hub wrote for a turn: a topic root once filled in,
   // the agent's later replies, system notes.
   turn_id?: string
+  // What a member handing work on called that task (send_message's title).
+  title?: string
   created_at: string
 }
 
@@ -423,4 +425,5 @@ export * from './types.inbox'
 export * from './types.projects'
 export * from './types.branches'
 export * from './types.approvals'
+export * from './types.work'
 export * from './types.wiki'

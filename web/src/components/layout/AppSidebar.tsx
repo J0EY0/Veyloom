@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { BookOpenIcon, BotIcon, InboxIcon, LibraryBigIcon, SearchIcon, ServerIcon, SettingsIcon, SquarePenIcon } from 'lucide-react'
+import { BookOpenIcon, BotIcon, ChartColumnIcon, InboxIcon, LibraryBigIcon, SearchIcon, ServerIcon, SettingsIcon, SquarePenIcon } from 'lucide-react'
 import { Link, useLocation } from 'react-router'
 import { usePendingApprovalsAll } from '@/api/approvals'
 import { useInbox } from '@/api/inbox'
@@ -104,6 +104,7 @@ export function AppSidebar() {
                 active={location.pathname === '/wiki' || location.pathname.startsWith('/wiki/')}
               />
               <NavItem to="/library" label={t('nav.library')} icon={<LibraryBigIcon />} active={location.pathname.startsWith('/library')} />
+              <NavItem to="/usage" label={t('nav.usage')} icon={<ChartColumnIcon />} active={location.pathname.startsWith('/usage')} />
               <NavItem to="/settings" label={t('nav.settings')} icon={<SettingsIcon />} active={location.pathname.startsWith('/settings')} />
             </SidebarMenu>
           </SidebarGroupContent>

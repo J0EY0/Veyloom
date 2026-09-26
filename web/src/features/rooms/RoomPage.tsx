@@ -18,6 +18,7 @@ import { ApprovalsPanel } from '@/features/approvals/ApprovalsPanel'
 import { ThreadPanel } from '@/features/threads/ThreadPanel'
 import { WikiView } from '@/features/wiki/WikiView'
 import { BranchesView } from '@/features/branches/BranchesView'
+import { TasksView } from '@/features/tasks/TasksView'
 import { TurnDrawer } from '@/features/turns/TurnDrawer'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
 import { useEscape } from '@/lib/useEscape'
@@ -48,6 +49,7 @@ export function RoomPage() {
   // The Wiki tab is this page too: its part of the address picks the page.
   const wikiMatch = useMatch('/rooms/:roomId/wiki/*')
   const branchesMatch = useMatch('/rooms/:roomId/branches')
+  const tasksMatch = useMatch('/rooms/:roomId/tasks/*')
   const projectId = room.data?.project_id ?? ''
   const wikiSpace = useMemo<WikiSpace>(() => ({ kind: 'project', projectId, roomId }), [projectId, roomId])
   const pendingCount = pending.data?.length ?? 0
@@ -172,7 +174,7 @@ export function RoomPage() {
         actions={
           <>
             <RoomMenu roomId={roomId} />
-            <RoomTabs roomId={roomId} view={wikiMatch ? 'wiki' : branchesMatch ? 'branches' : 'chat'} />
+            <RoomTabs roomId={roomId} view={wikiMatch ? 'wiki' : branchesMatch ? 'branches' : tasksMatch ? 'tasks' : 'chat'} />
           </>
         }
         trailing={
@@ -217,6 +219,8 @@ export function RoomPage() {
             <WikiView space={wikiSpace} rest={wikiMatch.params['*'] ?? ''} onOpenThread={openThread} />
           ) : branchesMatch ? (
             <BranchesView projectId={projectId} roomId={roomId} onOpenThread={openThread} />
+          ) : tasksMatch ? (
+            <TasksView roomId={roomId} chain={tasksMatch.params['*'] ?? ''} onOpenThread={openThread} />
           ) : (
             <>
               <div className="relative flex min-h-0 flex-1 flex-col">
