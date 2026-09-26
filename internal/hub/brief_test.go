@@ -175,6 +175,12 @@ func TestBrief_HeaderComesWithEveryBrief(t *testing.T) {
 		}
 	}
 
+	// The leader is marked, the member being briefed too.
+	st.project.LeaderID = "a2"
+	wantInOrder(t, build(t, st, in).Prompt, "- Claude (you): Architect\n", "- Codex (the leader): You implement what was designed.\n")
+	st.project.LeaderID = "a1"
+	wantInOrder(t, build(t, st, in).Prompt, "- Claude (you, the leader): Architect\n", "- Codex: You implement")
+
 	// No description: no empty part for it.
 	st.project.Description = "  "
 	if text := build(t, st, in).Prompt; strings.Contains(text, "About the project") {

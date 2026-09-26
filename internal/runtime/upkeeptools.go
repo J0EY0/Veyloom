@@ -57,8 +57,9 @@ var upkeepToolSpecs = []roomToolSpec{
 
 // optionalToolSpecs are the tools only some turns get, by ExtraTools: the
 // memory tools while the person uses a memory, the maintainer's for its
-// upkeep turns.
-var optionalToolSpecs = append(append([]roomToolSpec{}, memoryToolSpecs...), upkeepToolSpecs...)
+// upkeep turns, the leader's for its turns (design.md 5.21), and the one
+// members talk with for chat turns (5.22).
+var optionalToolSpecs = append(append(append(append([]roomToolSpec{}, memoryToolSpecs...), upkeepToolSpecs...), setupToolSpecs...), messageToolSpecs...)
 
 // isOptionalTool reports whether name is one of the tools only some turns
 // get.

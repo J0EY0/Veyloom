@@ -20,7 +20,7 @@ CREATE TABLE agents (
     -- Instructions given to every turn: who the agent is and how it should
     -- behave in the room.
     role_card         text        NOT NULL DEFAULT '',
-    permission_preset text        NOT NULL CHECK (permission_preset IN ('read_only', 'edit_with_approval', 'full_auto')),
+    permission_preset text        NOT NULL CHECK (permission_preset IN ('read_only', 'edit_with_approval', 'auto_review', 'full_auto')),
     -- Runtime-specific settings the machine passes through untouched.
     runtime_options   jsonb       NOT NULL DEFAULT '{}'::jsonb,
     -- The skills of the skill library a person installed for the agent, by
@@ -51,9 +51,22 @@ CREATE TABLE members (
     -- worktree: the member gets its own git worktree per room;
     -- shared: it works in the checkout directly.
     branch_mode         text        NOT NULL DEFAULT 'worktree' CHECK (branch_mode IN ('worktree', 'shared')),
+    -- The member's git worktree once made (design.md 5.21): its folder on
+    -- the machine, where in it the member works (the same place as its
+    -- checkout has in the repository), the branch checked out there, and
+    -- when it was got ready the way the project's leader wrote down. Made
+    -- once and kept: a rename changes none of it.
+    worktree_dir        text        NOT NULL DEFAULT '',
+    work_dir            text        NOT NULL DEFAULT '',
+    branch              text        NOT NULL DEFAULT '',
+    prepared_at         timestamptz,
+    -- The files of its work the chat was told another member's work
+    -- changed too (design.md 5.21): an overlap is said once, and again
+    -- only after it went away.
+    overlaps_noted      text[]      NOT NULL DEFAULT '{}',
     -- Per-member overrides; empty means "use the agent's".
     model               text        NOT NULL DEFAULT '',
-    permission_preset   text        NOT NULL DEFAULT '' CHECK (permission_preset IN ('', 'read_only', 'edit_with_approval', 'full_auto')),
+    permission_preset   text        NOT NULL DEFAULT '' CHECK (permission_preset IN ('', 'read_only', 'edit_with_approval', 'auto_review', 'full_auto')),
     -- Disabled members stay in the room for history but take no turns.
     enabled             boolean     NOT NULL DEFAULT true,
     created_at          timestamptz NOT NULL DEFAULT now(),
@@ -115,12 +128,41 @@ CREATE TABLE member_sessions (
 CREATE UNIQUE INDEX member_sessions_one_open ON member_sessions (member_id) WHERE ended_at IS NULL;
 CREATE INDEX member_sessions_by_member ON member_sessions (member_id, started_at DESC);
 
--- The member a person chose to keep the project's wiki (design.md 5.12):
--- it runs turns of its own, in the project's wiki topic. NULL is none, as
--- every project starts; taking the member out of the project clears it.
+-- The member a person chose to keep the project's wiki once its upkeep is
+-- on (design.md 5.12, 5.21): it runs turns of its own, in the project's
+-- wiki topic. NULL leaves it to the project's leader, as every project
+-- starts; taking the member out of the project clears it.
 ALTER TABLE projects ADD COLUMN wiki_maintainer_member_id uuid REFERENCES members (id) ON DELETE SET NULL;
 
+-- The member a person made the project's leader (design.md 5.21): it works
+-- in the checkout itself, sets the project up for the others' worktrees
+-- and keeps the wiki unless someone else was chosen to. NULL leaves it to
+-- the first member to have joined; taking the member out of the project
+-- clears it.
+ALTER TABLE projects ADD COLUMN leader_member_id uuid REFERENCES members (id) ON DELETE SET NULL;
+
+-- The project's leader as it stands: the member a person made it, or,
+-- when none was, the first of the current, enabled members to have joined
+-- (members.created_at is the clock, so the members a project starts with
+-- keep the order they were picked in). NULL when there is none.
+-- +goose StatementBegin
+CREATE FUNCTION project_leader_id(project uuid) RETURNS uuid
+LANGUAGE sql STABLE AS $$
+    SELECT m.id
+    FROM members m
+    JOIN rooms r ON r.id = m.room_id
+    JOIN projects p ON p.id = r.project_id
+    WHERE p.id = project
+      AND m.removed_at IS NULL
+      AND CASE WHEN p.leader_member_id IS NULL THEN m.enabled ELSE m.id = p.leader_member_id END
+    ORDER BY m.created_at, m.id
+    LIMIT 1
+$$;
+-- +goose StatementEnd
+
 -- +goose Down
+DROP FUNCTION project_leader_id(uuid);
+ALTER TABLE projects DROP COLUMN leader_member_id;
 ALTER TABLE projects DROP COLUMN wiki_maintainer_member_id;
 DROP TABLE member_sessions;
 DROP TABLE members;

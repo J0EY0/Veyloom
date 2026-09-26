@@ -26,6 +26,17 @@ CREATE TABLE approvals (
     -- their order, since jsonb would reorder them and a form's fields are
     -- shown in the order the server listed them.
     payload           json        NOT NULL,
+    -- What an allow can take in besides, for the rest of the turn, as the
+    -- runtime offered: rules such as Bash(go test *), a permission mode,
+    -- folders, or the same request again ({"rules": [...], "mode": ...,
+    -- "dirs": [...], "same": true}). NULL when it offered nothing.
+    similar_offer     jsonb,
+    -- How far a person's allow went (docs/design.md 4.6): this request
+    -- only; the like of it for the rest of the turn, as offered; the like
+    -- of it from now on, kept for the member in member_rules; or every
+    -- request the turn makes from here on.
+    scope             text        NOT NULL DEFAULT 'once'
+                      CHECK (scope IN ('once', 'similar', 'always', 'turn')),
     status            text        NOT NULL DEFAULT 'pending'
                       CHECK (status IN ('pending', 'allowed', 'denied', 'expired', 'cancelled')),
     -- The decider's note. On a denial it is shown to the agent.
@@ -37,7 +48,10 @@ CREATE TABLE approvals (
     decided_by        uuid        REFERENCES users (id),
     -- Empty when a person or the hub decided. A runtime that decided on its
     -- own names its reviewer here, such as codex_auto_review; such a row
-    -- is recorded already decided and nothing waits for it.
+    -- is recorded already decided and nothing waits for it. The hub names
+    -- itself the same way when it answered for a person: rule when the
+    -- member may always make the request (member_rules), turn when a
+    -- person let the rest of the turn through (decided_by is who).
     reviewer          text        NOT NULL DEFAULT '',
     -- What came with the decision: the answers to a question, the content
     -- of a form, or a reviewer's findings such as the risk it saw.
@@ -45,6 +59,25 @@ CREATE TABLE approvals (
     created_at        timestamptz NOT NULL DEFAULT now(),
     decided_at        timestamptz,
     UNIQUE (turn_id, request_id)
+);
+
+-- The kinds of request a member may always make without a person being
+-- asked (docs/design.md 4.6): a person allowed one, and the like of it from
+-- now on. Each runtime has its own syntax: Claude Code's permission rules,
+-- such as Bash(go test *), handed to it with --allowedTools; for Codex the
+-- leading words of a command as a JSON array, such as ["go","test"], which
+-- the hub matches itself.
+CREATE TABLE member_rules (
+    id          uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    member_id   uuid        NOT NULL REFERENCES members (id) ON DELETE CASCADE,
+    runtime     text        NOT NULL,
+    rule        text        NOT NULL,
+    -- The approval it was allowed with, and who allowed it: the account
+    -- lives in the state directory, not the users table (migration 00011).
+    approval_id uuid        REFERENCES approvals (id) ON DELETE SET NULL,
+    created_by  uuid,
+    created_at  timestamptz NOT NULL DEFAULT now(),
+    UNIQUE (member_id, runtime, rule)
 );
 
 -- What a room's UI shows as waiting for someone.
@@ -102,4 +135,5 @@ CREATE INDEX skill_trials_by_skill ON skill_trials (skill, started_at DESC);
 -- +goose Down
 DROP TABLE skill_trials;
 DROP TABLE wiki_reviews;
+DROP TABLE member_rules;
 DROP TABLE approvals;

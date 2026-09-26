@@ -1,6 +1,6 @@
 -- name: CreateTurn :one
-INSERT INTO turns (member_id, room_id, thread_id, trigger_message_id, machine_id, runtime, transcript_path, session_id, kind)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+INSERT INTO turns (member_id, room_id, thread_id, trigger_message_id, machine_id, runtime, transcript_path, session_id, kind, chain_message_id, woken_by_turn_id)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
 RETURNING *;
 
 -- name: FinishTurn :one
@@ -15,6 +15,7 @@ UPDATE turns SET
     output_tokens      = $9,
     files_changed      = $10,
     skills_used        = $11,
+    worked             = $12,
     ended_at           = now()
 WHERE id = $1
 RETURNING *;
@@ -47,7 +48,12 @@ SELECT * FROM turns WHERE room_id = $1 AND status = $2 ORDER BY started_at DESC 
 -- lists under each project while its members work.
 SELECT t.id AS thread_id, t.room_id, t.root_message_id, m.body AS root_body,
        array_agg(DISTINCT mb.display_name)::text[] AS members,
-       min(tu.started_at)::timestamptz AS started_at
+       min(tu.started_at)::timestamptz AS started_at,
+       -- What the topic was asked: the words that set its first turn off,
+       -- and the names of the room's members, whose @s lead them.
+       coalesce((SELECT a.body FROM turns ft JOIN messages a ON a.id = ft.trigger_message_id
+                 WHERE ft.thread_id = t.id ORDER BY ft.started_at LIMIT 1), '')::text AS ask,
+       coalesce((SELECT array_agg(rm.display_name) FROM members rm WHERE rm.room_id = t.room_id), '{}')::text[] AS names
 FROM turns tu
 JOIN threads t ON t.id = tu.thread_id
 JOIN messages m ON m.id = t.root_message_id
@@ -87,3 +93,28 @@ JOIN projects p ON p.id = r.project_id
 WHERE sqlc.arg(skill)::text = ANY (t.skills_used)
 ORDER BY t.started_at DESC, t.id
 LIMIT sqlc.arg(lim);
+
+-- name: CountChainWakes :one
+-- The turns agents woke in a piece of work, under way or over.
+SELECT count(*) FROM turns WHERE chain_message_id = $1 AND woken_by_turn_id IS NOT NULL;
+
+-- name: RecentChainWakes :many
+-- Whether the last turns agents woke in a piece of work to end did work,
+-- the latest first.
+SELECT worked FROM turns
+WHERE chain_message_id = $1 AND woken_by_turn_id IS NOT NULL AND ended_at IS NOT NULL
+ORDER BY ended_at DESC
+LIMIT $2;
+
+-- name: SetTurnTrust :one
+-- A person lets the rest of a running turn's requests through.
+UPDATE turns SET trusted_by = $2, trusted_at = now()
+WHERE id = $1 AND status = 'running'
+RETURNING *;
+
+-- name: ClearTurnTrust :one
+-- A person takes it back. A turn that ended trusted keeps who trusted it,
+-- as a record: nothing is let through once it is over.
+UPDATE turns SET trusted_by = NULL, trusted_at = NULL
+WHERE id = $1
+RETURNING *;

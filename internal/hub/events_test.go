@@ -79,3 +79,43 @@ func TestBroker_SlowSubscriberIsDroppedNotBlocked(t *testing.T) {
 	}
 	slow.Close() // harmless after being dropped
 }
+
+func TestBroker_WatchesEveryRoomForWhatItKeeps(t *testing.T) {
+	b := newBroker(2)
+	asks := b.subscribeWhere(func(ev Event) bool { return ev.Kind == EventApprovalRequested })
+	b.publish(Event{Kind: EventMessage, RoomID: "a"})
+	b.publish(Event{Kind: EventApprovalRequested, RoomID: "a"})
+	b.publish(Event{Kind: EventApprovalRequested, RoomID: "b"})
+	for _, room := range []string{"a", "b"} {
+		select {
+		case ev := <-asks.Events():
+			if ev.Kind != EventApprovalRequested || ev.RoomID != room {
+				t.Errorf("want room %s's request, got %+v", room, ev)
+			}
+		case <-time.After(time.Second):
+			t.Fatalf("room %s's request did not arrive", room)
+		}
+	}
+	select {
+	case ev := <-asks.Events():
+		t.Errorf("an event it does not keep arrived: %+v", ev)
+	default:
+	}
+	if b.subscribers("a") != 0 {
+		t.Error("watching every room is not subscribing to one")
+	}
+
+	// Falling behind drops it, as it does a room's subscriber.
+	for range 3 {
+		b.publish(Event{Kind: EventApprovalRequested, RoomID: "c"})
+	}
+	for range asks.Events() {
+	}
+	b.mu.Lock()
+	left := len(b.everywhere)
+	b.mu.Unlock()
+	if !asks.Lagged() || left != 0 {
+		t.Errorf("lagged %v, %d watching every room", asks.Lagged(), left)
+	}
+	asks.Close()
+}

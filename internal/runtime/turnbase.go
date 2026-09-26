@@ -100,7 +100,13 @@ func (t *turnBase) emit(ctx context.Context, ev Event) bool {
 // that needs the decision, which for a CLI is the one serving the CLI's
 // permission callback.
 func (t *turnBase) requestApproval(ctx context.Context, tool, input string) (Decision, error) {
-	return t.ask(ctx, ApprovalToolUse, tool, input)
+	return t.ask(ctx, ApprovalToolUse, tool, input, nil)
+}
+
+// requestApprovalOffering is requestApproval for a runtime that can take
+// in, with an allow, what similar says for the rest of the turn.
+func (t *turnBase) requestApprovalOffering(ctx context.Context, tool, input string, similar *Similar) (Decision, error) {
+	return t.ask(ctx, ApprovalToolUse, tool, input, similar)
 }
 
 // ask is requestApproval for any kind of request: a question, a form, a
@@ -108,7 +114,7 @@ func (t *turnBase) requestApproval(ctx context.Context, tool, input string) (Dec
 // request, the turn ends, or ctx ends. A ctx that ends while the turn goes
 // on means the runtime took the request back, and people are told so they
 // stop being asked.
-func (t *turnBase) ask(ctx context.Context, kind, tool, input string) (Decision, error) {
+func (t *turnBase) ask(ctx context.Context, kind, tool, input string, similar *Similar) (Decision, error) {
 	id := randomHex(8)
 	ch := make(chan Decision, 1)
 	t.mu.Lock()
@@ -120,7 +126,7 @@ func (t *turnBase) ask(ctx context.Context, kind, tool, input string) (Decision,
 	}
 	// Shown for as long as the turn lives, even when ctx is already over:
 	// people then see the request, and then that it was taken back.
-	if !t.emit(t.life, Event{Kind: EventApprovalRequest, ApprovalID: id, ApprovalKind: kind, Tool: tool, Input: input}) {
+	if !t.emit(t.life, Event{Kind: EventApprovalRequest, ApprovalID: id, ApprovalKind: kind, Tool: tool, Input: input, Similar: similar}) {
 		t.forget(id)
 		return Decision{}, ErrTurnCancelled
 	}
@@ -129,6 +135,8 @@ func (t *turnBase) ask(ctx context.Context, kind, tool, input string) (Decision,
 		if !ok {
 			return Decision{}, ErrTurnCancelled
 		}
+		// Only what was offered can be taken in.
+		d.Similar = d.Similar && d.Allow && similar != nil
 		return d, nil
 	case <-ctx.Done():
 		if t.forget(id) && t.life.Err() == nil {

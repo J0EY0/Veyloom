@@ -69,7 +69,7 @@ func (t *turnBase) askQuestions(ctx context.Context, tool string, questions []Qu
 	if err != nil {
 		return Decision{}, err
 	}
-	return t.ask(ctx, ApprovalQuestion, tool, string(input))
+	return t.ask(ctx, ApprovalQuestion, tool, string(input), nil)
 }
 
 // answerText joins the answers to one question the way a runtime that takes

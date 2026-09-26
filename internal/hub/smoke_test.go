@@ -51,7 +51,9 @@ func newSmokeRoom(t *testing.T, runners map[string]runtime.Runner, agent store.N
 
 	files := t.TempDir()
 	h := New(s, Config{TranscriptDir: t.TempDir(), WikiDir: t.TempDir(), AttachmentDir: files, HeartbeatInterval: time.Hour}, opts...)
-	w := machine.New(machine.Config{Name: "laptop", ToolDir: t.TempDir()}, machine.NewDiscovery(nil, time.Second), &machine.MemoryIdentity{}, runners)
+	// Worktrees, for members other than the leader, go next to the project.
+	worktrees := filepath.Join(filepath.Dir(dir), "worktrees")
+	w := machine.New(machine.Config{Name: "laptop", ToolDir: t.TempDir(), WorktreeDir: worktrees}, machine.NewDiscovery(nil, time.Second), &machine.MemoryIdentity{}, runners)
 	hubEnd, machineEnd := protocol.Pipe()
 	go h.Serve(ctx, hubEnd)
 	go w.Run(ctx, machineEnd)
@@ -67,7 +69,7 @@ func newSmokeRoom(t *testing.T, runners map[string]runtime.Runner, agent store.N
 	}
 	agent.MachineID = h.Machines()[0].ID
 	if agent.Runtime == "codex" {
-		agent.RuntimeOptions = withoutCodexMemories(agent.RuntimeOptions)
+		agent = forCodexSmoke(agent)
 	}
 	created, err := s.CreateAgent(ctx, agent)
 	if err != nil {
@@ -94,6 +96,23 @@ func withoutCodexMemories(options map[string]any) map[string]any {
 	extra, _ := out["extra_args"].([]any)
 	out["extra_args"] = append([]any{"--disable", "memories"}, extra...)
 	return out
+}
+
+// forCodexSmoke readies a Codex agent for a smoke test: its memories left
+// alone (withoutCodexMemories), and, when they are set, the model
+// VEYLOOM_CODEX_SMOKE_MODEL names and the reasoning effort
+// VEYLOOM_CODEX_SMOKE_EFFORT names in place of the person's defaults, so a
+// smoke test can run on a model with quota left.
+func forCodexSmoke(agent store.NewAgent) store.NewAgent {
+	agent.RuntimeOptions = withoutCodexMemories(agent.RuntimeOptions)
+	if model := os.Getenv("VEYLOOM_CODEX_SMOKE_MODEL"); model != "" {
+		agent.Model = model
+	}
+	if effort := os.Getenv("VEYLOOM_CODEX_SMOKE_EFFORT"); effort != "" {
+		extra, _ := agent.RuntimeOptions["extra_args"].([]any)
+		agent.RuntimeOptions["extra_args"] = append(extra, "-c", `model_reasoning_effort="`+effort+`"`)
+	}
+	return agent
 }
 
 // say posts body from the person, mentioning the member, in the thread or,
@@ -134,7 +153,7 @@ func (r *smokeRoom) decideAllWith(n int, decide func(store.Approval) runtime.Dec
 			r.t.Fatal(err)
 		}
 		for _, a := range pending {
-			d, err := r.h.DecideApproval(r.ctx, a.ID, r.user.ID, decide(a))
+			d, err := r.h.DecideApproval(r.ctx, a.ID, r.user.ID, decide(a), "")
 			if err != nil {
 				r.t.Fatal(err)
 			}
@@ -223,7 +242,7 @@ func (r *smokeRoom) allowIn(roomID string, asked *[]string) func() {
 			r.t.Fatal(err)
 		}
 		for _, a := range pending {
-			if _, err := r.h.DecideApproval(r.ctx, a.ID, r.user.ID, runtime.Decision{Allow: true}); err != nil {
+			if _, err := r.h.DecideApproval(r.ctx, a.ID, r.user.ID, runtime.Decision{Allow: true}, ""); err != nil {
 				r.t.Fatal(err)
 			}
 			*asked = append(*asked, string(a.Kind)+" "+excerpt(string(a.Input), 300))
@@ -462,7 +481,7 @@ func (r *smokeRoom) upkeepRound(n int) store.Turn {
 	r.waitDone(n + 1)
 
 	manual := store.UpkeepManual
-	if _, err := r.s.UpdateProject(r.ctx, r.room.ProjectID, store.ProjectPatch{WikiMaintainer: &r.member.ID, WikiMaintainerTrigger: &manual}); err != nil {
+	if _, err := r.s.UpdateProject(r.ctx, r.room.ProjectID, store.ProjectPatch{WikiUpkeep: &upkeepOn, WikiMaintainer: &r.member.ID, WikiMaintainerTrigger: &manual}); err != nil {
 		r.t.Fatal(err)
 	}
 	if _, err := r.h.StartUpkeep(r.ctx, r.room.ProjectID); err != nil {

@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/J0EY0/veyloom/internal/runtime"
+	"github.com/J0EY0/veyloom/internal/worktree"
 )
 
 func TestMarshalRoundTrip(t *testing.T) {
@@ -34,6 +35,12 @@ func TestMarshalRoundTrip(t *testing.T) {
 		RoomQuery{TurnID: "t1", QueryID: "q1", Query: runtime.RoomQuery{Tool: runtime.RoomToolReadTopic, Topic: 12, Before: 340, Limit: 20}},
 		RoomResult{TurnID: "t1", QueryID: "q1", Text: "Topic #12 ..."},
 		RoomResult{TurnID: "t1", QueryID: "q2", Error: "topic #99: not found"},
+		WorkspaceRequest{RequestID: "w1", Op: WorkspaceCreate, Checkout: "/src/app", Name: "app/coder", Branch: "veyloom/coder"},
+		WorkspaceRequest{RequestID: "w2", Op: WorkspacePrepare, Checkout: "/src/app", WorkDir: "/wt/app/coder", Copy: []string{".env"}, Run: "npm ci"},
+		WorkspaceResult{RequestID: "w1", Workspace: &worktree.Workspace{Dir: "/wt/app/coder", Branch: "veyloom/coder", WorkDir: "/wt/app/coder", Base: "abc"}},
+		WorkspaceResult{RequestID: "w3", Status: &worktree.Status{Branch: "veyloom/coder", Base: "main", Ahead: 2, Files: []worktree.Change{{Path: "a.go", Status: "M", Added: 3, Uncommitted: true}}, Uncommitted: 1}},
+		WorkspaceResult{RequestID: "w4", Merge: &worktree.MergeResult{Conflicts: []string{"a.go"}}},
+		WorkspaceResult{RequestID: "w5", Error: "the checkout is on no branch", Code: WorkspaceDetached},
 	}
 
 	for _, want := range messages {
@@ -56,7 +63,7 @@ func TestMarshalRoundTrip(t *testing.T) {
 func TestMarshal_CoversEveryKind(t *testing.T) {
 	// Every kind constant must have a decoder, otherwise a message could be
 	// sent but never received.
-	for _, kind := range []Kind{KindHello, KindHeartbeat, KindRuntimesReport, KindWelcome, KindProbe, KindStartTurn, KindCancelTurn, KindTurnEvent, KindTurnDone, KindApprovalRequest, KindApprovalDecision} {
+	for _, kind := range []Kind{KindHello, KindHeartbeat, KindRuntimesReport, KindWelcome, KindProbe, KindStartTurn, KindCancelTurn, KindTurnEvent, KindTurnDone, KindApprovalRequest, KindApprovalDecision, KindRoomQuery, KindRoomResult, KindWorkspaceRequest, KindWorkspaceResult} {
 		if _, ok := decoders[kind]; !ok {
 			t.Errorf("no decoder registered for %q", kind)
 		}

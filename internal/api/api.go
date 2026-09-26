@@ -16,6 +16,7 @@ import (
 	"github.com/J0EY0/veyloom/internal/hub"
 	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
+	"github.com/J0EY0/veyloom/internal/worktree"
 )
 
 // Discoverer runs runtime discovery on this machine.
@@ -40,6 +41,34 @@ type ProjectStore interface {
 	CreateRoom(ctx context.Context, projectID, name string) (store.Room, error)
 	GetRoom(ctx context.Context, id string) (store.Room, error)
 	ListRooms(ctx context.Context, projectID string) ([]store.Room, error)
+}
+
+// Worktrees is what the API asks of the members' git worktrees
+// (docs/design.md 5.21); *hub.Hub.
+type Worktrees interface {
+	// ReleaseWorktree takes a removed member's worktree away, its work kept
+	// on its branch.
+	ReleaseWorktree(member store.Member)
+	Branches(ctx context.Context, projectID string) (hub.Branches, error)
+	DiffOf(ctx context.Context, memberID string) (patch string, cut bool, err error)
+	Merge(ctx context.Context, memberID, message string, leave []string) (worktree.MergeResult, error)
+	SyncMember(ctx context.Context, memberID string) (worktree.SyncResult, error)
+	// SetAside gives up what a member's worktree has, kept in git under
+	// the ref it returns, and starts the worktree over.
+	SetAside(ctx context.Context, memberID string) (string, error)
+	// AbortMerge gives up a merge a member left under way in its worktree.
+	AbortMerge(ctx context.Context, memberID string) error
+	// CheckoutDiff is the patch of what the project's checkout changed and
+	// did not commit; CommitCheckout commits the changes to the files a
+	// person picked there.
+	CheckoutDiff(ctx context.Context, projectID string) (patch string, cut bool, err error)
+	CommitCheckout(ctx context.Context, projectID, message string, paths []string) (string, error)
+	// StartSetup has the leader set the project up again;
+	// SettleWorkspaceSteps adopts the steps it wrote down, or turns them
+	// down; WorkspaceStepsWritten says a person wrote them.
+	StartSetup(ctx context.Context, projectID string) error
+	SettleWorkspaceSteps(ctx context.Context, projectID string, adopt bool) error
+	WorkspaceStepsWritten(projectID string)
 }
 
 // Wikis is what the API asks of the project wikis; *hub.Hub.
@@ -105,6 +134,8 @@ type Deps struct {
 	Agents    AgentStore
 	Turns     TurnStore
 	Approvals ApprovalStore
+	// Rules keeps what people allowed members always; nil keeps none.
+	Rules RuleStore
 	// Chat posts user messages, controls turns, settles approvals and
 	// streams room events; it is the hub.
 	Chat Chat
@@ -125,6 +156,9 @@ type Deps struct {
 	// Prefs keeps the account's memory switches (docs/design.md 5.19).
 	// Nil means there are none to change.
 	Prefs MemoryPrefsStore
+	// Worktrees looks after the members' git worktrees (docs/design.md
+	// 5.21). Nil leaves them be.
+	Worktrees Worktrees
 	// Logger receives unexpected errors. nil means slog.Default().
 	Logger *slog.Logger
 }
@@ -182,6 +216,8 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/v1/users", h.listUsers)
 	mux.HandleFunc("GET /api/v1/users/{id}", h.getUser)
 	mux.HandleFunc("GET /api/v1/users/{id}/inbox", h.userInbox)
+	mux.HandleFunc("GET /api/v1/users/{id}/inbox/events", h.inboxEvents)
+	mux.HandleFunc("POST /api/v1/users/{id}/inbox/read", h.readInbox)
 
 	mux.HandleFunc("POST /api/v1/rooms/{id}/messages", h.postMessage)
 	mux.HandleFunc("GET /api/v1/rooms/{id}/messages", h.listRoomMessages)
@@ -205,9 +241,14 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("DELETE /api/v1/members/{id}", h.removeMember)
 	mux.HandleFunc("GET /api/v1/members/{id}/session", h.getMemberSession)
 	mux.HandleFunc("DELETE /api/v1/members/{id}/session", h.resetMemberSession)
+	mux.HandleFunc("GET /api/v1/members/{id}/rules", h.listMemberRules)
+	mux.HandleFunc("DELETE /api/v1/members/{id}/rules/{rule}", h.deleteMemberRule)
 
 	mux.HandleFunc("GET /api/v1/turns/{id}", h.getTurn)
 	mux.HandleFunc("POST /api/v1/turns/{id}/cancel", h.cancelTurn)
+	mux.HandleFunc("DELETE /api/v1/turns/{id}/trust", h.untrustTurn)
+	mux.HandleFunc("POST /api/v1/relays/{id}/continue", h.continueRelay)
+	mux.HandleFunc("GET /api/v1/threads/{id}/relay-holds", h.threadRelayHolds)
 	mux.HandleFunc("GET /api/v1/turns/{id}/transcript", h.turnTranscript)
 	mux.HandleFunc("GET /api/v1/rooms/{id}/turns", h.listRoomTurns)
 	mux.HandleFunc("GET /api/v1/topics", h.listTopics)
@@ -230,6 +271,16 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/v1/projects/{id}/wiki/verify", h.verifyWikiPage)
 	mux.HandleFunc("POST /api/v1/projects/{id}/wiki/resident", h.setWikiResident)
 	mux.HandleFunc("POST /api/v1/projects/{id}/wiki/question", h.wikiQuestion)
+	mux.HandleFunc("GET /api/v1/projects/{id}/branches", h.branches)
+	mux.HandleFunc("GET /api/v1/projects/{id}/checkout/diff", h.checkoutDiff)
+	mux.HandleFunc("POST /api/v1/projects/{id}/checkout/commit", h.commitCheckout)
+	mux.HandleFunc("POST /api/v1/projects/{id}/setup", h.startSetup)
+	mux.HandleFunc("POST /api/v1/projects/{id}/workspace/pending", h.settlePendingSteps)
+	mux.HandleFunc("GET /api/v1/members/{id}/diff", h.memberDiff)
+	mux.HandleFunc("POST /api/v1/members/{id}/merge", h.mergeMember)
+	mux.HandleFunc("POST /api/v1/members/{id}/sync", h.syncMember)
+	mux.HandleFunc("POST /api/v1/members/{id}/merge/abort", h.abortMerge)
+	mux.HandleFunc("POST /api/v1/members/{id}/set-aside", h.setAside)
 	mux.HandleFunc("GET /api/v1/projects/{id}/wiki/maintainer", h.upkeepStatus)
 	mux.HandleFunc("POST /api/v1/projects/{id}/wiki/maintain", h.startUpkeep)
 	mux.HandleFunc("GET /api/v1/projects/{id}/memory", h.projectMemory)

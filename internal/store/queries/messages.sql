@@ -47,7 +47,8 @@ RETURNING *;
 
 -- name: ThreadSummaries :many
 -- What the room timeline shows under each topic root: reply count, last
--- reply time, and the latest turn.
+-- reply time, the latest turn, and, under the topic where the latest turn's
+-- piece of work began, that piece of work across all its topics.
 SELECT t.root_message_id,
        t.id AS thread_id,
        t.number AS thread_number,
@@ -55,15 +56,51 @@ SELECT t.root_message_id,
        (SELECT max(m.created_at) FROM messages m WHERE m.thread_id = t.id)::timestamptz AS last_reply_at,
        (SELECT count(*) FROM turns tu WHERE tu.thread_id = t.id) AS turn_count,
        coalesce(lt.id::text, '')::text AS last_turn_id,
+       coalesce(lt.member_id::text, '')::text AS last_turn_member_id,
        coalesce(lt.status, '') AS last_turn_status,
        coalesce(lt.error, '') AS last_turn_error,
        lt.started_at AS last_turn_started_at,
-       lt.ended_at AS last_turn_ended_at
+       lt.ended_at AS last_turn_ended_at,
+       coalesce(w.chain::text, '')::text AS work_chain,
+       coalesce(w.turns, 0)::int AS work_turns,
+       w.started_at::timestamptz AS work_started_at,
+       w.ended_at::timestamptz AS work_ended_at,
+       coalesce(w.running, false)::bool AS work_running
 FROM threads t
 LEFT JOIN LATERAL (
     SELECT * FROM turns tu WHERE tu.thread_id = t.id ORDER BY tu.started_at DESC LIMIT 1
 ) lt ON true
+LEFT JOIN LATERAL (
+    SELECT c.chain_message_id AS chain,
+           count(*) AS turns,
+           min(c.started_at) AS started_at,
+           CASE WHEN bool_or(c.ended_at IS NULL) THEN NULL ELSE max(c.ended_at) END AS ended_at,
+           bool_or(c.status = 'running') AS running
+    FROM turns c
+    WHERE c.chain_message_id = lt.chain_message_id
+    GROUP BY c.chain_message_id
+    HAVING (SELECT o.thread_id FROM turns o WHERE o.chain_message_id = lt.chain_message_id ORDER BY o.started_at LIMIT 1) = t.id
+) w ON true
 WHERE t.root_message_id = ANY($1::uuid[]);
+
+-- name: ChainWork :one
+-- A piece of work across its topics: the topic it began in, how many turns
+-- it took, when it began and, once none runs, when it ended, and the
+-- members who took turns in it, in the order they first did.
+WITH c AS (
+    SELECT * FROM turns WHERE chain_message_id = $1
+), origin AS (
+    SELECT thread_id FROM c ORDER BY started_at LIMIT 1
+)
+SELECT (SELECT thread_id FROM origin)::uuid AS thread_id,
+       coalesce((SELECT th.number FROM threads th WHERE th.id = (SELECT thread_id FROM origin)), 0)::int AS thread_number,
+       (SELECT count(*) FROM c)::int AS turns,
+       (SELECT min(started_at) FROM c)::timestamptz AS started_at,
+       (SELECT CASE WHEN bool_or(ended_at IS NULL) THEN NULL ELSE max(ended_at) END FROM c)::timestamptz AS ended_at,
+       coalesce((SELECT bool_or(status = 'running') FROM c), false)::bool AS running,
+       coalesce((SELECT array_agg(x.member_id ORDER BY x.first) FROM (
+           SELECT member_id, min(started_at) AS first FROM c GROUP BY member_id
+       ) x), '{}')::uuid[] AS members;
 
 -- name: ListThreadMessagesBefore :many
 -- The most recent replies in a thread, newest first; callers reverse the
@@ -75,13 +112,34 @@ LIMIT $3;
 
 -- name: ListUserMentions :many
 -- Messages that mention one user, newest first, with the names the inbox
--- shows so it needs no second lookup.
-SELECT m.*, r.name AS room_name, p.name AS project_name, coalesce(u.name, mb.display_name, '')::text AS sender_name
+-- shows so it needs no second lookup, and whether the user read them.
+SELECT m.*, r.name AS room_name, p.name AS project_name, coalesce(u.name, mb.display_name, '')::text AS sender_name,
+       (ir.message_id IS NOT NULL)::boolean AS read
 FROM messages m
 JOIN rooms r ON r.id = m.room_id
 JOIN projects p ON p.id = r.project_id
 LEFT JOIN users u ON u.id = m.user_id
 LEFT JOIN members mb ON mb.id = m.member_id
-WHERE m.mentions @> $1::jsonb AND m.seq < $2
+LEFT JOIN inbox_reads ir ON ir.message_id = m.id AND ir.user_id = sqlc.arg('user_id')
+WHERE m.mentions @> sqlc.arg('needle')::jsonb AND m.seq < sqlc.arg('before')
 ORDER BY m.seq DESC
-LIMIT $3;
+LIMIT sqlc.arg('max');
+
+-- name: CountUnreadMentions :one
+-- How many of the messages that mention one user they have not read.
+SELECT count(*) FROM messages m
+WHERE m.mentions @> sqlc.arg('needle')::jsonb
+  AND NOT EXISTS (SELECT 1 FROM inbox_reads ir WHERE ir.user_id = sqlc.arg('user_id') AND ir.message_id = m.id);
+
+-- name: MarkMentionsRead :execrows
+-- Marks read, of the messages that mention one user, those named, those in
+-- a topic (its root and replies), or all up to a seq; zero or empty picks
+-- none by that way. How many were not read before.
+INSERT INTO inbox_reads (user_id, message_id)
+SELECT sqlc.arg('user_id'), m.id FROM messages m
+WHERE m.mentions @> sqlc.arg('needle')::jsonb
+  AND (m.id = ANY (sqlc.arg('ids')::uuid[])
+       OR m.thread_id = sqlc.narg('thread_id')
+       OR m.id = (SELECT t.root_message_id FROM threads t WHERE t.id = sqlc.narg('thread_id'))
+       OR m.seq <= sqlc.arg('up_to'))
+ON CONFLICT DO NOTHING;

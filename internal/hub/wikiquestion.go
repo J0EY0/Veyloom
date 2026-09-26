@@ -7,9 +7,9 @@ import (
 )
 
 // A person's doubt about a page of the project's wiki (docs/design.md
-// 5.15): it is put in the wiki topic, to the wiki maintainer, or with none
-// to the member that worked in the chat last, who checks the page against
-// the code, or asks, and sets it right.
+// 5.15): it is put in the wiki topic, to the wiki maintainer while upkeep
+// is on, or else to the member that worked in the chat last, who checks
+// the page against the code, or asks, and sets it right.
 
 // WikiQuestion is where a question about a page goes: the wiki topic, and
 // the member to ask there.
@@ -41,21 +41,20 @@ func (h *Hub) WikiQuestion(ctx context.Context, projectID string) (WikiQuestion,
 }
 
 // whoAnswers is the member a question about the project's wiki goes to:
-// its maintainer; else the member whose turn in the chat was the latest;
-// else the first member there is. Only members that are in and on count.
+// its maintainer, while upkeep is on; else the member whose turn in the
+// chat was the latest; else the first member there is. Only members that
+// are in and on count.
 func (h *Hub) whoAnswers(ctx context.Context, project store.Project) (store.Member, error) {
 	usable := func(m store.Member) bool { return m.Enabled && !m.Removed() }
-	if id := project.WikiMaintainerMemberID; id != "" {
-		if m, err := h.store.GetMember(ctx, id); err == nil && usable(m) {
-			return m, nil
-		}
+	if m, err := h.keeper(ctx, project); err == nil {
+		return m, nil
 	}
 	turns, err := h.store.ListRoomTurns(ctx, project.MainRoomID, turnsLooked)
 	if err != nil {
 		return store.Member{}, err
 	}
 	for _, t := range turns {
-		if t.Kind == store.TurnUpkeep {
+		if t.Kind != store.TurnChat {
 			continue
 		}
 		if m, err := h.store.GetMember(ctx, t.MemberID); err == nil && usable(m) {

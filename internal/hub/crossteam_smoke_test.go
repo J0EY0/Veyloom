@@ -147,7 +147,7 @@ func crossTeam(t *testing.T, runners map[string]runtime.Runner, agent store.NewA
 
 	// The owning team's maintainer is told of it and reads it.
 	manual := store.UpkeepManual
-	if _, err := r.s.UpdateProject(r.ctx, owner.ID, store.ProjectPatch{WikiMaintainer: &r.member.ID, WikiMaintainerTrigger: &manual}); err != nil {
+	if _, err := r.s.UpdateProject(r.ctx, owner.ID, store.ProjectPatch{WikiUpkeep: &upkeepOn, WikiMaintainer: &r.member.ID, WikiMaintainerTrigger: &manual}); err != nil {
 		t.Fatal(err)
 	}
 	status, err := r.h.UpkeepStatus(r.ctx, owner.ID)

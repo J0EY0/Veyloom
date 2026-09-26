@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 	"unicode/utf8"
 )
@@ -29,11 +30,24 @@ var ErrTurnCancelled = errors.New("runtime: turn cancelled")
 //	tool     bool    emit a tool_call / tool_result pair first
 //	approval bool    ask permission to run a command before replying; if
 //	                 denied, the reply reports the denial message instead
+//	approvals number  with approval: ask this many times over, and reply
+//	                 with how many were allowed
+//	together bool    with approvals: ask them all at once, as a runtime
+//	                 making tool calls side by side
+//	similar  []string with approval: offer these rules with the request,
+//	                 as Claude Code does; with one of them among the turn's
+//	                 allowed rules, the request goes through unasked
+//	prefix   []string with approval: offer whatever starts with these
+//	                 words, as Codex does; allowed always or for the rest of
+//	                 the turn, the request is settled as the rule's
 //	fail_on_resume bool  fail at once, before any event, whenever the turn
 //	                 resumes a session: a session that will not resume
 //	failure  string  the FailureKind reported with either kind of failure
 //	compact  bool    compact the session before replying
 //	changes  []string report these files as written, before replying
+//	write    []string write these files for real, relative to the working
+//	                 directory, each with a line of its own, and report
+//	                 them as written, before replying
 //	use_skill string  read this skill's SKILL.md from the turn's skills, as
 //	                 a runtime does when a task calls for the skill, and
 //	                 reply with its first line after the frontmatter
@@ -49,6 +63,10 @@ var ErrTurnCancelled = errors.New("runtime: turn cancelled")
 //	form     string  have a form filled in with this message (a name, a
 //	                 size, a count and a yes-or-no), then reply with it
 //	link     string  have this link opened, then reply with whether it was
+//	quiet    bool    say nothing after the tools: the turn's last text is
+//	                 its preamble
+//	summary_reply string  in a turn summing up the work it handed on, reply
+//	                 with this and do nothing else
 //	withdraw_ms number  ask permission to run a command, take the request
 //	                 back after this long unless answered, and reply with
 //	                 what became of it
@@ -94,6 +112,15 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 		t.finish(ctx, Result{}, ErrTurnCancelled)
 		return
 	}
+	if text := optString(spec.Options, "summary_reply"); text != "" && strings.Contains(spec.Prompt, HandedOnHeading) {
+		// Summing up the work it handed on: said, and nothing more done.
+		if !t.emit(ctx, Event{Kind: EventText, Text: text}) {
+			t.finish(ctx, Result{}, ErrTurnCancelled)
+			return
+		}
+		t.finish(ctx, Result{Output: text, SessionRef: session}, nil)
+		return
+	}
 	if optBool(spec.Options, "tool") {
 		// A preamble is text said before the tool runs, so a turn has two
 		// text segments around a tool call, as real agents do.
@@ -117,6 +144,23 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: "write_file", Input: path}) ||
 			!t.emit(ctx, Event{Kind: EventFileChanged, Path: path}) ||
 			!t.emit(ctx, Event{Kind: EventToolResult, Tool: "write_file", Text: "ok"}) {
+			t.finish(ctx, Result{}, ErrTurnCancelled)
+			return
+		}
+	}
+	for _, path := range optStrings(spec.Options, "write") {
+		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: "write_file", Input: path}) {
+			t.finish(ctx, Result{}, ErrTurnCancelled)
+			return
+		}
+		result := "ok"
+		if err := writeInto(spec.WorkDir, path); err != nil {
+			result = "error: " + err.Error()
+		} else if !t.emit(ctx, Event{Kind: EventFileChanged, Path: path}) {
+			t.finish(ctx, Result{}, ErrTurnCancelled)
+			return
+		}
+		if !t.emit(ctx, Event{Kind: EventToolResult, Tool: "write_file", Text: result}) {
 			t.finish(ctx, Result{}, ErrTurnCancelled)
 			return
 		}
@@ -247,19 +291,10 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 		}
 	}
 	if optBool(spec.Options, "approval") {
-		d, err := t.requestApproval(ctx, fakeApprovalTool, fakeApprovalInput)
-		if err != nil {
+		var err error
+		if reply, err = t.approve(ctx, spec, reply); err != nil {
 			t.finish(ctx, Result{}, err)
 			return
-		}
-		if d.Allow {
-			if !t.emit(ctx, Event{Kind: EventToolCall, Tool: fakeApprovalTool, Input: fakeApprovalInput}) ||
-				!t.emit(ctx, Event{Kind: EventToolResult, Tool: fakeApprovalTool, Text: "ok"}) {
-				t.finish(ctx, Result{}, ErrTurnCancelled)
-				return
-			}
-		} else {
-			reply = "Denied: " + d.Message
 		}
 	}
 	if delay := optDuration(spec.Options, "delay_ms"); delay > 0 {
@@ -276,6 +311,11 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 		return
 	}
 
+	if optBool(spec.Options, "quiet") {
+		t.finish(ctx, Result{SessionRef: session}, nil)
+		return
+	}
+
 	// Two chunks so consumers see that text arrives incrementally.
 	half := len(reply) / 2
 	if !t.emit(ctx, Event{Kind: EventText, Text: reply[:half]}) || !t.emit(ctx, Event{Kind: EventText, Text: reply[half:]}) {
@@ -286,6 +326,102 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 	// Characters stand in for tokens: the prompt as input, the reply as output.
 	usage := Usage{InputTokens: int64(len([]rune(spec.Prompt))), OutputTokens: int64(len([]rune(reply)))}
 	t.finish(ctx, Result{Output: reply, SessionRef: session, Usage: usage}, nil)
+}
+
+// approve plays the approval option: the same command asked for as many
+// times as the approvals option says, each settled by a rule when one
+// covers it and by people otherwise. It returns the reply as it then
+// stands: the denial message, or how the command was allowed.
+func (t *fakeTurn) approve(ctx context.Context, spec TurnSpec, reply string) (string, error) {
+	times := max(int(optFloat(spec.Options, "approvals")), 1)
+	rules, prefix := optStrings(spec.Options, "similar"), optStrings(spec.Options, "prefix")
+	var offer *Similar
+	if len(rules) > 0 || len(prefix) > 0 {
+		offer = &Similar{Rules: rules, Prefix: prefix}
+	}
+	standing := make(map[string]bool, len(spec.AllowedRules))
+	for _, rule := range spec.AllowedRules {
+		standing[rule] = true
+	}
+	// Like Claude Code, a rule of its own lets the command through unasked;
+	// like the Codex runner, a prefix does and says so.
+	unasked := false
+	for _, rule := range rules {
+		unasked = unasked || standing[rule]
+	}
+	prefixed := false
+	if len(prefix) > 0 {
+		key, _ := json.Marshal(prefix)
+		prefixed = standing[string(key)]
+	}
+
+	if optBool(spec.Options, "together") && !unasked && !prefixed {
+		return t.approveTogether(ctx, times, offer)
+	}
+	allowed := 0
+	for range times {
+		switch {
+		case unasked:
+			reply = "Allowed by a rule"
+		case prefixed:
+			detail, _ := json.Marshal(map[string]any{"prefix": prefix})
+			if !t.reviewed(ctx, fakeApprovalTool, fakeApprovalInput, ReviewerRule, VerdictAllowed, "", detail) {
+				return reply, ErrTurnCancelled
+			}
+			reply = "Allowed by a rule"
+		default:
+			d, err := t.requestApprovalOffering(ctx, fakeApprovalTool, fakeApprovalInput, offer)
+			if err != nil {
+				return reply, err
+			}
+			if !d.Allow {
+				reply = "Denied: " + d.Message
+				continue
+			}
+			if d.Similar {
+				reply = "Allowed, and the like of it"
+				unasked, prefixed = len(rules) > 0, len(prefix) > 0
+			}
+		}
+		allowed++
+		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: fakeApprovalTool, Input: fakeApprovalInput}) ||
+			!t.emit(ctx, Event{Kind: EventToolResult, Tool: fakeApprovalTool, Text: "ok"}) {
+			return reply, ErrTurnCancelled
+		}
+	}
+	if times > 1 {
+		reply = fmt.Sprintf("Allowed %d of %d", allowed, times)
+	}
+	return reply, nil
+}
+
+// approveTogether asks for the command times over, all at once, and waits
+// for every answer.
+func (t *fakeTurn) approveTogether(ctx context.Context, times int, offer *Similar) (string, error) {
+	decisions := make([]Decision, times)
+	errs := make([]error, times)
+	var wg sync.WaitGroup
+	for i := range times {
+		wg.Go(func() {
+			decisions[i], errs[i] = t.requestApprovalOffering(ctx, fakeApprovalTool, fakeApprovalInput, offer)
+		})
+	}
+	wg.Wait()
+	allowed := 0
+	for i, d := range decisions {
+		if errs[i] != nil {
+			return "", errs[i]
+		}
+		if !d.Allow {
+			continue
+		}
+		allowed++
+		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: fakeApprovalTool, Input: fakeApprovalInput}) ||
+			!t.emit(ctx, Event{Kind: EventToolResult, Tool: fakeApprovalTool, Text: "ok"}) {
+			return "", ErrTurnCancelled
+		}
+	}
+	return fmt.Sprintf("Allowed %d of %d", allowed, times), nil
 }
 
 // What the fake runtime asks permission for when the approval option is set,
@@ -310,6 +446,19 @@ const fakeFormSchema = `{"type":"object","properties":{` +
 func lastLine(s string) string {
 	lines := strings.Split(strings.TrimSpace(s), "\n")
 	return strings.TrimSpace(lines[len(lines)-1])
+}
+
+// writeInto writes a file at path inside dir, a line in it unlike any
+// written before, so every write is a change.
+func writeInto(dir, path string) error {
+	if dir == "" || filepath.IsAbs(path) || !filepath.IsLocal(path) {
+		return fmt.Errorf("%q is not a path inside the working directory", path)
+	}
+	full := filepath.Join(dir, path)
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(full, []byte("written in a fake turn "+randomHex(4)+"\n"), 0o644)
 }
 
 func optString(o map[string]any, key string) string {

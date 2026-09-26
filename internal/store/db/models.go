@@ -24,22 +24,24 @@ type Agent struct {
 }
 
 type Approval struct {
-	ID        pgtype.UUID
-	TurnID    pgtype.UUID
-	RoomID    pgtype.UUID
-	ThreadID  pgtype.UUID
-	MemberID  pgtype.UUID
-	RequestID string
-	Kind      string
-	Payload   []byte
-	Status    string
-	Message   string
-	MessageID pgtype.UUID
-	DecidedBy pgtype.UUID
-	Reviewer  string
-	Answer    []byte
-	CreatedAt pgtype.Timestamptz
-	DecidedAt pgtype.Timestamptz
+	ID           pgtype.UUID
+	TurnID       pgtype.UUID
+	RoomID       pgtype.UUID
+	ThreadID     pgtype.UUID
+	MemberID     pgtype.UUID
+	RequestID    string
+	Kind         string
+	Payload      []byte
+	SimilarOffer []byte
+	Scope        string
+	Status       string
+	Message      string
+	MessageID    pgtype.UUID
+	DecidedBy    pgtype.UUID
+	Reviewer     string
+	Answer       []byte
+	CreatedAt    pgtype.Timestamptz
+	DecidedAt    pgtype.Timestamptz
 }
 
 type Attachment struct {
@@ -51,6 +53,12 @@ type Attachment struct {
 	Size      int64
 	Path      string
 	CreatedAt pgtype.Timestamptz
+}
+
+type InboxRead struct {
+	UserID    pgtype.UUID
+	MessageID pgtype.UUID
+	ReadAt    pgtype.Timestamptz
 }
 
 type Machine struct {
@@ -70,11 +78,26 @@ type Member struct {
 	DisplayName      string
 	RepoPath         string
 	BranchMode       string
+	WorktreeDir      string
+	WorkDir          string
+	Branch           string
+	PreparedAt       pgtype.Timestamptz
+	OverlapsNoted    []string
 	Model            string
 	PermissionPreset string
 	Enabled          bool
 	CreatedAt        pgtype.Timestamptz
 	RemovedAt        pgtype.Timestamptz
+}
+
+type MemberRule struct {
+	ID         pgtype.UUID
+	MemberID   pgtype.UUID
+	Runtime    string
+	Rule       string
+	ApprovalID pgtype.UUID
+	CreatedBy  pgtype.UUID
+	CreatedAt  pgtype.Timestamptz
 }
 
 type MemberSession struct {
@@ -108,19 +131,38 @@ type Message struct {
 }
 
 type Project struct {
-	ID                     pgtype.UUID
-	Name                   string
-	RepoPath               string
-	Description            string
-	WikiSlug               string
-	WikiMaintainerTrigger  string
-	WikiOfferDeclinedAt    pgtype.Timestamptz
-	WikiSeenSeq            int64
-	WikiExternalBundles    []string
-	CreatedAt              pgtype.Timestamptz
-	WikiMaintainerMemberID pgtype.UUID
-	WikiThreadID           pgtype.UUID
-	WikiOfferMessageID     pgtype.UUID
+	ID                        pgtype.UUID
+	Name                      string
+	RepoPath                  string
+	Description               string
+	WikiSlug                  string
+	WikiUpkeep                bool
+	WikiMaintainerTrigger     string
+	WikiOfferDeclinedAt       pgtype.Timestamptz
+	WikiSeenSeq               int64
+	WikiExternalBundles       []string
+	WorkspaceCopy             []string
+	WorkspaceRun              string
+	WorkspacePending          []byte
+	InitializedAt             pgtype.Timestamptz
+	RelayLimit                int32
+	CreatedAt                 pgtype.Timestamptz
+	WikiMaintainerMemberID    pgtype.UUID
+	LeaderMemberID            pgtype.UUID
+	WikiThreadID              pgtype.UUID
+	WikiOfferMessageID        pgtype.UUID
+	SetupThreadID             pgtype.UUID
+	WorkspacePendingMessageID pgtype.UUID
+}
+
+type RelayHold struct {
+	MessageID        pgtype.UUID
+	MemberID         pgtype.UUID
+	ThreadID         pgtype.UUID
+	TriggerMessageID pgtype.UUID
+	Reason           string
+	CreatedAt        pgtype.Timestamptz
+	ContinuedAt      pgtype.Timestamptz
 }
 
 type Room struct {
@@ -176,6 +218,11 @@ type Turn struct {
 	OutputTokens     int64
 	FilesChanged     []string
 	SkillsUsed       []string
+	ChainMessageID   pgtype.UUID
+	WokenByTurnID    pgtype.UUID
+	Worked           bool
+	TrustedBy        pgtype.UUID
+	TrustedAt        pgtype.Timestamptz
 	StartedAt        pgtype.Timestamptz
 	EndedAt          pgtype.Timestamptz
 }

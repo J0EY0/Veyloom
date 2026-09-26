@@ -108,6 +108,18 @@ type briefInput struct {
 	// Busy are the room's other members at work as the brief is put
 	// together (see busyIn).
 	Busy []busyMember
+	// Dir is where the member works this turn: its checkout, or the git
+	// worktree of its own (design.md 5.21).
+	Dir string
+	// Relays is how the turn's piece of work stands against the limit on
+	// agents waking one another (design.md 5.22); nil for a turn that
+	// cannot wake anyone.
+	Relays *relaysLeft
+	// HandedOn is what came of the work the member handed on, on the turn
+	// it sums that work up in; HandedBy whose work a woken turn is part of
+	// (handedon.go).
+	HandedOn []handedResult
+	HandedBy *handedBy
 }
 
 // brief is a composed prompt and the positions it was taken at: once the
@@ -119,6 +131,9 @@ type brief struct {
 	// Wiki is where the project wiki stood (wiki.Bundle.Latest); zero when
 	// the brief showed no wiki.
 	Wiki time.Time
+	// Leads says the member is the project's leader, whose turns get the
+	// tool for writing down how worktrees are got ready.
+	Leads bool
 }
 
 // Build renders the brief for one turn.
@@ -187,13 +202,48 @@ func (b *briefBuilder) Build(ctx context.Context, in briefInput) (brief, error) 
 			w.message(ctx, t, "")
 		}
 	}
-	return brief{Prompt: strings.TrimRight(w.sb.String(), "\n") + "\n", Position: position, Wiki: wikiAt}, nil
+	if line := coAskedLine(in.Member, in.Triggers, members); line != "" {
+		w.sb.WriteString("\n" + line)
+	}
+	if len(in.HandedOn) > 0 {
+		w.sb.WriteString("\n" + handedOnSection(in.HandedOn))
+	}
+	return brief{Prompt: strings.TrimRight(w.sb.String(), "\n") + "\n", Position: position, Wiki: wikiAt, Leads: in.Member.ID == project.LeaderID}, nil
+}
+
+// coAskedLine tells a member a person asked in the same message as other
+// members that the parts are theirs to share out: each does the one
+// addressed to it, now, and waits for none of the others unless asked to.
+// Nothing when no person's message asked another member too.
+func coAskedLine(member store.Member, triggers []store.Message, members []store.Member) string {
+	var others []string
+	for _, t := range triggers {
+		if t.SenderKind != store.SenderUser {
+			continue
+		}
+		for _, mention := range t.Mentions {
+			if mention.Kind != store.MentionAgent || mention.ID == member.ID {
+				continue
+			}
+			i := slices.IndexFunc(members, func(m store.Member) bool { return m.ID == mention.ID })
+			if i >= 0 && !slices.Contains(others, members[i].DisplayName) {
+				others = append(others, members[i].DisplayName)
+			}
+		}
+	}
+	if len(others) == 0 {
+		return ""
+	}
+	who := andList(others)
+	return fmt.Sprintf("The person asked %s in the same message as you: each of you does the part addressed to it, the words after its name. "+
+		"Do yours now, and do not wait for %s unless the person asked you to.\n", who, who)
 }
 
 // header writes what every brief opens with. bundle is the project's
 // wiki, nil when there is none to show.
 func (b *briefBuilder) header(ctx context.Context, w *briefWriter, in briefInput, project store.Project, members []store.Member, bundle *wiki.Bundle) {
-	fmt.Fprintf(&w.sb, "You are %q, an agent in the team chat of the project %q. Lines marked with >> are addressed to you; reply to them.\n", in.Member.DisplayName, project.Name)
+	fmt.Fprintf(&w.sb, "You are %q, an agent in the team chat of the project %q. Lines marked with >> are addressed to you; reply to them. "+
+		"Write to the chat in the language its people write in, what you say as you work included, whatever language this brief is in.\n", in.Member.DisplayName, project.Name)
 	if in.NewSession != "" {
 		fmt.Fprintf(&w.sb, "\nThis is a new session: your earlier session in this project could not be continued (%s), so you do not remember your earlier turns here. What follows is the hub's record; rely on that, and on the repository, rather than on memory.\n", sessionEndPhrase(in.NewSession))
 	}
@@ -212,8 +262,17 @@ func (b *briefBuilder) header(ctx context.Context, w *briefWriter, in briefInput
 			continue
 		}
 		line := "- " + m.DisplayName
+		var marks []string
 		if m.ID == in.Member.ID {
-			line += " (you)"
+			marks = append(marks, "you")
+		}
+		if m.ID == project.LeaderID {
+			// The one the others' work waits on to set the project up
+			// (docs/design.md 5.21).
+			marks = append(marks, "the leader")
+		}
+		if len(marks) > 0 {
+			line += " (" + strings.Join(marks, ", ") + ")"
 		}
 		// The first line of the role card says what the member is for; the
 		// card itself is the agent's own system prompt and not repeated.
@@ -224,10 +283,17 @@ func (b *briefBuilder) header(ctx context.Context, w *briefWriter, in briefInput
 		}
 		w.sb.WriteString(line + "\n")
 	}
+	workplace(w, in, project, members)
 	b.atWork(w, in.Busy)
 	// Said every time, like the rest of the header: a brief shows only what
 	// is new, and this is how the agent gets at everything else.
 	w.sb.WriteString("\nYou are shown what is new since you last looked. For anything else in this chat, such as earlier messages, another topic, or what an agent did in a turn, the commands it ran and what came of them, use your veyloom tools: " + strings.Join(runtime.RoomToolNames, ", ") + ". Topics are numbered; #12 is read with read_topic, which names each agent turn for read_turn.\n")
+	if in.Relays != nil {
+		w.sb.WriteString(relaysLine(*in.Relays, in.HandedBy != nil))
+	}
+	if in.HandedBy != nil {
+		w.sb.WriteString(handedByLine(*in.HandedBy))
+	}
 	if b.wikis != nil {
 		line := "\nThe project keeps a wiki of what the team has learned: decisions, conventions, facts, pitfalls, what modules are for, what finished topics came to. Look things up in it with search_wiki and read_wiki. " +
 			"Write to it only when a person asks you to, now or as a standing rule of this chat: then write_wiki a new page, patch_wiki the page that has it, or deprecate_wiki one that no longer holds; " +
@@ -393,6 +459,10 @@ func (b *briefBuilder) relevance(ctx context.Context, in briefInput, members []s
 	for _, m := range members {
 		if m.RepoPath != "" {
 			roots = append(roots, filepath.Clean(m.RepoPath))
+		}
+		// A worktree's files are named as the checkout names them.
+		if m.WorkDir != "" {
+			roots = append(roots, filepath.Clean(m.WorkDir))
 		}
 	}
 	// The deepest repository first, for one inside another.
@@ -756,4 +826,37 @@ func memoryLine(prefs store.MemoryPrefs) string {
 			"forget, scope personal, takes out an entry that no longer holds." + rest + " Every turn carries the personal memory whole, so each entry is one short line."
 	}
 	return ""
+}
+
+// workplace says where the member works (design.md 5.21): the leader in the
+// project's checkout, and the others, once they have one, each in a git
+// worktree of its own.
+func workplace(w *briefWriter, in briefInput, project store.Project, members []store.Member) {
+	switch {
+	case in.Member.ID == project.LeaderID:
+		w.sb.WriteString("\nYou are the project's leader. You work in the project's checkout itself, where people work too; " +
+			"when the others work in git worktrees of their own, you write down with " + runtime.SetupToolSteps + " how a new one is got ready, whenever a person asks you to change it. " +
+			"Each of them commits on a branch of its own, veyloom/ and its name, which a person merges onto the main line: do not ask them for other branches. " +
+			"When they do, commit the files you changed in the checkout yourself, and only those, before your turn ends, with a message saying what the change does: " +
+			"changes left there uncommitted are missing from their worktrees, and keep a person from merging work that changes the same files. " +
+			"What documents work still on a member's branch, such as the README section for a feature it wrote, goes on that branch with the work: " +
+			"ask the member for it, since the checkout would describe what it does not have until a person merges it.\n")
+	case in.Dir != "" && in.Member.WorktreeDir != "" && in.Dir == in.Member.WorkDir:
+		fmt.Fprintf(&w.sb, "\nYou work in a git worktree of your own, %s, on the branch %s, made from the project's checkout at %s. "+
+			"What you change stays there until a person merges it into the branch the checkout is on: you need not commit, and do not push or switch branches. "+
+			"Whatever you leave there is merged as your work, so what you build or run only to check it writes outside the worktree, in a temporary folder, "+
+			"or you remove what it wrote before your turn ends.",
+			in.Dir, in.Member.Branch, project.RepoPath)
+		var others []string
+		for _, m := range members {
+			if m.ID != in.Member.ID && m.Branch != "" && !m.Removed() {
+				others = append(others, fmt.Sprintf("%s (%s)", m.Branch, m.DisplayName))
+			}
+		}
+		if len(others) > 0 {
+			fmt.Fprintf(&w.sb, " The others' work is on their branches of the same repository: %s. To build on what one of them committed, merge its branch into yours "+
+				"(git merge %s, say) rather than copying its files.", strings.Join(others, ", "), strings.SplitN(others[0], " ", 2)[0])
+		}
+		w.sb.WriteString("\n")
+	}
 }

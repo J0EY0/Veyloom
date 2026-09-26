@@ -76,3 +76,9 @@ machine:
   # Where runtimes write the files that give their CLI the room tools (Pi's
   # extension). Empty means <state.dir>/tools.
   tool_dir: ""
+  # Where the members' git worktrees are made, one folder per project and
+  # member. Empty means <state.dir>/worktrees.
+  worktree_dir: ""
+  # How long the command a project's leader wrote down for getting a new
+  # worktree ready (installing dependencies, say) may run.
+  workspace_setup_timeout: 10m

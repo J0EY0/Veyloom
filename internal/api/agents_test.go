@@ -266,6 +266,10 @@ func TestAgents_CRUD(t *testing.T) {
 	if rec := do(t, handler, http.MethodPut, "/api/v1/agents/"+created.Agent.ID, `{"name":"Reviewer 2","machine_id":"w1","runtime":"codex","permission_preset":"full_auto"}`, &updated); rec.Code != http.StatusOK || updated.Agent.Runtime != "codex" {
 		t.Errorf("update: status = %d, agent = %+v", rec.Code, updated.Agent)
 	}
+	// The preset that hands decisions to the runtime's own reviewer.
+	if rec := do(t, handler, http.MethodPut, "/api/v1/agents/"+created.Agent.ID, `{"name":"Reviewer 2","machine_id":"w1","runtime":"codex","permission_preset":"auto_review"}`, &updated); rec.Code != http.StatusOK || updated.Agent.PermissionPreset != store.PermissionAutoReview {
+		t.Errorf("auto_review: status = %d, agent = %+v", rec.Code, updated.Agent)
+	}
 
 	var list AgentsResponse
 	if rec := do(t, handler, http.MethodGet, "/api/v1/agents", "", &list); rec.Code != http.StatusOK || len(list.Agents) != 1 {

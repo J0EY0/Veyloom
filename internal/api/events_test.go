@@ -42,6 +42,11 @@ func (c *fakeChat) Subscribe(roomID string) hub.Subscription {
 	return c.sub
 }
 
+func (c *fakeChat) SubscribeInbox(userID string) hub.Subscription {
+	c.subscribed = append(c.subscribed, "inbox:"+userID)
+	return c.sub
+}
+
 func eventsServer(t *testing.T, opts EventsOptions) (*httptest.Server, store.Room, *fakeChat) {
 	t.Helper()
 	projects := newFakeProjects()
@@ -138,5 +143,38 @@ func TestEvents_UnknownRoomAndOrigins(t *testing.T) {
 	denied := &websocket.DialOptions{HTTPHeader: http.Header{"Origin": []string{"http://evil.example.com"}}}
 	if _, res, err := websocket.Dial(ctx, wsURL(srv, "/api/v1/rooms/"+room.ID+"/events"), denied); err == nil || res == nil || res.StatusCode != http.StatusForbidden {
 		t.Errorf("foreign origin: err %v, status %v, want 403", err, res)
+	}
+}
+
+// What reaches a person's inbox streams as a room's events do; only a
+// person there is gets it.
+func TestEvents_StreamsWhatReachesTheInbox(t *testing.T) {
+	users := newFakeUsers()
+	alice, _ := users.CreateUser(context.Background(), "alice")
+	chat := &fakeChat{sub: newFakeSub()}
+	srv := httptest.NewServer(NewHandler(Deps{Users: users, Chat: chat, Events: EventsOptions{WriteTimeout: time.Second}}))
+	t.Cleanup(srv.Close)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	if _, res, err := websocket.Dial(ctx, wsURL(srv, "/api/v1/users/u404/inbox/events"), nil); err == nil || res == nil || res.StatusCode != http.StatusNotFound {
+		t.Errorf("unknown person: err %v, status %v, want 404", err, res)
+	}
+	conn, _, err := websocket.Dial(ctx, wsURL(srv, "/api/v1/users/"+alice.ID+"/inbox/events"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+	msg := store.Message{ID: "m1", Room: "r1", Body: "@alice done", Mentions: []store.Mention{{Kind: store.MentionUser, ID: alice.ID}}}
+	chat.sub.ch <- hub.Event{Kind: hub.EventMessage, RoomID: "r1", Message: &msg}
+	var ev hub.Event
+	if err := wsjson.Read(ctx, conn, &ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Kind != hub.EventMessage || ev.Message == nil || ev.Message.ID != "m1" {
+		t.Errorf("event = %+v", ev)
+	}
+	if len(chat.subscribed) != 1 || chat.subscribed[0] != "inbox:"+alice.ID {
+		t.Errorf("subscribed to %v, want alice's inbox", chat.subscribed)
 	}
 }

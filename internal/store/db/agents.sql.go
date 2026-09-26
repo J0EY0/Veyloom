@@ -11,13 +11,44 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const clearWikiMaintainer = `-- name: ClearWikiMaintainer :exec
-UPDATE projects SET wiki_maintainer_member_id = NULL WHERE wiki_maintainer_member_id = $1
+const addMemberOverlaps = `-- name: AddMemberOverlaps :exec
+UPDATE members SET overlaps_noted = ARRAY(SELECT DISTINCT f FROM unnest(overlaps_noted || $1::text[]) AS f ORDER BY f)
+WHERE id = $2
 `
 
-// A member taken out of its project keeps its wiki no longer.
-func (q *Queries) ClearWikiMaintainer(ctx context.Context, wikiMaintainerMemberID pgtype.UUID) error {
-	_, err := q.db.Exec(ctx, clearWikiMaintainer, wikiMaintainerMemberID)
+type AddMemberOverlapsParams struct {
+	Files []string
+	ID    pgtype.UUID
+}
+
+// Adds files to those the chat was told about, for a member whose work
+// another member's turn was found to overlap.
+func (q *Queries) AddMemberOverlaps(ctx context.Context, arg AddMemberOverlapsParams) error {
+	_, err := q.db.Exec(ctx, addMemberOverlaps, arg.Files, arg.ID)
+	return err
+}
+
+const clearMemberRoles = `-- name: ClearMemberRoles :exec
+UPDATE projects SET
+    wiki_maintainer_member_id = CASE WHEN wiki_maintainer_member_id = $1::uuid THEN NULL ELSE wiki_maintainer_member_id END,
+    leader_member_id = CASE WHEN leader_member_id = $1::uuid THEN NULL ELSE leader_member_id END
+WHERE wiki_maintainer_member_id = $1::uuid OR leader_member_id = $1::uuid
+`
+
+// A member taken out of its project keeps its wiki no longer, nor leads
+// it: the project falls back on its leader and first member.
+func (q *Queries) ClearMemberRoles(ctx context.Context, memberID pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearMemberRoles, memberID)
+	return err
+}
+
+const clearMemberWorkspace = `-- name: ClearMemberWorkspace :exec
+UPDATE members SET worktree_dir = '', work_dir = '', branch = '', prepared_at = NULL, overlaps_noted = '{}' WHERE id = $1
+`
+
+// Forgets a member's worktree: it was taken away, or is gone.
+func (q *Queries) ClearMemberWorkspace(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, clearMemberWorkspace, id)
 	return err
 }
 
@@ -73,7 +104,7 @@ INSERT INTO members (room_id, agent_id, machine_id, display_name, repo_path, bra
 SELECT $1, ag.id, ag.machine_id, coalesce(nullif($2::text, ''), ag.name), $3, $4, $5, $6, clock_timestamp()
 FROM agents AS ag
 WHERE ag.id = $7
-RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, enabled, created_at, removed_at
+RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, worktree_dir, work_dir, branch, prepared_at, overlaps_noted, model, permission_preset, enabled, created_at, removed_at
 `
 
 type CreateMemberParams struct {
@@ -109,6 +140,11 @@ func (q *Queries) CreateMember(ctx context.Context, arg CreateMemberParams) (Mem
 		&i.DisplayName,
 		&i.RepoPath,
 		&i.BranchMode,
+		&i.WorktreeDir,
+		&i.WorkDir,
+		&i.Branch,
+		&i.PreparedAt,
+		&i.OverlapsNoted,
 		&i.Model,
 		&i.PermissionPreset,
 		&i.Enabled,
@@ -175,7 +211,7 @@ func (q *Queries) GetAgent(ctx context.Context, id pgtype.UUID) (GetAgentRow, er
 }
 
 const getMember = `-- name: GetMember :one
-SELECT id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, enabled, created_at, removed_at FROM members WHERE id = $1
+SELECT id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, worktree_dir, work_dir, branch, prepared_at, overlaps_noted, model, permission_preset, enabled, created_at, removed_at FROM members WHERE id = $1
 `
 
 func (q *Queries) GetMember(ctx context.Context, id pgtype.UUID) (Member, error) {
@@ -189,6 +225,11 @@ func (q *Queries) GetMember(ctx context.Context, id pgtype.UUID) (Member, error)
 		&i.DisplayName,
 		&i.RepoPath,
 		&i.BranchMode,
+		&i.WorktreeDir,
+		&i.WorkDir,
+		&i.Branch,
+		&i.PreparedAt,
+		&i.OverlapsNoted,
 		&i.Model,
 		&i.PermissionPreset,
 		&i.Enabled,
@@ -286,7 +327,7 @@ func (q *Queries) ListAgents(ctx context.Context) ([]ListAgentsRow, error) {
 }
 
 const listMachineMembers = `-- name: ListMachineMembers :many
-SELECT mb.id, mb.room_id, mb.agent_id, mb.machine_id, mb.display_name, mb.repo_path, mb.branch_mode, mb.model, mb.permission_preset, mb.enabled, mb.created_at, mb.removed_at,
+SELECT mb.id, mb.room_id, mb.agent_id, mb.machine_id, mb.display_name, mb.repo_path, mb.branch_mode, mb.worktree_dir, mb.work_dir, mb.branch, mb.prepared_at, mb.overlaps_noted, mb.model, mb.permission_preset, mb.enabled, mb.created_at, mb.removed_at,
        p.id AS project_id,
        p.name AS project_name,
        running.id AS turn_id,
@@ -346,6 +387,11 @@ func (q *Queries) ListMachineMembers(ctx context.Context, machineID pgtype.UUID)
 			&i.Member.DisplayName,
 			&i.Member.RepoPath,
 			&i.Member.BranchMode,
+			&i.Member.WorktreeDir,
+			&i.Member.WorkDir,
+			&i.Member.Branch,
+			&i.Member.PreparedAt,
+			&i.Member.OverlapsNoted,
 			&i.Member.Model,
 			&i.Member.PermissionPreset,
 			&i.Member.Enabled,
@@ -370,7 +416,7 @@ func (q *Queries) ListMachineMembers(ctx context.Context, machineID pgtype.UUID)
 }
 
 const listRoomMembers = `-- name: ListRoomMembers :many
-SELECT id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, enabled, created_at, removed_at FROM members WHERE room_id = $1 ORDER BY created_at
+SELECT id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, worktree_dir, work_dir, branch, prepared_at, overlaps_noted, model, permission_preset, enabled, created_at, removed_at FROM members WHERE room_id = $1 ORDER BY created_at
 `
 
 // Every member the room has had, including those taken out of the project:
@@ -393,6 +439,11 @@ func (q *Queries) ListRoomMembers(ctx context.Context, roomID pgtype.UUID) ([]Me
 			&i.DisplayName,
 			&i.RepoPath,
 			&i.BranchMode,
+			&i.WorktreeDir,
+			&i.WorkDir,
+			&i.Branch,
+			&i.PreparedAt,
+			&i.OverlapsNoted,
 			&i.Model,
 			&i.PermissionPreset,
 			&i.Enabled,
@@ -439,13 +490,44 @@ func (q *Queries) ListSkillAgents(ctx context.Context, skill string) ([]ListSkil
 	return items, nil
 }
 
+const markMemberPrepared = `-- name: MarkMemberPrepared :one
+UPDATE members SET prepared_at = now() WHERE id = $1 AND worktree_dir <> ''
+RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, worktree_dir, work_dir, branch, prepared_at, overlaps_noted, model, permission_preset, enabled, created_at, removed_at
+`
+
+// The member's worktree is ready for work.
+func (q *Queries) MarkMemberPrepared(ctx context.Context, id pgtype.UUID) (Member, error) {
+	row := q.db.QueryRow(ctx, markMemberPrepared, id)
+	var i Member
+	err := row.Scan(
+		&i.ID,
+		&i.RoomID,
+		&i.AgentID,
+		&i.MachineID,
+		&i.DisplayName,
+		&i.RepoPath,
+		&i.BranchMode,
+		&i.WorktreeDir,
+		&i.WorkDir,
+		&i.Branch,
+		&i.PreparedAt,
+		&i.OverlapsNoted,
+		&i.Model,
+		&i.PermissionPreset,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.RemovedAt,
+	)
+	return i, err
+}
+
 const removeMember = `-- name: RemoveMember :one
 UPDATE members AS mb
 SET removed_at = now()
 WHERE mb.id = $1
   AND mb.removed_at IS NULL
   AND NOT EXISTS (SELECT 1 FROM turns AS t WHERE t.member_id = mb.id AND t.status = 'running')
-RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, enabled, created_at, removed_at
+RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, worktree_dir, work_dir, branch, prepared_at, overlaps_noted, model, permission_preset, enabled, created_at, removed_at
 `
 
 // Takes a member out of its project unless one of its turns is still
@@ -461,6 +543,11 @@ func (q *Queries) RemoveMember(ctx context.Context, id pgtype.UUID) (Member, err
 		&i.DisplayName,
 		&i.RepoPath,
 		&i.BranchMode,
+		&i.WorktreeDir,
+		&i.WorkDir,
+		&i.Branch,
+		&i.PreparedAt,
+		&i.OverlapsNoted,
 		&i.Model,
 		&i.PermissionPreset,
 		&i.Enabled,
@@ -494,6 +581,67 @@ func (q *Queries) SetAgentSkill(ctx context.Context, arg SetAgentSkillParams) (i
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const setMemberOverlaps = `-- name: SetMemberOverlaps :exec
+UPDATE members SET overlaps_noted = $1::text[] WHERE id = $2
+`
+
+type SetMemberOverlapsParams struct {
+	Files []string
+	ID    pgtype.UUID
+}
+
+// Records which files of a member's work the chat was told another
+// member's work changed too (design.md 5.21).
+func (q *Queries) SetMemberOverlaps(ctx context.Context, arg SetMemberOverlapsParams) error {
+	_, err := q.db.Exec(ctx, setMemberOverlaps, arg.Files, arg.ID)
+	return err
+}
+
+const setMemberWorkspace = `-- name: SetMemberWorkspace :one
+UPDATE members SET worktree_dir = $1, work_dir = $2, branch = $3, prepared_at = NULL
+WHERE id = $4
+RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, worktree_dir, work_dir, branch, prepared_at, overlaps_noted, model, permission_preset, enabled, created_at, removed_at
+`
+
+type SetMemberWorkspaceParams struct {
+	WorktreeDir string
+	WorkDir     string
+	Branch      string
+	ID          pgtype.UUID
+}
+
+// Records the git worktree made for a member (design.md 5.21), not got
+// ready yet.
+func (q *Queries) SetMemberWorkspace(ctx context.Context, arg SetMemberWorkspaceParams) (Member, error) {
+	row := q.db.QueryRow(ctx, setMemberWorkspace,
+		arg.WorktreeDir,
+		arg.WorkDir,
+		arg.Branch,
+		arg.ID,
+	)
+	var i Member
+	err := row.Scan(
+		&i.ID,
+		&i.RoomID,
+		&i.AgentID,
+		&i.MachineID,
+		&i.DisplayName,
+		&i.RepoPath,
+		&i.BranchMode,
+		&i.WorktreeDir,
+		&i.WorkDir,
+		&i.Branch,
+		&i.PreparedAt,
+		&i.OverlapsNoted,
+		&i.Model,
+		&i.PermissionPreset,
+		&i.Enabled,
+		&i.CreatedAt,
+		&i.RemovedAt,
+	)
+	return i, err
 }
 
 const updateAgent = `-- name: UpdateAgent :one
@@ -556,7 +704,7 @@ SET display_name      = coalesce($2, display_name),
     repo_path         = coalesce($5, repo_path),
     enabled           = coalesce($6, enabled)
 WHERE id = $1 AND removed_at IS NULL
-RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, model, permission_preset, enabled, created_at, removed_at
+RETURNING id, room_id, agent_id, machine_id, display_name, repo_path, branch_mode, worktree_dir, work_dir, branch, prepared_at, overlaps_noted, model, permission_preset, enabled, created_at, removed_at
 `
 
 type UpdateMemberParams struct {
@@ -589,6 +737,11 @@ func (q *Queries) UpdateMember(ctx context.Context, arg UpdateMemberParams) (Mem
 		&i.DisplayName,
 		&i.RepoPath,
 		&i.BranchMode,
+		&i.WorktreeDir,
+		&i.WorkDir,
+		&i.Branch,
+		&i.PreparedAt,
+		&i.OverlapsNoted,
 		&i.Model,
 		&i.PermissionPreset,
 		&i.Enabled,

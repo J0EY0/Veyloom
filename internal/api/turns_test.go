@@ -39,6 +39,13 @@ func (f fakeTurns) ListRoomTurns(_ context.Context, roomID string, limit int) ([
 
 // ListRunningTopics lists one topic per running turn's thread, named
 // after the agent id, which is enough for the handler's test.
+func (f fakeTurns) ListThreadRelayHolds(_ context.Context, threadID string) ([]store.RelayHold, error) {
+	if threadID != "th1" {
+		return []store.RelayHold{}, nil
+	}
+	return []store.RelayHold{{MessageID: "n1", MemberID: "m1", ThreadID: "th1", Reason: store.HoldIdle}}, nil
+}
+
 func (f fakeTurns) ListRunningTopics(context.Context) ([]store.RunningTopic, error) {
 	out := []store.RunningTopic{}
 	seen := map[string]bool{}
@@ -149,6 +156,21 @@ func TestTurns_Cancel(t *testing.T) {
 	}
 	if rec := do(t, handler, http.MethodPost, "/api/v1/turns/t404/cancel", "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("cancel unknown: status = %d, want 404", rec.Code)
+	}
+}
+
+// A wake a limit held back, let go on by its note (docs/design.md 5.22).
+func TestRelays_Continue(t *testing.T) {
+	handler, _, chat := turnsHandler(t)
+	if rec := do(t, handler, http.MethodPost, "/api/v1/relays/n1/continue", "", nil); rec.Code != http.StatusAccepted || len(chat.continued) != 1 || chat.continued[0] != "n1" {
+		t.Errorf("continue: %d %v", rec.Code, chat.continued)
+	}
+	if rec := do(t, handler, http.MethodPost, "/api/v1/relays/gone/continue", "", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("no wake held there: %d", rec.Code)
+	}
+	var holds RelayHoldsResponse
+	if rec := do(t, handler, http.MethodGet, "/api/v1/threads/th1/relay-holds", "", &holds); rec.Code != http.StatusOK || len(holds.Holds) != 1 || holds.Holds[0].Reason != store.HoldIdle {
+		t.Errorf("a topic's held wakes: %d %+v", rec.Code, holds)
 	}
 }
 

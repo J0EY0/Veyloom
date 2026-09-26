@@ -34,6 +34,9 @@ type claudeControlRequest struct {
 	Input                   json.RawMessage `json:"input"`
 	ToolUseID               string          `json:"tool_use_id"`
 	RequiresUserInteraction bool            `json:"requires_user_interaction"`
+	// PermissionSuggestions are what the CLI would have a person allow
+	// besides, as its own prompt offers: rules, a mode, folders.
+	PermissionSuggestions []json.RawMessage `json:"permission_suggestions"`
 	// elicitation: what the MCP server asks, a form (the default) or a page
 	// to open.
 	MCPServerName   string          `json:"mcp_server_name"`
@@ -45,11 +48,13 @@ type claudeControlRequest struct {
 
 // claudeAllow and claudeDeny are what can_use_tool accepts back.
 // UpdatedInput is required on allow: it is the input the tool then runs
-// with. ToolUseID lets the CLI tell a repeated answer from a new one.
+// with. UpdatedPermissions are suggestions a person took up. ToolUseID
+// lets the CLI tell a repeated answer from a new one.
 type claudeAllow struct {
-	Behavior     string `json:"behavior"`
-	UpdatedInput any    `json:"updatedInput"`
-	ToolUseID    string `json:"toolUseID,omitempty"`
+	Behavior           string            `json:"behavior"`
+	UpdatedInput       any               `json:"updatedInput"`
+	UpdatedPermissions []json.RawMessage `json:"updatedPermissions,omitempty"`
+	ToolUseID          string            `json:"toolUseID,omitempty"`
 }
 
 type claudeDeny struct {
@@ -151,21 +156,84 @@ func (t *claudeTurn) canUseTool(ctx context.Context, req claudeControlRequest) a
 			describeClaudeUse(req.ToolName, input, t.maxEventBytes)))
 		return claudeDenied(claudeReadOnlyRefusal, req.ToolUseID)
 	}
-	d, err := t.requestApproval(ctx, req.ToolName, string(input))
+	similar, updates := claudeSimilar(req.PermissionSuggestions)
+	d, err := t.requestApprovalOffering(ctx, req.ToolName, string(input), similar)
 	switch {
 	case err != nil:
 		return claudeDenied("the turn ended before anyone decided", req.ToolUseID)
 	case d.Allow:
-		return claudeAllowed(input, req.ToolUseID)
+		allow := claudeAllowed(input, req.ToolUseID)
+		if d.Similar {
+			allow.UpdatedPermissions = updates
+		}
+		return allow
 	}
 	return claudeDenied(orDefault(d.Message, "denied by a Veyloom user"), req.ToolUseID)
+}
+
+// claudeSuggestion is one of Claude Code's permission suggestions, in the
+// parts a person is shown. The CLI's own prompt saves some to the project's
+// local settings; Veyloom takes them up for the session alone, which is the
+// turn, so no settings file lands in the member's folder, where it would
+// be merged as its work.
+type claudeSuggestion struct {
+	Type  string `json:"type"`
+	Rules []struct {
+		ToolName    string `json:"toolName"`
+		RuleContent string `json:"ruleContent"`
+	} `json:"rules"`
+	Behavior    string   `json:"behavior"`
+	Mode        string   `json:"mode"`
+	Directories []string `json:"directories"`
+}
+
+// claudeSimilar reads the suggestions of a can_use_tool request into what
+// a person is offered, and the updates that take them up for the session:
+// rules that allow, a mode, folders to add. Nothing is offered that could
+// not be said, such as a rule that denies or one taken away.
+func claudeSimilar(suggestions []json.RawMessage) (*Similar, []json.RawMessage) {
+	var similar Similar
+	var updates []json.RawMessage
+	for _, raw := range suggestions {
+		var s claudeSuggestion
+		var update map[string]any
+		if json.Unmarshal(raw, &s) != nil || json.Unmarshal(raw, &update) != nil {
+			continue
+		}
+		update["destination"] = "session"
+		b, err := json.Marshal(update)
+		if err != nil {
+			continue
+		}
+		switch {
+		case s.Type == "addRules" && s.Behavior == "allow" && len(s.Rules) > 0:
+			for _, r := range s.Rules {
+				rule := r.ToolName
+				if r.RuleContent != "" {
+					rule += "(" + r.RuleContent + ")"
+				}
+				similar.Rules = append(similar.Rules, rule)
+			}
+		case s.Type == "setMode" && s.Mode != "":
+			similar.Mode = s.Mode
+		case s.Type == "addDirectories" && len(s.Directories) > 0:
+			similar.Dirs = append(similar.Dirs, s.Directories...)
+		default:
+			continue
+		}
+		updates = append(updates, b)
+	}
+	if len(updates) == 0 {
+		return nil, nil
+	}
+	return &similar, updates
 }
 
 // isVeyloomTool reports whether a tool name is one of the turn's own tools
 // on Veyloom's MCP server: every turn's or an optional one, which is there
 // only for the turns given it.
 func isVeyloomTool(name string) bool {
-	for _, tool := range append(append(append([]string(nil), AgentToolNames...), MemoryToolNames...), UpkeepToolNames...) {
+	for _, tool := range append(append(append(append(append([]string(nil), AgentToolNames...), MemoryToolNames...), UpkeepToolNames...), SetupToolNames...), MessageToolNames...) {
 		if name == claudeToolName(tool) {
 			return true
 		}

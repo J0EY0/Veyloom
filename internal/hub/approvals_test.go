@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -59,7 +60,7 @@ func TestLoop_ApprovalAllowedRunsTheCommand(t *testing.T) {
 		t.Error("the turn waits while the approval is pending")
 	}
 
-	decided, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true})
+	decided, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -68,8 +69,8 @@ func TestLoop_ApprovalAllowedRunsTheCommand(t *testing.T) {
 	}
 
 	turns := l.waitTurns(1, store.TurnDone, "the turn to finish after approval")
-	if root := l.root(thread); root.Body != "built" {
-		t.Errorf("expected the reply after the allowed command in the root, got %+v", root)
+	if root := l.root(thread); root.Body != "@alice built" || !slices.Contains(root.Mentions, store.Mention{Kind: store.MentionUser, ID: l.user.ID}) {
+		t.Errorf("expected the reply after the allowed command in the root, addressed to whoever asked, got %+v", root)
 	}
 	// The decision rewrites the request note: one line per request.
 	notes = l.replies(thread.ID, store.SenderSystem)
@@ -85,6 +86,42 @@ func TestLoop_ApprovalAllowedRunsTheCommand(t *testing.T) {
 	}
 }
 
+// A request that offers the like of it is allowed with it when a person
+// says so: recorded, told in the thread, and heard by the runtime. One
+// that offers nothing is allowed alone, whatever the person asked.
+func TestLoop_ApprovalAllowsTheLikeOfIt(t *testing.T) {
+	l := newLoop(t)
+	careful := l.member("Careful", map[string]any{"approval": true, "similar": []any{"Bash(make test)"}})
+	msg := l.say("@Careful build it", "", careful)
+	thread := l.topic(msg)
+	a := l.waitApproval()
+	if string(a.Similar) != `{"rules":["Bash(make test)"]}` {
+		t.Fatalf("the offer: %s", a.Similar)
+	}
+	decided, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true, Similar: true}, "")
+	if err != nil || decided.Scope != store.ScopeSimilar {
+		t.Fatalf("decided: %+v %v", decided, err)
+	}
+	l.waitTurns(1, store.TurnDone, "the turn to finish")
+	if root := l.root(thread); root.Body != "@alice Allowed, and the like of it" {
+		t.Errorf("the runtime heard %q", root.Body)
+	}
+	notes := l.replies(thread.ID, store.SenderSystem)
+	if len(notes) != 1 || !strings.Contains(notes[0].Body, "alice allowed Careful to run `make test`, and the like of it for the rest of the turn") {
+		t.Errorf("the note: %+v", notes)
+	}
+
+	plain := l.member("Plain", map[string]any{"approval": true})
+	l.say("@Plain build it", "", plain)
+	b := l.waitApproval()
+	if len(b.Similar) != 0 {
+		t.Fatalf("an offer out of nothing: %s", b.Similar)
+	}
+	if decided, err := l.h.DecideApproval(l.ctx, b.ID, l.user.ID, runtime.Decision{Allow: true, Similar: true}, ""); err != nil || decided.Scope != store.ScopeOnce {
+		t.Errorf("allowed with what was not offered: %+v %v", decided, err)
+	}
+}
+
 func TestLoop_ApprovalDeniedReachesTheAgent(t *testing.T) {
 	l := newLoop(t)
 	careful := l.member("Careful", map[string]any{"approval": true})
@@ -92,31 +129,25 @@ func TestLoop_ApprovalDeniedReachesTheAgent(t *testing.T) {
 	thread := l.topic(msg)
 	a := l.waitApproval()
 
-	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: false, Message: "not on main"}); err != nil {
+	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: false, Message: "not on main"}, ""); err != nil {
 		t.Fatal(err)
 	}
 
 	l.waitTurns(1, store.TurnDone, "the turn to finish after denial")
-	if root := l.root(thread); root.Body != "Denied: not on main" {
+	if root := l.root(thread); root.Body != "@alice Denied: not on main" {
 		t.Errorf("the agent should see the denial message, got %+v", root)
 	}
 	notes := l.replies(thread.ID, store.SenderSystem)
 	if len(notes) != 1 || !strings.Contains(notes[0].Body, "alice denied Careful running `make test`: not on main") {
 		t.Errorf("expected the request note rewritten with the denial, got %+v", notes)
 	}
-	// The note is posted before the decision reaches the agent, so it
-	// always reads in order: request, decision, then the closing message
-	// the agent posts once it has answered.
-	top := l.topLevel()
-	closing := top[len(top)-1]
-	if closing.SenderKind != store.SenderAgent || closing.Body != "@alice Denied: not on main" {
-		t.Errorf("expected a closing message with the denial, got %+v", closing)
-	}
-	if len(notes) == 1 && notes[0].Seq > closing.Seq {
-		t.Error("the decision note should precede the agent's closing message")
+	// The answer is addressed to whoever asked, in its topic: the room
+	// holds the question and the answer heading the topic, nothing more.
+	if top := l.topLevel(); len(top) != 2 || top[0].ID != msg.ID || top[1].ID != thread.RootMessageID {
+		t.Errorf("the room should hold the question and the root only, got %+v", top)
 	}
 	// Only the first decision counts.
-	_, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true})
+	_, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true}, "")
 	if !errors.Is(err, store.ErrConflict) {
 		t.Errorf("second decision: got %v, want ErrConflict", err)
 	}
@@ -142,7 +173,7 @@ func TestLoop_ApprovalExpiresIntoDenial(t *testing.T) {
 	if notes := l.replies(thread.ID, store.SenderSystem); len(notes) != 1 || !strings.Contains(notes[0].Body, "expired") {
 		t.Errorf("expected the request note rewritten with the expiry, got %+v", notes)
 	}
-	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true}); !errors.Is(err, store.ErrConflict) {
+	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true}, ""); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("deciding an expired approval: got %v, want ErrConflict", err)
 	}
 }
@@ -161,7 +192,7 @@ func TestLoop_CancelWhileApprovalPending(t *testing.T) {
 	if got := l.approval(a.ID); got.Status != store.ApprovalCancelled {
 		t.Errorf("approval = %+v, want cancelled", got)
 	}
-	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true}); !errors.Is(err, store.ErrConflict) {
+	if _, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true}, ""); !errors.Is(err, store.ErrConflict) {
 		t.Errorf("deciding a cancelled approval: got %v, want ErrConflict", err)
 	}
 	data, _ := os.ReadFile(turns[0].TranscriptPath)
@@ -172,11 +203,11 @@ func TestLoop_CancelWhileApprovalPending(t *testing.T) {
 
 func TestLoop_DecideUnknownApproval(t *testing.T) {
 	l := newLoop(t)
-	_, err := l.h.DecideApproval(l.ctx, store.NewID(), l.user.ID, runtime.Decision{Allow: true})
+	_, err := l.h.DecideApproval(l.ctx, store.NewID(), l.user.ID, runtime.Decision{Allow: true}, "")
 	if !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("got %v, want ErrNotFound", err)
 	}
-	_, err = l.h.DecideApproval(l.ctx, "nope", l.user.ID, runtime.Decision{Allow: true})
+	_, err = l.h.DecideApproval(l.ctx, "nope", l.user.ID, runtime.Decision{Allow: true}, "")
 	if !errors.Is(err, store.ErrInvalidID) {
 		t.Errorf("got %v, want ErrInvalidID", err)
 	}
@@ -238,7 +269,7 @@ func TestLoop_ReviewedApprovalAndNoticeAreShown(t *testing.T) {
 			order = append(order, string(m.SenderKind)+": "+m.Body)
 		}
 	}
-	if len(order) != 2 || !strings.HasPrefix(order[0], "system: fake_review allowed") || order[1] != "agent: fetched" {
+	if len(order) != 2 || !strings.HasPrefix(order[0], "system: fake_review allowed") || order[1] != "agent: @alice fetched" {
 		t.Errorf("thread after the root = %q, want the verdict and then the reply", order)
 	}
 	data, _ := os.ReadFile(turns[0].TranscriptPath)
@@ -272,7 +303,7 @@ func TestLoop_QuestionAnsweredAndDeclined(t *testing.T) {
 	if len(notes) != 1 || !strings.Contains(notes[0].Body, "Asker asks “Which colour?” and 1 more") {
 		t.Errorf("the thread should say what is asked, got %+v", notes)
 	}
-	decided, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true, Answer: json.RawMessage(`{"answers":{"1":["blue"],"2":["hunter2"]}}`)})
+	decided, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true, Answer: json.RawMessage(`{"answers":{"1":["blue"],"2":["hunter2"]}}`)}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -280,7 +311,7 @@ func TestLoop_QuestionAnsweredAndDeclined(t *testing.T) {
 		t.Errorf("kept answer = %s, want the secret left out", decided.Answer)
 	}
 	l.waitTurns(1, store.TurnDone, "the answered turn to finish")
-	if root := l.root(thread); root.Body != "Answer: blue (passphrase of 7 characters)" {
+	if root := l.root(thread); root.Body != "@alice Answer: blue (passphrase of 7 characters)" {
 		t.Errorf("root = %q: the agent should get the answers as given", root.Body)
 	}
 	if notes := l.replies(thread.ID, store.SenderSystem); len(notes) != 1 || !strings.Contains(notes[0].Body, "alice answered Asker: “Which colour?” and 1 more") {
@@ -289,11 +320,11 @@ func TestLoop_QuestionAnsweredAndDeclined(t *testing.T) {
 
 	declined := l.topic(l.say("@Asker pick again", "", asker))
 	b := l.waitApproval()
-	if _, err := l.h.DecideApproval(l.ctx, b.ID, l.user.ID, runtime.Decision{Allow: false, Message: "later"}); err != nil {
+	if _, err := l.h.DecideApproval(l.ctx, b.ID, l.user.ID, runtime.Decision{Allow: false, Message: "later"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	l.waitTurns(2, store.TurnDone, "the declined turn to finish")
-	if root := l.root(declined); root.Body != "No answer: later" {
+	if root := l.root(declined); root.Body != "@alice No answer: later" {
 		t.Errorf("root = %q, want the agent told no answer came", root.Body)
 	}
 	if notes := l.replies(declined.ID, store.SenderSystem); len(notes) != 1 || !strings.Contains(notes[0].Body, "alice declined to answer Asker: “Which colour?” and 1 more: later") {
@@ -316,7 +347,7 @@ func TestLoop_FormFilledAndLinkDeclined(t *testing.T) {
 	if notes := l.replies(thread.ID, store.SenderSystem); len(notes) != 1 || !strings.Contains(notes[0].Body, "Filler needs a form filled in: fake “Deploy where?”") {
 		t.Errorf("the thread should say a form waits, got %+v", notes)
 	}
-	decided, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true, Answer: json.RawMessage(`{"content":{"name":"alice","size":"l"}}`)})
+	decided, err := l.h.DecideApproval(l.ctx, a.ID, l.user.ID, runtime.Decision{Allow: true, Answer: json.RawMessage(`{"content":{"name":"alice","size":"l"}}`)}, "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -324,7 +355,7 @@ func TestLoop_FormFilledAndLinkDeclined(t *testing.T) {
 		t.Errorf("kept answer = %s", decided.Answer)
 	}
 	l.waitTurns(1, store.TurnDone, "the form turn to finish")
-	if root := l.root(thread); root.Body != `Form: {"name":"alice","size":"l"}` {
+	if root := l.root(thread); root.Body != `@alice Form: {"name":"alice","size":"l"}` {
 		t.Errorf("root = %q, want the form's content back", root.Body)
 	}
 	if notes := l.replies(thread.ID, store.SenderSystem); len(notes) != 1 || !strings.Contains(notes[0].Body, "alice filled in Filler's form") {
@@ -336,11 +367,11 @@ func TestLoop_FormFilledAndLinkDeclined(t *testing.T) {
 	if b.Kind != store.ApprovalLink || !strings.Contains(string(b.Input), "https://login.example.com/device") {
 		t.Fatalf("link approval = %+v", b)
 	}
-	if _, err := l.h.DecideApproval(l.ctx, b.ID, l.user.ID, runtime.Decision{Allow: false, Message: "later"}); err != nil {
+	if _, err := l.h.DecideApproval(l.ctx, b.ID, l.user.ID, runtime.Decision{Allow: false, Message: "later"}, ""); err != nil {
 		t.Fatal(err)
 	}
 	l.waitTurns(2, store.TurnDone, "the link turn to finish")
-	if root := l.root(linked); root.Body != "No link: later" {
+	if root := l.root(linked); root.Body != "@alice No link: later" {
 		t.Errorf("root = %q", root.Body)
 	}
 	if notes := l.replies(linked.ID, store.SenderSystem); len(notes) != 1 || !strings.Contains(notes[0].Body, "alice declined Opener's link: fake “Sign in to continue” at https://login.example.com/device: later") {
@@ -356,7 +387,13 @@ func TestLoop_WithdrawnApprovalIsClosed(t *testing.T) {
 			l := newLoop(t)
 			m := l.member("Waverer", map[string]any{"withdraw_ms": wait, "delay_ms": 1500})
 			thread := l.topic(l.say("@Waverer build", "", m))
-			turns := l.waitTurns(1, store.TurnDone, "the turn to finish")
+			// The turn runs a second and a half on purpose: time enough to
+			// take the request back while it waits.
+			var turns []store.Turn
+			eventuallyWithin(t, 5*time.Second, func() bool {
+				turns = l.turns()
+				return len(turns) == 1 && turns[0].Status == store.TurnDone
+			}, "the turn to finish")
 			approvals, err := l.s.ListTurnApprovals(l.ctx, turns[0].ID)
 			if err != nil {
 				t.Fatal(err)
@@ -367,7 +404,7 @@ func TestLoop_WithdrawnApprovalIsClosed(t *testing.T) {
 			if notes := l.replies(thread.ID, store.SenderSystem); len(notes) != 1 || notes[0].Body != "Waverer took back its request to run `make test`" {
 				t.Errorf("notes = %+v", notes)
 			}
-			if root := l.root(thread); root.Body != "Withdrawn" {
+			if root := l.root(thread); root.Body != "@alice Withdrawn" {
 				t.Errorf("root = %q", root.Body)
 			}
 		})
@@ -379,10 +416,10 @@ func TestNotes_Plans(t *testing.T) {
 	input := `{"plan":"\n# Tidy up the parser\n1. Remove dead code"}`
 	p := &pendingApproval{kind: store.ApprovalToolUse, tool: "ExitPlanMode", input: input}
 	for got, want := range map[string]string{
-		askedNote(store.ApprovalToolUse, "Claude", "ExitPlanMode", input, "a1"):         "Claude asks for its plan “Tidy up the parser” to be approved (approval a1 pending)",
-		decidedNote(p, "alice", "Claude", runtime.Decision{Allow: true}):                "alice approved Claude's plan “Tidy up the parser”",
-		decidedNote(p, "alice", "Claude", runtime.Decision{Message: "smaller, please"}): "alice sent back Claude's plan “Tidy up the parser”: smaller, please",
-		expiredNote(p, "Claude", "nobody decided within 1h0m0s"):                        "Claude's plan “Tidy up the parser” went unapproved: nobody decided within 1h0m0s",
+		askedNote(store.ApprovalToolUse, "Claude", "ExitPlanMode", input, "a1"):             "Claude asks for its plan “Tidy up the parser” to be approved (approval a1 pending)",
+		decidedNote(p, "alice", "Claude", runtime.Decision{Allow: true}, ""):                "alice approved Claude's plan “Tidy up the parser”",
+		decidedNote(p, "alice", "Claude", runtime.Decision{Message: "smaller, please"}, ""): "alice sent back Claude's plan “Tidy up the parser”: smaller, please",
+		expiredNote(p, "Claude", "nobody decided within 1h0m0s"):                            "Claude's plan “Tidy up the parser” went unapproved: nobody decided within 1h0m0s",
 		withdrawnNote(p, "Claude"):  "Claude took back its plan “Tidy up the parser”",
 		describePlan(`{"plan":""}`): "(no plan given)",
 	} {
@@ -398,10 +435,10 @@ func TestNotes_Confirmations(t *testing.T) {
 	input := `{"title":"Dangerous command","message":"Allow rm -rf build?"}`
 	p := &pendingApproval{kind: store.ApprovalToolUse, tool: "confirm", input: input}
 	for got, want := range map[string]string{
-		askedNote(store.ApprovalToolUse, "Pi", "confirm", input, "a1"): "Pi asks you to confirm “Dangerous command: Allow rm -rf build?” (approval a1 pending)",
-		decidedNote(p, "alice", "Pi", runtime.Decision{Allow: true}):   "alice confirmed “Dangerous command: Allow rm -rf build?” for Pi",
-		decidedNote(p, "alice", "Pi", runtime.Decision{}):              "alice did not confirm “Dangerous command: Allow rm -rf build?” for Pi",
-		expiredNote(p, "Pi", "nobody decided within 1h0m0s"):           "Pi's “Dangerous command: Allow rm -rf build?” went unconfirmed: nobody decided within 1h0m0s",
+		askedNote(store.ApprovalToolUse, "Pi", "confirm", input, "a1"):   "Pi asks you to confirm “Dangerous command: Allow rm -rf build?” (approval a1 pending)",
+		decidedNote(p, "alice", "Pi", runtime.Decision{Allow: true}, ""): "alice confirmed “Dangerous command: Allow rm -rf build?” for Pi",
+		decidedNote(p, "alice", "Pi", runtime.Decision{}, ""):            "alice did not confirm “Dangerous command: Allow rm -rf build?” for Pi",
+		expiredNote(p, "Pi", "nobody decided within 1h0m0s"):             "Pi's “Dangerous command: Allow rm -rf build?” went unconfirmed: nobody decided within 1h0m0s",
 		withdrawnNote(p, "Pi"):                               "Pi took back “Dangerous command: Allow rm -rf build?”",
 		describeConfirm(`{"title":"","message":"Proceed?"}`): "“Proceed?”",
 	} {

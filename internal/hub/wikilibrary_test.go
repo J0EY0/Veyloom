@@ -231,7 +231,7 @@ func TestLoop_TurnsGetTheSkillsAndSayWhichTheyUsed(t *testing.T) {
 	user := l.member("User", map[string]any{"use_skill": "go-table-tests"})
 	before := l.say("@User write the tests", "", user)
 	l.waitTurns(2, store.TurnDone, "User's turn before the install")
-	if reply := l.root(l.topic(before)).Body; reply != "no such skill: go-table-tests" {
+	if reply := l.root(l.topic(before)).Body; reply != "@alice no such skill: go-table-tests" {
 		t.Errorf("not installed, the skill is not there: %q", reply)
 	}
 	l.install("go-table-tests", user)
@@ -244,7 +244,7 @@ func TestLoop_TurnsGetTheSkillsAndSayWhichTheyUsed(t *testing.T) {
 		t.Errorf("the turn used %v", got)
 	}
 	// The runtime read the skill as the library has it, in Agent Skills form.
-	if reply := l.root(l.topic(asked)).Body; reply != "Write the cases as a table." {
+	if reply := l.root(l.topic(asked)).Body; reply != "@alice Write the cases as a table." {
 		t.Errorf("the skill as the runtime read it: %q", reply)
 	}
 	// The transcript names the skills; their text is the library's.
@@ -266,7 +266,7 @@ func TestLoop_TurnsGetTheSkillsAndSayWhichTheyUsed(t *testing.T) {
 	}
 	after := l.say("@User write the tests", "", user)
 	l.waitTurns(4, store.TurnDone, "User's turn after")
-	if reply := l.root(l.topic(after)).Body; reply != "no such skill: go-table-tests" {
+	if reply := l.root(l.topic(after)).Body; reply != "@alice no such skill: go-table-tests" {
 		t.Errorf("taken off, the skill is not there: %q", reply)
 	}
 }

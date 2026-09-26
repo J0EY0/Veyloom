@@ -185,7 +185,7 @@ func TestPiSmoke_AtWork(t *testing.T) {
 	}
 	t.Logf("pi said %q", reply)
 
-	if _, err := r.h.DecideApproval(r.ctx, asked[0].ID, r.user.ID, runtime.Decision{Allow: true}); err != nil {
+	if _, err := r.h.DecideApproval(r.ctx, asked[0].ID, r.user.ID, runtime.Decision{Allow: true}, ""); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, func() bool {
@@ -214,7 +214,7 @@ func TestPiSmoke_UpkeepHearsPeople(t *testing.T) {
 		RoleCard: "You keep the team's wiki in order.",
 	}, t.TempDir())
 	manual := store.UpkeepManual
-	if _, err := r.s.UpdateProject(r.ctx, r.room.ProjectID, store.ProjectPatch{WikiMaintainer: &r.member.ID, WikiMaintainerTrigger: &manual}); err != nil {
+	if _, err := r.s.UpdateProject(r.ctx, r.room.ProjectID, store.ProjectPatch{WikiUpkeep: &upkeepOn, WikiMaintainer: &r.member.ID, WikiMaintainerTrigger: &manual}); err != nil {
 		t.Fatal(err)
 	}
 	// With the maintainer alone in the chat, what people say without an @
@@ -308,7 +308,7 @@ func TestPiSmoke_ChecksPagesAgain(t *testing.T) {
 		RoleCard: "You keep the team's wiki in order.",
 	}, dir)
 	manual := store.UpkeepManual
-	if _, err := r.s.UpdateProject(r.ctx, r.room.ProjectID, store.ProjectPatch{WikiMaintainer: &r.member.ID, WikiMaintainerTrigger: &manual}); err != nil {
+	if _, err := r.s.UpdateProject(r.ctx, r.room.ProjectID, store.ProjectPatch{WikiUpkeep: &upkeepOn, WikiMaintainer: &r.member.ID, WikiMaintainerTrigger: &manual}); err != nil {
 		t.Fatal(err)
 	}
 	project, err := r.s.GetProject(r.ctx, r.room.ProjectID)

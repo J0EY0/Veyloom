@@ -1,16 +1,18 @@
 -- name: CreateApproval :one
 -- The caller may supply the id so it can announce the approval before the
 -- row exists; a null id lets the database assign one.
-INSERT INTO approvals (id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, message_id)
-VALUES (COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8)
+INSERT INTO approvals (id, turn_id, room_id, thread_id, member_id, request_id, kind, payload, message_id, similar_offer)
+VALUES (COALESCE(sqlc.narg('id')::uuid, gen_random_uuid()), $1, $2, $3, $4, $5, $6, $7, $8, sqlc.narg('similar_offer'))
 RETURNING *;
 
 -- name: CreateReviewedApproval :one
--- A request the runtime settled on its own, recorded already decided so the
--- room sees who decided and why.
+-- A request settled without a person being asked, recorded already decided
+-- so the room sees who decided and why: the runtime's own reviewer, or the
+-- hub answering for a person (a rule the member has, a turn let through;
+-- decided_by is then who allowed it).
 INSERT INTO approvals (turn_id, room_id, thread_id, member_id, request_id, kind, payload, message_id,
-                       status, message, reviewer, answer, decided_at)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg('answer'), now())
+                       status, message, reviewer, answer, decided_by, decided_at)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, sqlc.narg('answer'), sqlc.narg('decided_by'), now())
 RETURNING *;
 
 -- name: GetApproval :one
@@ -18,13 +20,16 @@ SELECT * FROM approvals WHERE id = $1;
 
 -- name: DecideApproval :one
 -- The first decision wins: only a pending approval can be decided, so two
--- people answering at once cannot both succeed.
+-- people answering at once cannot both succeed. The reviewer is the hub's
+-- when it answered for a person (a turn they let through).
 UPDATE approvals SET
-    status     = $2,
-    message    = $3,
-    decided_by = $4,
-    answer     = sqlc.narg('answer'),
-    decided_at = now()
+    status       = $2,
+    message      = $3,
+    decided_by   = $4,
+    answer       = sqlc.narg('answer'),
+    scope        = sqlc.arg('scope'),
+    reviewer     = sqlc.arg('reviewer'),
+    decided_at   = now()
 WHERE id = $1 AND status = 'pending'
 RETURNING *;
 

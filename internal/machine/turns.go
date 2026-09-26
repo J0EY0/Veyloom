@@ -14,6 +14,7 @@ import (
 
 	"github.com/J0EY0/veyloom/internal/protocol"
 	"github.com/J0EY0/veyloom/internal/runtime"
+	"github.com/J0EY0/veyloom/internal/worktree"
 )
 
 // turnRunner executes turns on this machine's runtimes and streams their
@@ -68,6 +69,9 @@ func (r *turnRunner) start(ctx context.Context, req protocol.StartTurn) {
 
 	// What the turn may ask of this machine, and through it of the hub.
 	req.Spec.Host = &turnHost{runner: r, turnID: req.TurnID}
+	// Its git follows the squashed merges of the members' work, as the
+	// machine's own does.
+	req.Spec.Env = worktree.AgentEnv
 	// The skills it is given, where its runtime loads them from. A turn
 	// whose skills could not be written goes without, and people are told.
 	if req.Spec.Skills != nil && r.skillRoot != "" {
@@ -212,7 +216,7 @@ func (r *turnRunner) pump(ctx context.Context, turnID string, turn runtime.Turn)
 func outbound(turnID string, ev runtime.Event) protocol.Message {
 	if ev.Kind == runtime.EventApprovalRequest {
 		return protocol.ApprovalRequest{
-			TurnID: turnID, ApprovalID: ev.ApprovalID, ApprovalKind: ev.ApprovalKind, Tool: ev.Tool, Input: ev.Input, At: ev.At,
+			TurnID: turnID, ApprovalID: ev.ApprovalID, ApprovalKind: ev.ApprovalKind, Tool: ev.Tool, Input: ev.Input, At: ev.At, Similar: ev.Similar,
 			Reviewer: ev.Reviewer, Verdict: ev.Verdict, Why: ev.Text, Detail: ev.Detail,
 		}
 	}

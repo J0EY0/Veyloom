@@ -377,3 +377,106 @@ func TestListUserMentions_AcrossRoomsNewestFirst(t *testing.T) {
 		t.Errorf("bob was never mentioned: %+v", none)
 	}
 }
+
+// What a person read of their inbox is kept: messages marked by id, by the
+// topic they are in, its root and replies, or all up to a point; the rest
+// are counted as unread.
+func TestInboxReads(t *testing.T) {
+	f := newChatFixture(t)
+	ctx := context.Background()
+	bob, err := f.s.CreateUser(ctx, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	say := func(body, threadID string) store.Message {
+		t.Helper()
+		m, err := f.s.CreateMessage(ctx, store.NewMessage{
+			RoomID: f.room.ID, ThreadID: threadID, SenderKind: store.SenderUser, UserID: bob.ID, Body: body,
+			Mentions: []store.Mention{{Kind: store.MentionUser, ID: f.user.ID}},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return m
+	}
+	unread := func() int {
+		t.Helper()
+		n, err := f.s.CountUnreadMentions(ctx, f.user.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	mark := func(read store.InboxRead) int {
+		t.Helper()
+		n, err := f.s.MarkMentionsRead(ctx, f.user.ID, read)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	root := say("@alice look", "")
+	thread, err := f.s.ThreadForMessage(ctx, root.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	say("@alice and this", thread.ID)
+	f.post(t, "not for alice", thread.ID)
+	other := say("@alice elsewhere", "")
+
+	if n := unread(); n != 3 {
+		t.Fatalf("unread at first: %d", n)
+	}
+	if n := mark(store.InboxRead{MessageIDs: []string{other.ID}}); n != 1 || unread() != 2 {
+		t.Errorf("one read: %d, unread %d", n, unread())
+	}
+	if n := mark(store.InboxRead{MessageIDs: []string{other.ID}}); n != 0 {
+		t.Errorf("read again: %d", n)
+	}
+	if n := mark(store.InboxRead{ThreadID: thread.ID}); n != 2 || unread() != 0 {
+		t.Errorf("the topic read: %d, unread %d", n, unread())
+	}
+	items, err := f.s.ListUserMentions(ctx, f.user.ID, 0, 10)
+	if err != nil || len(items) != 3 || !items[0].Read || !items[1].Read || !items[2].Read {
+		t.Errorf("the inbox: %+v %v", items, err)
+	}
+
+	later := say("@alice later", "")
+	if n := mark(store.InboxRead{UpTo: later.Seq - 1}); n != 0 || unread() != 1 {
+		t.Errorf("all up to before it: %d, unread %d", n, unread())
+	}
+	if n := mark(store.InboxRead{UpTo: later.Seq}); n != 1 || unread() != 0 {
+		t.Errorf("all: %d, unread %d", n, unread())
+	}
+	if n, _ := f.s.CountUnreadMentions(ctx, bob.ID); n != 0 {
+		t.Errorf("bob was never mentioned, yet has %d unread", n)
+	}
+
+	// The signed-in account is no users row (it lives in the state dir),
+	// and reads its inbox all the same.
+	account := "0b5a3f9e-7d1c-4c2a-9e8f-1a2b3c4d5e6f"
+	if _, err := f.s.CreateMessage(ctx, store.NewMessage{
+		RoomID: f.room.ID, SenderKind: store.SenderUser, UserID: bob.ID, Body: "@you look",
+		Mentions: []store.Mention{{Kind: store.MentionUser, ID: account}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if n, err := f.s.MarkMentionsRead(ctx, account, store.InboxRead{UpTo: later.Seq + 10}); err != nil || n != 1 {
+		t.Errorf("the account reads its inbox: %d %v", n, err)
+	}
+}
+
+func TestAskLine(t *testing.T) {
+	names := []string{"Coder", "Codex Implementer", "Code"}
+	for _, c := range []struct{ body, want string }{
+		{"@Coder 把标签加上：要能按标签过滤", "把标签加上"},
+		{"@Codex Implementer @Coder  看一下 README。然后提交", "看一下 README"},
+		{"\n\n  review the tags feature\nmore", "review the tags feature"},
+		{"@Coder", ""},
+		{"@Bob hello", "@Bob hello"},
+	} {
+		if got := store.AskLine(c.body, names); got != c.want {
+			t.Errorf("AskLine(%q) = %q, want %q", c.body, got, c.want)
+		}
+	}
+}

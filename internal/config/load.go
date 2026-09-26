@@ -126,6 +126,11 @@ func (l *Loader) Load(path string) (Config, error) {
 	} else {
 		cfg.Machine.ToolDir = expandHome(cfg.Machine.ToolDir)
 	}
+	if cfg.Machine.WorktreeDir == "" {
+		cfg.Machine.WorktreeDir = filepath.Join(cfg.State.Dir, "worktrees")
+	} else {
+		cfg.Machine.WorktreeDir = expandHome(cfg.Machine.WorktreeDir)
+	}
 	return cfg, nil
 }
 
@@ -160,7 +165,6 @@ func setDefaults(v *viper.Viper, def Config) {
 	v.SetDefault("hub.memory_personal_chars", def.Hub.MemoryPersonalChars)
 	v.SetDefault("hub.memory_project_chars", def.Hub.MemoryProjectChars)
 	v.SetDefault("hub.approval_timeout", def.Hub.ApprovalTimeout)
-	v.SetDefault("hub.relay_budget", def.Hub.RelayBudget)
 	v.SetDefault("hub.upkeep_idle", def.Hub.UpkeepIdle)
 	v.SetDefault("hub.upkeep_check", def.Hub.UpkeepCheck)
 	v.SetDefault("hub.upkeep_turns", def.Hub.UpkeepTurns)
@@ -174,6 +178,8 @@ func setDefaults(v *viper.Viper, def Config) {
 	v.SetDefault("machine.event_flush_interval", def.Machine.EventFlushInterval)
 	v.SetDefault("machine.session_dir", def.Machine.SessionDir)
 	v.SetDefault("machine.tool_dir", def.Machine.ToolDir)
+	v.SetDefault("machine.worktree_dir", def.Machine.WorktreeDir)
+	v.SetDefault("machine.workspace_setup_timeout", def.Machine.WorkspaceSetupTimeout)
 }
 
 // expandHome replaces a leading "~/" with the home directory, which YAML

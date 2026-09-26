@@ -65,20 +65,28 @@ func (c CodexConfig) withDefaults() CodexConfig {
 	return c
 }
 
-// codexPolicy is how a permission preset maps onto the app-server's two
-// knobs: when it asks (approval policy) and what the sandbox lets it touch.
+// codexPolicy is how a permission preset maps onto the app-server's knobs:
+// when it asks (approval policy), what the sandbox lets it touch, and who
+// it asks (approvals reviewer; empty leaves the person's configuration
+// to say).
 type codexPolicy struct {
 	approval string // untrusted, on-request, never
 	sandbox  string // read-only, workspace-write, danger-full-access
+	reviewer string // user, auto_review
 }
 
 // codexPolicies maps the presets. edit_with_approval keeps the sandbox on
-// the workspace and lets the agent ask for anything beyond it; full_auto
-// keeps the same sandbox but never asks.
+// the workspace and lets the agent ask people for anything beyond it, even
+// where the person's own Codex has its automatic review on; auto_review
+// has that review decide and ask people only what it will not; full_auto
+// trusts the agent as the other runtimes' full_auto does, with no sandbox
+// and nothing asked: its work reaches the main line only once a person
+// merges it (docs/design.md 4.6, 5.21).
 var codexPolicies = map[string]codexPolicy{
 	PermissionReadOnly:         {approval: "never", sandbox: "read-only"},
-	PermissionEditWithApproval: {approval: "on-request", sandbox: "workspace-write"},
-	PermissionFullAuto:         {approval: "never", sandbox: "workspace-write"},
+	PermissionEditWithApproval: {approval: "on-request", sandbox: "workspace-write", reviewer: "user"},
+	PermissionAutoReview:       {approval: "on-request", sandbox: "workspace-write", reviewer: "auto_review"},
+	PermissionFullAuto:         {approval: "never", sandbox: "danger-full-access"},
 }
 
 // codexSandboxTypes maps a sandbox mode onto the tagged form turn/start
@@ -163,6 +171,7 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 		Args:        append([]string{"app-server"}, optStrings(spec.Options, "extra_args")...),
 		Dir:         spec.WorkDir,
 		StdinPipe:   true,
+		Env:         spec.Env,
 		StderrBytes: r.cfg.StderrBytes,
 		WaitDelay:   r.cfg.WaitDelay,
 	})
@@ -187,6 +196,7 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 		items:     make(map[string]codexItem),
 		mcpFailed: make(map[string]bool),
 		tokens:    make(map[string]*codexThreadTokens),
+		prefixes:  commandPrefixes(spec.AllowedRules),
 	}
 	go t.run(spec)
 	return t, nil
@@ -256,6 +266,9 @@ type codexTurn struct {
 	reviewing  int
 	reviewNote string
 	mcpFailed  map[string]bool
+	// prefixes are the commands the turn may run without asking: the
+	// member's rules, and what people allowed for the rest of the turn.
+	prefixes [][]string
 
 	eof       chan struct{}
 	completed chan codexTurnEnd
@@ -310,6 +323,9 @@ func (t *codexTurn) converse(spec TurnSpec) (Result, error) {
 		Model string `json:"model"`
 	}
 	params := map[string]any{"approvalPolicy": policy.approval, "sandbox": policy.sandbox}
+	if policy.reviewer != "" {
+		params["approvalsReviewer"] = policy.reviewer
+	}
 	if t.mcpServer != nil {
 		// A config override, keyed like `-c mcp_servers.veyloom=…` on the
 		// command line: it adds this server to whatever the user has set
@@ -365,6 +381,9 @@ func (t *codexTurn) converse(spec TurnSpec) (Result, error) {
 		"input":          []map[string]any{{"type": "text", "text": spec.Prompt}},
 		"approvalPolicy": policy.approval,
 		"sandboxPolicy":  map[string]any{"type": codexSandboxTypes[policy.sandbox]},
+	}
+	if policy.reviewer != "" {
+		turnParams["approvalsReviewer"] = policy.reviewer
 	}
 	if spec.WorkDir != "" {
 		turnParams["cwd"] = spec.WorkDir
@@ -856,6 +875,9 @@ func (t *codexTurn) serveRequest(msg codexMessage) {
 			Command string `json:"command"`
 			Cwd     string `json:"cwd"`
 			Reason  string `json:"reason"`
+			// Prefix is the command's first words, which Codex proposes
+			// allowing whatever starts with.
+			Prefix []string `json:"proposedExecpolicyAmendment"`
 		}
 		_ = json.Unmarshal(msg.Params, &p)
 		input := map[string]any{"command": p.Command}
@@ -865,7 +887,7 @@ func (t *codexTurn) serveRequest(msg codexMessage) {
 		if p.Reason != "" {
 			input["reason"] = p.Reason
 		}
-		t.respond(msg.ID, map[string]string{"decision": t.decide("commandExecution", input)})
+		t.respond(msg.ID, map[string]string{"decision": t.decideCommand(input, p.Command, p.Prefix)})
 	case "item/fileChange/requestApproval":
 		var p struct {
 			ItemID    string `json:"itemId"`
@@ -1129,15 +1151,78 @@ func jsonPresent(raw json.RawMessage) bool {
 }
 
 // decide asks the hub and maps its answer onto the app-server's decision
-// vocabulary. A turn that ends while the request is pending declines.
+// vocabulary. A file change can be allowed for the session, the turn:
+// Codex asks no more for the same again. A turn that ends while the
+// request is pending declines.
 func (t *codexTurn) decide(tool string, input map[string]any) string {
+	var offer *Similar
+	if tool == "fileChange" {
+		offer = &Similar{Same: true}
+	}
+	return t.askPermission(tool, input, offer)
+}
+
+// decideCommand is decide for a command. One a rule of the member's
+// covers runs without anyone being asked, and people are told which rule
+// let it (docs/design.md 4.6). Otherwise people may allow, with it, the
+// same command again and, when Codex proposed the words it starts with,
+// whatever starts with them: the runner, not Codex, keeps that rule, so
+// it lasts the turn and goes no further than this member.
+func (t *codexTurn) decideCommand(input map[string]any, command string, prefix []string) string {
+	if rule := t.coveringPrefix(command); rule != nil {
+		raw, _ := json.Marshal(input)
+		detail, _ := json.Marshal(map[string]any{"prefix": rule})
+		t.reviewed(t.ctx, "commandExecution", string(raw), ReviewerRule, VerdictAllowed, "", detail)
+		return "accept"
+	}
+	offer := &Similar{Same: true}
+	if len(prefix) > 0 {
+		offer.Prefix = prefix
+	}
+	d := t.askPermission("commandExecution", input, offer)
+	if d == "acceptForSession" && len(prefix) > 0 {
+		t.mu.Lock()
+		t.prefixes = append(t.prefixes, prefix)
+		t.mu.Unlock()
+	}
+	return d
+}
+
+// coveringPrefix is the prefix among the turn's that command starts with,
+// when it is one simple command; nil otherwise.
+func (t *codexTurn) coveringPrefix(command string) []string {
+	words, ok := commandWords(command)
+	if !ok {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	for _, p := range t.prefixes {
+		if hasPrefix(words, p) {
+			return p
+		}
+	}
+	return nil
+}
+
+// askPermission puts a request to the hub, offering what an allow can take
+// in, and maps the answer onto the app-server's decisions.
+func (t *codexTurn) askPermission(tool string, input map[string]any, offer *Similar) string {
 	raw, err := json.Marshal(input)
 	if err != nil {
 		return "decline"
 	}
-	d, err := t.requestApproval(t.ctx, tool, string(raw))
-	if err != nil || !d.Allow {
+	var d Decision
+	if offer != nil {
+		d, err = t.requestApprovalOffering(t.ctx, tool, string(raw), offer)
+	} else {
+		d, err = t.requestApproval(t.ctx, tool, string(raw))
+	}
+	switch {
+	case err != nil || !d.Allow:
 		return "decline"
+	case d.Similar:
+		return "acceptForSession"
 	}
 	return "accept"
 }

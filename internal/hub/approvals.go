@@ -56,22 +56,32 @@ func (m *TurnManager) OnApproval(conn protocol.Conn, req protocol.ApprovalReques
 		}
 	}
 	at.mu.Unlock()
-	if req.Reviewer != "" {
+	switch {
+	case req.Reviewer == store.ReviewerRule:
+		// A rule of the member's let it through: kept, and not told in
+		// the thread, where nobody need see it again.
+		go m.recordReviewed(at, req, false)
+		return
+	case req.Reviewer != "":
 		// Settled already, and the turn goes on: the record takes its
 		// place on the turn's executor, after what the agent said before
 		// and ahead of what it says next and of the turn's end.
-		m.closeSegment(context.Background(), at, false)
-		at.enqueue(func() { m.recordReviewed(at, req) })
+		m.closeSegment(context.Background(), at, false, true)
+		at.enqueue(func() { m.recordReviewed(at, req, true) })
+		return
+	}
+	if userID := at.trustedFor(req); userID != "" {
+		go m.allowTrusted(at, req, userID)
 		return
 	}
 	go m.raise(at, req)
 }
 
-// recordReviewed records a request the runtime settled on its own and tells
-// the thread, so people see what was decided for them, by whom and why. It
-// is already decided: nothing is pending and no decision goes back. Runs on
-// the turn's executor.
-func (m *TurnManager) recordReviewed(at *activeTurn, req protocol.ApprovalRequest) {
+// recordReviewed records a request the runtime settled on its own and, with
+// announce, tells the thread, so people see what was decided for them, by
+// whom and why. It is already decided: nothing is pending and no decision
+// goes back. What is announced runs on the turn's executor.
+func (m *TurnManager) recordReviewed(at *activeTurn, req protocol.ApprovalRequest, announce bool) {
 	ctx, cancel := context.WithTimeout(context.Background(), m.storeTimeout)
 	defer cancel()
 
@@ -84,17 +94,19 @@ func (m *TurnManager) recordReviewed(at *activeTurn, req protocol.ApprovalReques
 	}
 
 	var messageID string
-	note, err := m.post(ctx, store.NewMessage{
-		RoomID:     at.thread.RoomID,
-		ThreadID:   at.thread.ID,
-		SenderKind: store.SenderSystem,
-		Body:       reviewedNote(req.Reviewer, at.member.DisplayName, describeToolUse(req.Tool, req.Input), status, req.Why),
-		TurnID:     at.turn.ID,
-	})
-	if err != nil {
-		m.logger.Error("announce reviewed approval", "turn", at.turn.ID, "err", err)
-	} else {
-		messageID = note.ID
+	if announce {
+		note, err := m.post(ctx, store.NewMessage{
+			RoomID:     at.thread.RoomID,
+			ThreadID:   at.thread.ID,
+			SenderKind: store.SenderSystem,
+			Body:       reviewedNote(req.Reviewer, at.member.DisplayName, describeToolUse(req.Tool, req.Input), status, req.Why),
+			TurnID:     at.turn.ID,
+		})
+		if err != nil {
+			m.logger.Error("announce reviewed approval", "turn", at.turn.ID, "err", err)
+		} else {
+			messageID = note.ID
+		}
 	}
 	kind := store.ApprovalKind(req.ApprovalKind)
 	if kind == "" {
@@ -175,7 +187,7 @@ func (m *TurnManager) raise(at *activeTurn, req protocol.ApprovalRequest) {
 
 	// Asking permission ends whatever the agent was saying: that text is
 	// stored first so the request note reads after it.
-	m.closeSegment(ctx, at, true)
+	m.closeSegment(ctx, at, true, true)
 
 	body := askedNote(kind, at.member.DisplayName, req.Tool, req.Input, id)
 	var messageID string
@@ -195,6 +207,10 @@ func (m *TurnManager) raise(at *activeTurn, req protocol.ApprovalRequest) {
 		at.mu.Unlock()
 	}
 
+	var similar json.RawMessage
+	if req.Similar != nil {
+		similar, _ = json.Marshal(req.Similar)
+	}
 	a, err := m.store.CreateApproval(ctx, store.NewApproval{
 		ID:        id,
 		TurnID:    at.turn.ID,
@@ -206,6 +222,7 @@ func (m *TurnManager) raise(at *activeTurn, req protocol.ApprovalRequest) {
 		Tool:      req.Tool,
 		Input:     req.Input,
 		MessageID: messageID,
+		Similar:   similar,
 	})
 	if err != nil {
 		// Unrecorded means undecidable: deny so the agent can move on.
@@ -220,9 +237,18 @@ func (m *TurnManager) raise(at *activeTurn, req protocol.ApprovalRequest) {
 	at.mu.Lock()
 	p.recorded = true
 	withdrawn := at.withdrawn[req.ApprovalID]
+	trustedBy := ""
+	if trustable(kind, req.Tool) {
+		trustedBy = at.trustedBy
+	}
 	at.mu.Unlock()
 	if withdrawn {
 		m.closeWithdrawn(id)
+		return
+	}
+	if trustedBy != "" {
+		// The turn came to be trusted while this was being recorded.
+		m.allowWaiting(ctx, id, trustedBy)
 		return
 	}
 
@@ -238,9 +264,11 @@ func (m *TurnManager) raise(at *activeTurn, req protocol.ApprovalRequest) {
 }
 
 // Decide applies a person's decision to a pending approval and forwards it
-// to the turn. The database settles who decided first; a decision that
-// loses that race is store.ErrConflict.
-func (m *TurnManager) Decide(ctx context.Context, approvalID, userID string, d runtime.Decision) (store.Approval, error) {
+// to the turn. scope is how far an allow goes (docs/design.md 4.6); empty
+// takes it from the decision as the runtime has it. A scope the request
+// does not offer is store.ErrInvalidInput. The database settles who
+// decided first; a decision that loses that race is store.ErrConflict.
+func (m *TurnManager) Decide(ctx context.Context, approvalID, userID string, d runtime.Decision, scope store.AllowScope) (store.Approval, error) {
 	status := store.ApprovalDenied
 	if d.Allow {
 		status = store.ApprovalAllowed
@@ -249,13 +277,24 @@ func (m *TurnManager) Decide(ctx context.Context, approvalID, userID string, d r
 	if err != nil {
 		return store.Approval{}, err
 	}
+	if scope, err = allowScope(asked, d, scope); err != nil {
+		return store.Approval{}, err
+	}
+	// The runtime takes in the like of the request for the rest of the
+	// turn, whether or not it is kept for the member beyond it.
+	d.Similar = scope == store.ScopeSimilar || scope == store.ScopeAlways
 	// The answer as given goes to the runtime; what is kept leaves out
 	// anything asked as a secret.
-	a, err := m.store.DecideApproval(ctx, approvalID, store.ApprovalOutcome{Status: status, Message: d.Message, DecidedBy: userID, Answer: storedAnswer(asked, d.Answer)})
+	a, err := m.store.DecideApproval(ctx, approvalID, store.ApprovalOutcome{
+		Status: status, Message: d.Message, DecidedBy: userID, Answer: storedAnswer(asked, d.Answer), Scope: scope,
+	})
 	if err != nil {
 		return store.Approval{}, err
 	}
 	m.publish(approvalEvent(EventApprovalDecided, a))
+	if scope == store.ScopeAlways {
+		m.keepRules(ctx, a, userID)
+	}
 
 	at, p := m.settle(approvalID)
 	if at == nil {
@@ -265,6 +304,11 @@ func (m *TurnManager) Decide(ctx context.Context, approvalID, userID string, d r
 		return a, nil
 	}
 	m.recordDecision(at, a)
+	if scope == store.ScopeTurn {
+		// Before the runtime hears of the allow: whatever it asks next
+		// must find the turn trusted.
+		m.trust(ctx, at, userID)
+	}
 
 	// Tell the thread before the machine, so the note always precedes
 	// whatever the agent does with the decision.
@@ -272,7 +316,7 @@ func (m *TurnManager) Decide(ctx context.Context, approvalID, userID string, d r
 	if user, err := m.store.GetUser(ctx, userID); err == nil {
 		who = user.Name
 	}
-	m.noteDecision(ctx, at, p, decidedNote(p, who, at.member.DisplayName, d))
+	m.noteDecision(ctx, at, p, decidedNote(p, who, at.member.DisplayName, d, scope))
 	m.deliver(at, p, d)
 	return a, nil
 }
@@ -296,8 +340,9 @@ func askedNote(kind store.ApprovalKind, member, tool, input, id string) string {
 	return fmt.Sprintf("%s wants to run %s (approval %s pending)", member, describeToolUse(tool, input), id)
 }
 
-// decidedNote is the thread's line for a request once a person settled it.
-func decidedNote(p *pendingApproval, who, member string, d runtime.Decision) string {
+// decidedNote is the thread's line for a request once a person settled it,
+// saying how far an allow went.
+func decidedNote(p *pendingApproval, who, member string, d runtime.Decision, scope store.AllowScope) string {
 	switch p.kind {
 	case store.ApprovalQuestion:
 		if d.Allow {
@@ -328,7 +373,14 @@ func decidedNote(p *pendingApproval, who, member string, d runtime.Decision) str
 		return fmt.Sprintf("%s did not confirm %s for %s%s", who, describeConfirm(p.input), member, suffix(d.Message))
 	}
 	what := describeToolUse(p.tool, p.input)
-	if d.Allow {
+	switch {
+	case d.Allow && scope == store.ScopeTurn:
+		return fmt.Sprintf("%s allowed %s to run %s, and whatever else it asks for the rest of the turn", who, member, what)
+	case d.Allow && scope == store.ScopeAlways:
+		return fmt.Sprintf("%s allowed %s to run %s, and the like of it from now on", who, member, what)
+	case d.Allow && d.Similar:
+		return fmt.Sprintf("%s allowed %s to run %s, and the like of it for the rest of the turn", who, member, what)
+	case d.Allow:
 		return fmt.Sprintf("%s allowed %s to run %s", who, member, what)
 	}
 	return fmt.Sprintf("%s denied %s running %s%s", who, member, what, suffix(d.Message))
@@ -587,12 +639,18 @@ func (m *TurnManager) settle(approvalID string) (*activeTurn, *pendingApproval) 
 // deliver sends a decision to the machine running the turn. If the machine is
 // gone the turn is being failed by MachineGone anyway.
 func (m *TurnManager) deliver(at *activeTurn, p *pendingApproval, d runtime.Decision) {
+	m.answer(at, p.requestID, d)
+}
+
+// answer is deliver for the runtime's request requestID, pending here or
+// not.
+func (m *TurnManager) answer(at *activeTurn, requestID string, d runtime.Decision) {
 	conn, ok := m.connFor(at.member.MachineID)
 	if !ok {
 		m.logger.Warn("approval decided while its machine is offline", "turn", at.turn.ID)
 		return
 	}
-	m.send(conn, protocol.ApprovalDecision{TurnID: at.turn.ID, ApprovalID: p.requestID, Decision: d})
+	m.send(conn, protocol.ApprovalDecision{TurnID: at.turn.ID, ApprovalID: requestID, Decision: d})
 }
 
 // send delivers one message to a machine within the store timeout.

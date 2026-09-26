@@ -127,9 +127,13 @@ WHERE mb.id = $1
   AND NOT EXISTS (SELECT 1 FROM turns AS t WHERE t.member_id = mb.id AND t.status = 'running')
 RETURNING *;
 
--- name: ClearWikiMaintainer :exec
--- A member taken out of its project keeps its wiki no longer.
-UPDATE projects SET wiki_maintainer_member_id = NULL WHERE wiki_maintainer_member_id = $1;
+-- name: ClearMemberRoles :exec
+-- A member taken out of its project keeps its wiki no longer, nor leads
+-- it: the project falls back on its leader and first member.
+UPDATE projects SET
+    wiki_maintainer_member_id = CASE WHEN wiki_maintainer_member_id = sqlc.arg(member_id)::uuid THEN NULL ELSE wiki_maintainer_member_id END,
+    leader_member_id = CASE WHEN leader_member_id = sqlc.arg(member_id)::uuid THEN NULL ELSE leader_member_id END
+WHERE wiki_maintainer_member_id = sqlc.arg(member_id)::uuid OR leader_member_id = sqlc.arg(member_id)::uuid;
 
 -- name: ListMachineMembers :many
 -- The current members a machine runs, across every project: the project
@@ -162,3 +166,30 @@ LEFT JOIN LATERAL (
 ) pending ON true
 WHERE mb.machine_id = $1 AND mb.removed_at IS NULL
 ORDER BY p.name, mb.created_at;
+
+-- name: SetMemberWorkspace :one
+-- Records the git worktree made for a member (design.md 5.21), not got
+-- ready yet.
+UPDATE members SET worktree_dir = sqlc.arg(worktree_dir), work_dir = sqlc.arg(work_dir), branch = sqlc.arg(branch), prepared_at = NULL
+WHERE id = sqlc.arg(id)
+RETURNING *;
+
+-- name: MarkMemberPrepared :one
+-- The member's worktree is ready for work.
+UPDATE members SET prepared_at = now() WHERE id = $1 AND worktree_dir <> ''
+RETURNING *;
+
+-- name: ClearMemberWorkspace :exec
+-- Forgets a member's worktree: it was taken away, or is gone.
+UPDATE members SET worktree_dir = '', work_dir = '', branch = '', prepared_at = NULL, overlaps_noted = '{}' WHERE id = $1;
+
+-- name: SetMemberOverlaps :exec
+-- Records which files of a member's work the chat was told another
+-- member's work changed too (design.md 5.21).
+UPDATE members SET overlaps_noted = sqlc.arg(files)::text[] WHERE id = sqlc.arg(id);
+
+-- name: AddMemberOverlaps :exec
+-- Adds files to those the chat was told about, for a member whose work
+-- another member's turn was found to overlap.
+UPDATE members SET overlaps_noted = ARRAY(SELECT DISTINCT f FROM unnest(overlaps_noted || sqlc.arg(files)::text[]) AS f ORDER BY f)
+WHERE id = sqlc.arg(id);

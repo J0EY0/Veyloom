@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -26,6 +28,8 @@ type loop struct {
 	room      store.Room
 	user      store.User
 	machineID string
+	// worktrees is where the machine makes the members' worktrees.
+	worktrees string
 }
 
 func newLoop(t *testing.T) *loop {
@@ -44,7 +48,11 @@ func newLoopWith(t *testing.T, cfg Config, opts ...Option) *loop {
 	cfg.TranscriptDir = t.TempDir()
 	cfg.HeartbeatInterval = time.Hour
 	h := New(s, cfg, opts...)
-	w := machine.New(machine.Config{Name: "laptop", ToolDir: t.TempDir()}, machine.NewDiscovery(nil, time.Second), &machine.MemoryIdentity{}, runtime.BuiltinRunners())
+	worktrees, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := machine.New(machine.Config{Name: "laptop", ToolDir: t.TempDir(), WorktreeDir: worktrees}, machine.NewDiscovery(nil, time.Second), &machine.MemoryIdentity{}, runtime.BuiltinRunners())
 	hubEnd, machineEnd := protocol.Pipe()
 	go h.Serve(ctx, hubEnd)
 	go w.Run(ctx, machineEnd)
@@ -58,7 +66,7 @@ func newLoopWith(t *testing.T, cfg Config, opts ...Option) *loop {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &loop{t: t, ctx: ctx, s: s, h: h, room: room, user: user, machineID: h.Machines()[0].ID}
+	return &loop{t: t, ctx: ctx, s: s, h: h, room: room, user: user, machineID: h.Machines()[0].ID, worktrees: worktrees}
 }
 
 // member sets up a fake-runtime agent with the given options and adds it
@@ -233,7 +241,7 @@ func TestLoop_MentionOpensATopicHeadedByTheReply(t *testing.T) {
 	}
 }
 
-func TestLoop_ToolTurnSplitsTextAndClosesWithAMention(t *testing.T) {
+func TestLoop_ToolTurnSplitsTextAndAddressesTheLastWord(t *testing.T) {
 	l := newLoop(t)
 	machine := l.member("Machine", map[string]any{"tool": true, "preamble": "let me look", "reply": "all done"})
 
@@ -245,23 +253,20 @@ func TestLoop_ToolTurnSplitsTextAndClosesWithAMention(t *testing.T) {
 	if root.Body != "let me look" {
 		t.Errorf("the text before the tool call fills the root, got %q", root.Body)
 	}
+	// The text after the tool call is a reply in the topic, the turn's last
+	// word, addressed to whoever asked so it reaches their inbox.
 	replies := l.replies(thread.ID, store.SenderAgent)
-	if len(replies) != 1 || replies[0].Body != "all done" || replies[0].TurnID != turns[0].ID {
+	if len(replies) != 1 || replies[0].Body != "@alice all done" || replies[0].TurnID != turns[0].ID {
 		t.Errorf("the text after the tool call is a reply in the topic, got %+v", replies)
+	}
+	if len(replies) == 1 && (len(replies[0].Mentions) != 1 || replies[0].Mentions[0] != (store.Mention{Kind: store.MentionUser, ID: l.user.ID})) {
+		t.Errorf("the last word mentions whoever asked, got %+v", replies[0].Mentions)
 	}
 	if turns[0].ReplyMessageID != replies[0].ID {
 		t.Errorf("the turn's reply is its last message, got %q", turns[0].ReplyMessageID)
 	}
-	top := l.topLevel()
-	if len(top) != 3 {
-		t.Fatalf("room should hold question, root and closing, got %+v", top)
-	}
-	closing := top[2]
-	if closing.SenderKind != store.SenderAgent || closing.Body != "@alice all done" || closing.TurnID != turns[0].ID {
-		t.Errorf("closing message = %+v", closing)
-	}
-	if len(closing.Mentions) != 1 || closing.Mentions[0] != (store.Mention{Kind: store.MentionUser, ID: l.user.ID}) {
-		t.Errorf("the closing message mentions whoever asked, got %+v", closing.Mentions)
+	if top := l.topLevel(); len(top) != 2 {
+		t.Fatalf("room should hold the question and the root, nothing more, got %+v", top)
 	}
 
 	summaries, err := l.s.ThreadSummaries(l.ctx, []string{root.ID, msg.ID})
@@ -277,25 +282,95 @@ func TestLoop_ToolTurnSplitsTextAndClosesWithAMention(t *testing.T) {
 	}
 }
 
+// A person asking again in a topic gets the answer addressed to them, in
+// the topic: they would not see it in the room otherwise. The answer at the
+// head of the topic, given in one breath right under the question, is not.
+func TestLoop_AnAnswerInATopicIsAddressed(t *testing.T) {
+	l := newLoop(t)
+	echo := l.member("Echo", map[string]any{"reply": "looked"})
+	msg := l.say("@Echo look", "", echo)
+	l.waitTurns(1, store.TurnDone, "the first answer")
+	thread := l.topic(msg)
+	if root := l.root(thread); root.Body != "looked" || len(root.Mentions) != 0 {
+		t.Errorf("an answer in one breath under the question: %+v", root)
+	}
+	l.say("and again?", thread.ID, echo)
+	l.waitTurns(2, store.TurnDone, "the answer in the topic")
+	replies := l.replies(thread.ID, store.SenderAgent)
+	if len(replies) != 1 || replies[0].Body != "@alice looked" || !slices.Equal(replies[0].Mentions, []store.Mention{{Kind: store.MentionUser, ID: l.user.ID}}) {
+		t.Errorf("the answer in the topic: %+v", replies)
+	}
+	if top := l.topLevel(); len(top) != 2 {
+		t.Errorf("the room should hold the question and the root only, got %+v", top)
+	}
+}
+
+// Reaching for a tool, as Claude Code does to load Veyloom's, is not using
+// one: the answer is still given in one breath, and no work.
+func TestLoop_ReachingForAToolIsStillOneBreath(t *testing.T) {
+	l := newLoop(t)
+	reach := map[string]any{"tool": "ToolSearch", "args": map[string]any{"query": "select:mcp__veyloom__read_topic"}}
+	reacher := l.member("Reacher", map[string]any{"tool_calls": []any{reach}, "reply": "ok"})
+	msg := l.say("@Reacher hi", "", reacher)
+	turns := l.waitTurns(1, store.TurnDone, "the turn")
+	if root := l.root(l.topic(msg)); root.Body != "ok" || len(root.Mentions) != 0 {
+		t.Errorf("the answer after reaching for a tool: %+v", root)
+	}
+	if turns[0].Worked {
+		t.Error("reaching for a tool is no work")
+	}
+}
+
+// A turn that says nothing after its tools has its last word, said before
+// them, addressed to whoever asked, in place.
+func TestLoop_TheLastWordBeforeTheToolsIsAddressed(t *testing.T) {
+	l := newLoop(t)
+	quiet := l.member("Quiet", map[string]any{"tool": true, "preamble": "on it", "quiet": true})
+	msg := l.say("@Quiet go", "", quiet)
+	turns := l.waitTurns(1, store.TurnDone, "the turn")
+	root := l.root(l.topic(msg))
+	if root.Body != "@alice on it" || !slices.Equal(root.Mentions, []store.Mention{{Kind: store.MentionUser, ID: l.user.ID}}) || turns[0].ReplyMessageID != root.ID {
+		t.Errorf("the root, the turn's last word: %+v (turn's reply %s)", root, turns[0].ReplyMessageID)
+	}
+	if len(l.replies(l.topic(msg).ID, store.SenderAgent)) != 0 || len(l.topLevel()) != 2 {
+		t.Error("nothing more is said")
+	}
+}
+
+func TestAddressTo(t *testing.T) {
+	for text, want := range map[string]string{
+		"done":            "@alice done",
+		"@alice done":     "@alice done",
+		"@alice，好了":       "@alice，好了",
+		"@alice":          "@alice",
+		"@alicex done":    "@alice @alicex done",
+		"# Plan\n\n- one": "@alice\n\n# Plan\n\n- one",
+	} {
+		if got := addressTo("alice", text); got != want {
+			t.Errorf("addressTo(%q) = %q, want %q", text, got, want)
+		}
+	}
+}
+
 func TestLoop_AnAgentMentioningAnotherRelaysWithinTheTopic(t *testing.T) {
 	l := newLoop(t)
 	echo := l.member("Echo", map[string]any{"reply": "looked, fine"})
-	hander := l.member("Hander", map[string]any{"tool": true, "reply": "交给 @Echo 看看，@alice 你也看下"})
+	hander := l.member("Hander", map[string]any{"tool": true, "reply": "交给 @Echo 看看，@alice 你也看下", "summary_reply": "Echo 看过了"})
 
 	msg := l.say("@Hander go", "", hander)
-	turns := l.waitTurns(2, store.TurnDone, "Hander's turn and Echo's relayed turn")
+	// Hander, Echo, and Hander summing up what it handed on.
+	turns := l.settle(3, "Hander's turn, Echo's relayed turn and the summing up")
 	thread := l.topic(msg)
 
 	// With no text before the tool call, the reply is the root itself; it
-	// records the agent it names.
+	// records the agent it names. It hands the work on, so it is not
+	// addressed to whoever asked: the summing up is.
 	root := l.root(thread)
-	if len(root.Mentions) != 1 || root.Mentions[0] != (store.Mention{Kind: store.MentionAgent, ID: echo.ID}) {
-		t.Errorf("the reply should record the agent it names, got %+v", root)
+	if root.Body != "交给 @Echo 看看，@alice 你也看下" || !slices.Equal(root.Mentions, []store.Mention{{Kind: store.MentionAgent, ID: echo.ID}}) {
+		t.Errorf("the reply should record the agent it names, and no more, got %+v", root)
 	}
-	top := l.topLevel()
-	closing := top[len(top)-1]
-	if len(closing.Mentions) != 2 || closing.Mentions[0].ID != l.user.ID || closing.Mentions[1].ID != echo.ID {
-		t.Errorf("the closing message mentions the asker and the named agent, got %+v", closing.Mentions)
+	if top := l.topLevel(); len(top) != 2 {
+		t.Errorf("the room should hold the question and the root only, got %+v", top)
 	}
 	// Naming Echo woke it, inside the same topic, answering the reply that
 	// named it.
@@ -308,13 +383,28 @@ func TestLoop_AnAgentMentioningAnotherRelaysWithinTheTopic(t *testing.T) {
 	if relayed == nil || relayed.ThreadID != thread.ID || relayed.TriggerMessageID != root.ID {
 		t.Fatalf("Echo should have run in the topic, triggered by the reply naming it, got %+v", relayed)
 	}
-	if replies := l.replies(thread.ID, store.SenderAgent); len(replies) == 0 || replies[len(replies)-1].MemberID != echo.ID {
-		t.Errorf("Echo's answer should be the last reply in the topic, got %+v", replies)
+	// Echo's answer names nobody, so the work handed on ends there, and
+	// Hander sums it up for the person.
+	replies := l.replies(thread.ID, store.SenderAgent)
+	if len(replies) != 2 || replies[0].MemberID != echo.ID || replies[1].MemberID != hander.ID || replies[1].Body != "@alice Echo 看过了" {
+		t.Errorf("Echo's answer, then Hander summing up, got %+v", replies)
 	}
-	// Echo's answer names nobody, so it ends there.
-	time.Sleep(300 * time.Millisecond)
-	if n := len(l.turns()); n != 2 {
-		t.Errorf("want 2 turns, got %d", n)
+}
+
+// A name in an agent's code, as when it quotes how to ask for something,
+// wakes no one and is recorded as no mention.
+func TestLoop_ANameInCodeWakesNoOne(t *testing.T) {
+	l := newLoop(t)
+	l.member("Echo", map[string]any{"reply": "looked, fine"})
+	teller := l.member("Teller", map[string]any{"reply": "写 `@Echo` 就能叫它，或者：\n```\n@Echo 看看\n```"})
+	msg := l.say("@Teller how do I ask Echo?", "", teller)
+	l.waitTurns(1, store.TurnDone, "Teller's turn")
+	if root := l.root(l.topic(msg)); len(root.Mentions) != 0 {
+		t.Errorf("mentions recorded from code: %+v", root.Mentions)
+	}
+	time.Sleep(200 * time.Millisecond)
+	if turns := l.turns(); len(turns) != 1 {
+		t.Errorf("woken from code: %+v", turns)
 	}
 }
 
@@ -352,38 +442,6 @@ func TestLoop_AnAgentTakenOutOfTheProjectIsNeitherWokenNorNamed(t *testing.T) {
 	if n := len(l.turns()); n != 1 {
 		t.Errorf("want still 1 turn, got %d", n)
 	}
-}
-
-func TestLoop_RelayStopsAtTheBudgetAndSaysSo(t *testing.T) {
-	l := newLoopWith(t, Config{RelayBudget: 2})
-	ping := l.member("Ping", map[string]any{"reply": "@Pong your turn"})
-	pong := l.member("Pong", map[string]any{"reply": "@Ping your turn"})
-
-	msg := l.say("@Ping go", "", ping)
-	// Ping (asked), Pong (relay 1), Ping (relay 2); the third relay is refused.
-	turns := l.waitTurns(3, store.TurnDone, "the relay chain to run out")
-	time.Sleep(300 * time.Millisecond)
-	if n := len(l.turns()); n != 3 {
-		t.Fatalf("the budget should stop the chain at 3 turns, got %d", n)
-	}
-	thread := l.topic(msg)
-	for _, turn := range turns {
-		if turn.ThreadID != thread.ID {
-			t.Errorf("every relayed turn stays in the topic, got %+v", turn)
-		}
-	}
-	order := []string{turns[0].MemberID, turns[1].MemberID, turns[2].MemberID}
-	if order[0] != ping.ID || order[1] != pong.ID || order[2] != ping.ID {
-		t.Errorf("unexpected relay order: %v (ping %s, pong %s)", order, ping.ID, pong.ID)
-	}
-	notes := l.replies(thread.ID, store.SenderSystem)
-	if len(notes) != 1 || !strings.Contains(notes[0].Body, "waits for a person") || !strings.Contains(notes[0].Body, "Ping mentioned Pong") {
-		t.Errorf("the topic should say the relay stopped, got %+v", notes)
-	}
-
-	// A person speaking in the topic starts the budget over.
-	l.say("keep going", thread.ID, pong)
-	l.waitTurns(6, store.TurnDone, "a fresh chain after the person spoke")
 }
 
 func TestLoop_ThreadFollowUpResumesSession(t *testing.T) {
@@ -608,6 +666,16 @@ func TestLoop_AskingTwoAgentsOpensOneTopicRootedAtTheAsk(t *testing.T) {
 	ask := l.say("@Alpha @Beta look at this together", "", alpha, beta)
 	turns := l.waitTurns(2, store.TurnDone, "both turns to finish")
 
+	// Each is told the other was asked too, and to do its own part now.
+	for _, turn := range turns {
+		other := "Beta"
+		if turn.MemberID == beta.ID {
+			other = "Alpha"
+		}
+		if prompt := specOf(t, turn).Prompt; !strings.Contains(prompt, "The person asked "+other+" in the same message as you") {
+			t.Errorf("the brief does not say %s was asked too:\n%s", other, prompt)
+		}
+	}
 	// One topic for both, rooted at the ask itself, not one per agent.
 	if turns[0].ThreadID != turns[1].ThreadID {
 		t.Fatalf("the two turns should share a topic, got %s and %s", turns[0].ThreadID, turns[1].ThreadID)
@@ -888,7 +956,7 @@ func TestLoop_LaterTurnsAreBriefedOnlyOnWhatIsNew(t *testing.T) {
 	}
 	// The second: what happened since, and no more.
 	for _, want := range []string{
-		"In this chat", "- Echo (you)", "- Other",
+		"In this chat", "- Echo (you, the leader)", "- Other",
 		"New in the room since you last looked:",
 		"[alice] fyi the deploy is at noon",
 		"[alice] @Other look at the logs",
@@ -979,12 +1047,14 @@ func TestLoop_AgentReadsAnotherTopicWithItsRoomTools(t *testing.T) {
 	// the runtime to the machine, over the protocol to the hub, and the
 	// answer all the way back.
 	asked := l.say("@Reader what did Worker do?", "", reader)
-	l.waitTurns(2, store.TurnDone, "Reader's turn")
+	// Reader's, the newest: its answer quotes "@Worker", which may wake
+	// Worker again before the brief is looked at.
+	read := l.waitTurns(2, store.TurnDone, "Reader's turn")[0]
 	answer := l.root(l.topic(asked)).Body
 	for _, want := range []string{
-		`Topic #1 "Tokens are done.", oldest first:`,
+		`Topic #1 "@alice Tokens are done.", oldest first:`,
 		"(asked in the room) ", "[alice] @Worker do the tokens",
-		"[Worker] Tokens are done.",
+		"[Worker] @alice Tokens are done.",
 		"(turn " + turns[0].ID + "; it changed: auth/token.go, auth/token_test.go)",
 	} {
 		if !strings.Contains(answer, want) {
@@ -992,7 +1062,7 @@ func TestLoop_AgentReadsAnotherTopicWithItsRoomTools(t *testing.T) {
 		}
 	}
 	// Every brief says the tools are there.
-	if prompt := promptOf(t, l.turns()[0]); !strings.Contains(prompt, "use your veyloom tools: list_topics, read_topic, read_turn, read_room, search_messages") {
+	if prompt := promptOf(t, read); !strings.Contains(prompt, "use your veyloom tools: list_topics, read_topic, read_turn, read_room, search_messages") {
 		t.Errorf("the brief should say how to read more:\n%s", prompt)
 	}
 }
@@ -1051,7 +1121,7 @@ func TestLoop_BriefSaysWhoIsAtWork(t *testing.T) {
 		"You are shown what is new",
 	)
 
-	if _, err := l.h.DecideApproval(l.ctx, asked.ID, l.user.ID, runtime.Decision{Allow: true}); err != nil {
+	if _, err := l.h.DecideApproval(l.ctx, asked.ID, l.user.ID, runtime.Decision{Allow: true}, ""); err != nil {
 		t.Fatal(err)
 	}
 	l.waitTurns(2, store.TurnDone, "both turns")

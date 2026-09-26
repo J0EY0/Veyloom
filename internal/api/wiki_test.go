@@ -352,8 +352,12 @@ func TestUpdateProject_WikiSettings(t *testing.T) {
 	var created ProjectResponse
 	do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"veyloom"}`, &created)
 	do(t, handler, http.MethodPatch, "/api/v1/projects/"+created.Project.ID, `{"name":"x"}`, nil)
-	if fake.patched.WikiMaintainer != nil || fake.patched.WikiMaintainerTrigger != nil || fake.patched.WikiExternalBundles != nil {
+	if fake.patched.WikiMaintainer != nil || fake.patched.WikiMaintainerTrigger != nil || fake.patched.WikiExternalBundles != nil || fake.patched.WikiUpkeep != nil || fake.patched.Leader != nil {
 		t.Errorf("left alone when absent: %+v", fake.patched)
+	}
+	do(t, handler, http.MethodPatch, "/api/v1/projects/"+created.Project.ID, `{"wiki_upkeep":true,"leader_member_id":"m2"}`, nil)
+	if u, l := fake.patched.WikiUpkeep, fake.patched.Leader; u == nil || !*u || l == nil || *l != "m2" || fake.patched.WikiMaintainer != nil {
+		t.Errorf("upkeep on and the leader %+v", fake.patched)
 	}
 	do(t, handler, http.MethodPatch, "/api/v1/projects/"+created.Project.ID, `{"wiki_maintainer_member_id":"m1","wiki_maintainer_trigger":"daily"}`, nil)
 	if m, tr := fake.patched.WikiMaintainer, fake.patched.WikiMaintainerTrigger; m == nil || *m != "m1" || tr == nil || *tr != store.UpkeepDaily {
@@ -369,8 +373,8 @@ func TestUpdateProject_WikiSettings(t *testing.T) {
 	}
 
 	// A maintainer chosen as the project is created goes to the store as is.
-	do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"kept","agent_ids":["g1"],"wiki_maintainer_agent_id":" g1 ","wiki_maintainer_trigger":"weekly"}`, nil)
-	if c := fake.created; c.WikiMaintainerAgentID != "g1" || c.WikiMaintainerTrigger != store.UpkeepWeekly {
+	do(t, handler, http.MethodPost, "/api/v1/projects", `{"name":"kept","agent_ids":["g1"],"wiki_upkeep":true,"wiki_maintainer_agent_id":" g1 ","wiki_maintainer_trigger":"weekly"}`, nil)
+	if c := fake.created; !c.WikiUpkeep || c.WikiMaintainerAgentID != "g1" || c.WikiMaintainerTrigger != store.UpkeepWeekly {
 		t.Errorf("created with %+v", c)
 	}
 

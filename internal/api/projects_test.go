@@ -334,6 +334,12 @@ func TestUpdateProject(t *testing.T) {
 	if resp.Project.RepoPath != "/" {
 		t.Errorf("the root keeps its slash: %q", resp.Project.RepoPath)
 	}
+
+	// How many turns agents may wake one another to (docs/design.md 5.22).
+	do(t, handler, http.MethodPatch, path, `{"relay_limit":12}`, &resp)
+	if fake.patched.RelayLimit == nil || *fake.patched.RelayLimit != 12 || fake.patched.RepoPath != nil {
+		t.Errorf("the relay limit patched: %+v", fake.patched)
+	}
 }
 
 func TestUpdateProject_BadRequests(t *testing.T) {

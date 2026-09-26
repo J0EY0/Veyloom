@@ -243,13 +243,33 @@ func (f *fakeAppServer) play(threadID, prompt string) bool {
 		}
 		json.Unmarshal(reply.Result, &res)
 		f.notify("item/started", item("", map[string]any{"item": map[string]any{"type": "commandExecution", "id": "cmd-1", "command": "rm -rf build", "cwd": "/repo", "status": "inProgress", "commandActions": []any{}}}))
-		if res.Decision == "accept" {
+		if res.Decision == "accept" || res.Decision == "acceptForSession" {
 			f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "commandExecution", "id": "cmd-1", "command": "rm -rf build", "cwd": "/repo", "status": "completed", "aggregatedOutput": "removed\n", "exitCode": 0, "commandActions": []any{}}}))
-			complete("completed", "", "ran it")
+			complete("completed", "", map[bool]string{false: "ran it", true: "ran it, and will again"}[res.Decision == "acceptForSession"])
 		} else {
 			f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "commandExecution", "id": "cmd-1", "command": "rm -rf build", "cwd": "/repo", "status": "declined", "commandActions": []any{}}}))
 			complete("completed", "", "declined")
 		}
+	case strings.Contains(prompt, "[prefix]"):
+		// Three commands, each proposing go test as the words to allow:
+		// two simple ones and one that does more after it.
+		var decisions []string
+		for i, command := range []string{"/bin/zsh -lc 'go test ./...'", "/bin/zsh -lc 'go test ./cmd/...'", "/bin/zsh -lc 'go test ./... && rm -rf /'"} {
+			id := 200 + i
+			f.send(map[string]any{"id": id, "method": "item/commandExecution/requestApproval", "params": item("", map[string]any{
+				"itemId": fmt.Sprintf("cmd-%d", i), "startedAtMs": 0, "command": command, "cwd": "/repo", "proposedExecpolicyAmendment": []string{"go", "test"},
+			})})
+			reply, ok := f.awaitReply(id)
+			if !ok {
+				return false
+			}
+			var res struct {
+				Decision string `json:"decision"`
+			}
+			json.Unmarshal(reply.Result, &res)
+			decisions = append(decisions, res.Decision)
+		}
+		complete("completed", "", strings.Join(decisions, ","))
 	case strings.Contains(prompt, "[filechange]"):
 		changes := []map[string]any{{"path": "notes.md", "kind": map[string]any{"type": "add"}, "diff": "+hi"}}
 		f.notify("item/started", item("", map[string]any{"item": map[string]any{"type": "fileChange", "id": "fc-1", "changes": changes, "status": "inProgress"}}))
@@ -559,7 +579,8 @@ func TestCodex_PoliciesPerPresetAndOverrides(t *testing.T) {
 	}{
 		{"read_only", PermissionReadOnly, nil, "never", "read-only", "readOnly"},
 		{"edit_with_approval", PermissionEditWithApproval, nil, "on-request", "workspace-write", "workspaceWrite"},
-		{"full_auto", PermissionFullAuto, nil, "never", "workspace-write", "workspaceWrite"},
+		{"auto_review", PermissionAutoReview, nil, "on-request", "workspace-write", "workspaceWrite"},
+		{"full_auto", PermissionFullAuto, nil, "never", "danger-full-access", "dangerFullAccess"},
 		{"unknown preset falls back to read only", "", nil, "never", "read-only", "readOnly"},
 		{"overrides", PermissionEditWithApproval, map[string]any{"approval_policy": "untrusted", "sandbox": "danger-full-access"}, "untrusted", "danger-full-access", "dangerFullAccess"},
 		{"bad sandbox override ignored", PermissionReadOnly, map[string]any{"sandbox": "chroot"}, "never", "read-only", "readOnly"},
@@ -578,6 +599,101 @@ func TestCodex_PoliciesPerPresetAndOverrides(t *testing.T) {
 				t.Errorf("thread/start %v, turn/start %v", start, ts)
 			}
 		})
+	}
+}
+
+// The presets that ask say who is asked: people for edit_with_approval,
+// whatever the person's own Codex does, and Codex's automatic review for
+// auto_review. The others leave it be, since nothing is asked.
+func TestCodex_ApprovalsReviewerPerPreset(t *testing.T) {
+	for permission, want := range map[string]any{
+		PermissionEditWithApproval: "user",
+		PermissionAutoReview:       "auto_review",
+		PermissionFullAuto:         nil,
+		PermissionReadOnly:         nil,
+	} {
+		t.Run(permission, func(t *testing.T) {
+			h := newCodexHarness(t)
+			turn, err := h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "hi", Permission: permission})
+			if err != nil {
+				t.Fatal(err)
+			}
+			drain(t, turn)
+			sent := h.sent(t)
+			start, ts := paramsOf(t, sent["thread/start"][0]), paramsOf(t, sent["turn/start"][0])
+			if start["approvalsReviewer"] != want || ts["approvalsReviewer"] != want {
+				t.Errorf("approvalsReviewer: thread/start %v, turn/start %v, want %v", start["approvalsReviewer"], ts["approvalsReviewer"], want)
+			}
+		})
+	}
+}
+
+// A command starting with the words of a rule of the member's runs without
+// anyone being asked, and people are told which rule let it. One that
+// does more than run one command is asked about all the same.
+func TestCodex_MemberRulesLetCommandsThrough(t *testing.T) {
+	h := newCodexHarness(t)
+	turn, err := h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "[prefix] test", Permission: PermissionEditWithApproval, AllowedRules: []string{`["go","test"]`, "Bash(make:*)"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ruled []Event
+	for {
+		ev, _ := awaitApproval(t, turn)
+		if ev.Reviewer == "" {
+			if ev.Input != `{"command":"/bin/zsh -lc 'go test ./... \u0026\u0026 rm -rf /'","cwd":"/repo"}` {
+				t.Errorf("asked about %s", ev.Input)
+			}
+			if err := turn.Answer(ev.ApprovalID, Decision{Allow: false}); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+		ruled = append(ruled, ev)
+	}
+	drain(t, turn)
+	if res, err := turn.Result(); err != nil || res.Output != "accept,accept,decline" {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	if len(ruled) != 2 || ruled[0].Reviewer != ReviewerRule || ruled[0].Verdict != VerdictAllowed || string(ruled[0].Detail) != `{"prefix":["go","test"]}` ||
+		ruled[1].Input != `{"command":"/bin/zsh -lc 'go test ./cmd/...'","cwd":"/repo"}` {
+		t.Errorf("settled by the rule: %+v", ruled)
+	}
+}
+
+// Allowing a command with the like of it takes in, for the rest of the
+// turn, whatever starts with the words Codex proposed: the runner keeps
+// that, so it goes no further than the turn.
+func TestCodex_AllowingTheLikeOfACommandKeepsItsWords(t *testing.T) {
+	h := newCodexHarness(t)
+	turn, err := h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "[prefix] test", Permission: PermissionEditWithApproval})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := awaitApproval(t, turn)
+	if first.Reviewer != "" || first.Similar == nil || !first.Similar.Same || strings.Join(first.Similar.Prefix, " ") != "go test" {
+		t.Fatalf("the first request: %+v (offer %+v)", first, first.Similar)
+	}
+	if err := turn.Answer(first.ApprovalID, Decision{Allow: true, Similar: true}); err != nil {
+		t.Fatal(err)
+	}
+	second, _ := awaitApproval(t, turn)
+	if second.Reviewer != ReviewerRule {
+		t.Fatalf("the second request should be the rule's: %+v", second)
+	}
+	third, _ := awaitApproval(t, turn)
+	if third.Reviewer != "" {
+		t.Fatalf("the third request should be asked: %+v", third)
+	}
+	if err := turn.Answer(third.ApprovalID, Decision{Allow: false}); err != nil {
+		t.Fatal(err)
+	}
+	drain(t, turn)
+	if res, err := turn.Result(); err != nil || res.Output != "acceptForSession,accept,decline" {
+		t.Fatalf("result = %+v, %v", res, err)
+	}
+	if sent := h.sent(t); len(sent["config/batchWrite"])+len(sent["config/value/write"]) != 0 {
+		t.Error("nothing of the person's own Codex configuration should change")
 	}
 }
 
@@ -613,13 +729,14 @@ func TestCodex_ResumesTheThread(t *testing.T) {
 
 func TestCodex_CommandApproval(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		allow  bool
-		output string
-		result string
+		name         string
+		allow, again bool
+		output       string
+		result       string
 	}{
-		{"allowed", true, "ran it", "removed\n"},
-		{"denied", false, "declined", "declined"},
+		{"allowed", true, false, "ran it", "removed\n"},
+		{"allowed for the session", true, true, "ran it, and will again", "removed\n"},
+		{"denied", false, true, "declined", "declined"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newCodexHarness(t)
@@ -628,10 +745,10 @@ func TestCodex_CommandApproval(t *testing.T) {
 				t.Fatal(err)
 			}
 			req, _ := awaitApproval(t, turn)
-			if req.Tool != "commandExecution" || req.Input != `{"command":"rm -rf build","cwd":"/repo","reason":"cleanup"}` {
+			if req.Tool != "commandExecution" || req.Input != `{"command":"rm -rf build","cwd":"/repo","reason":"cleanup"}` || req.Similar == nil || !req.Similar.Same {
 				t.Fatalf("unexpected approval request: %+v", req)
 			}
-			if err := turn.Answer(req.ApprovalID, Decision{Allow: tc.allow, Message: "because"}); err != nil {
+			if err := turn.Answer(req.ApprovalID, Decision{Allow: tc.allow, Similar: tc.again, Message: "because"}); err != nil {
 				t.Fatal(err)
 			}
 			events := drain(t, turn)

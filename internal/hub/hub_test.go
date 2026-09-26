@@ -52,7 +52,14 @@ func handshake(t *testing.T, conn protocol.Conn, hello protocol.Hello) protocol.
 // eventually polls cond until it is true or the deadline passes.
 func eventually(t *testing.T, cond func() bool, what string) {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
+	eventuallyWithin(t, 2*time.Second, cond, what)
+}
+
+// eventuallyWithin is eventually with its own deadline, for what takes
+// long on purpose.
+func eventuallyWithin(t *testing.T, within time.Duration, cond func() bool, what string) {
+	t.Helper()
+	deadline := time.Now().Add(within)
 	for time.Now().Before(deadline) {
 		if cond() {
 			return

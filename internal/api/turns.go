@@ -20,8 +20,17 @@ import (
 type Chat interface {
 	PostUserMessage(ctx context.Context, m store.NewMessage) (store.Message, error)
 	CancelTurn(ctx context.Context, turnID string) error
-	DecideApproval(ctx context.Context, approvalID, userID string, d runtime.Decision) (store.Approval, error)
+	// ContinueRelay lets a wake a limit on agents waking one another held
+	// back go on (docs/design.md 5.22), by the note that told of it.
+	ContinueRelay(ctx context.Context, noteID string) error
+	// DecideApproval settles a request; scope is how far an allow goes.
+	DecideApproval(ctx context.Context, approvalID, userID string, d runtime.Decision, scope store.AllowScope) (store.Approval, error)
+	// UntrustTurn has people asked again for a running turn's requests.
+	UntrustTurn(ctx context.Context, turnID string) (store.Turn, error)
 	Subscribe(roomID string) hub.Subscription
+	SubscribeInbox(userID string) hub.Subscription
+	// MarkInboxRead marks read what read picks of a person's inbox.
+	MarkInboxRead(ctx context.Context, userID string, read store.InboxRead) (int, error)
 }
 
 // TurnStore reads recorded turns.
@@ -31,6 +40,9 @@ type TurnStore interface {
 	ListRoomTurnsByStatus(ctx context.Context, roomID string, status store.TurnStatus, limit int) ([]store.Turn, error)
 	ListThreadTurns(ctx context.Context, threadID string) ([]store.Turn, error)
 	ListRunningTopics(ctx context.Context) ([]store.RunningTopic, error)
+	// ListThreadRelayHolds lists the wakes held back that notes in a topic
+	// tell of (docs/design.md 5.22).
+	ListThreadRelayHolds(ctx context.Context, threadID string) ([]store.RelayHold, error)
 	MachineActivity(ctx context.Context, machineID string, q store.ActivityQuery) (store.MachineActivity, error)
 }
 
@@ -115,6 +127,33 @@ func (h *handlers) cancelTurn(w http.ResponseWriter, r *http.Request) {
 			writeCoded(w, http.StatusConflict, "turnNotRunning", nil, "turn is not running")
 			return
 		}
+		h.writeStoreError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// RelayHoldsResponse is the body of GET /api/v1/threads/{id}/relay-holds:
+// the wakes held back that notes in the topic tell of, let go on or not.
+type RelayHoldsResponse struct {
+	Holds []store.RelayHold `json:"holds"`
+}
+
+// threadRelayHolds lists the wakes held back in a topic, for its notes to
+// offer letting them go on.
+func (h *handlers) threadRelayHolds(w http.ResponseWriter, r *http.Request) {
+	holds, err := h.deps.Turns.ListThreadRelayHolds(r.Context(), r.PathValue("id"))
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, RelayHoldsResponse{Holds: holds})
+}
+
+// continueRelay lets a held wake go on: 202, as the member's turn runs on
+// after the answer.
+func (h *handlers) continueRelay(w http.ResponseWriter, r *http.Request) {
+	if err := h.deps.Chat.ContinueRelay(r.Context(), r.PathValue("id")); err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}

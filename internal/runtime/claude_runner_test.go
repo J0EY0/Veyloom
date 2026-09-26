@@ -221,10 +221,24 @@ func TestClaude_ArgsAndStdin(t *testing.T) {
 	}
 }
 
+// The spec's environment is the CLI's, and with it the commands it runs:
+// here it moves where the fake writes its arguments.
+func TestClaude_RunsInTheSpecsEnvironment(t *testing.T) {
+	fakeClaudeCLI(t, claudeFixture, 0, "")
+	moved := t.TempDir() + "/args"
+	if _, _, err := runClaude(t, ClaudeConfig{}, TurnSpec{Prompt: "a", Env: []string{"VEYLOOM_FAKE_CLAUDE_ARGS=" + moved}}); err != nil {
+		t.Fatal(err)
+	}
+	if args, err := os.ReadFile(moved); err != nil || !strings.Contains(string(args), "stream-json") {
+		t.Errorf("the CLI did not run with the spec's environment: %q %v", args, err)
+	}
+}
+
 func TestClaude_PermissionModes(t *testing.T) {
 	for preset, mode := range map[string]string{
 		PermissionReadOnly:         "plan",
 		PermissionEditWithApproval: "acceptEdits",
+		PermissionAutoReview:       "auto",
 		PermissionFullAuto:         "bypassPermissions",
 	} {
 		argsPath, _ := fakeClaudeCLI(t, claudeFixture, 0, "")

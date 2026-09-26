@@ -11,11 +11,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const adoptWorkspacePending = `-- name: AdoptWorkspacePending :execrows
+UPDATE projects SET
+    workspace_copy = coalesce(ARRAY(SELECT jsonb_array_elements_text(workspace_pending -> 'copy')), '{}'),
+    workspace_run = coalesce(workspace_pending ->> 'run', ''),
+    workspace_pending = NULL,
+    initialized_at = coalesce(initialized_at, now())
+WHERE id = $1 AND workspace_pending IS NOT NULL
+`
+
+// A person adopts the steps waiting for them: they become the project's,
+// and the project is set up. No row changes when nothing waits.
+func (q *Queries) AdoptWorkspacePending(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, adoptWorkspacePending, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const createProject = `-- name: CreateProject :one
 INSERT INTO projects (name, repo_path, description, wiki_slug)
 VALUES ($1, $2, $3, $4)
 ON CONFLICT (wiki_slug) DO NOTHING
-RETURNING id, name, repo_path, description, wiki_slug, wiki_maintainer_trigger, wiki_offer_declined_at, wiki_seen_seq, wiki_external_bundles, created_at, wiki_maintainer_member_id, wiki_thread_id, wiki_offer_message_id
+RETURNING id, name, repo_path, description, wiki_slug, wiki_upkeep, wiki_maintainer_trigger, wiki_offer_declined_at, wiki_seen_seq, wiki_external_bundles, workspace_copy, workspace_run, workspace_pending, initialized_at, relay_limit, created_at, wiki_maintainer_member_id, leader_member_id, wiki_thread_id, wiki_offer_message_id, setup_thread_id, workspace_pending_message_id
 `
 
 type CreateProjectParams struct {
@@ -41,14 +60,23 @@ func (q *Queries) CreateProject(ctx context.Context, arg CreateProjectParams) (P
 		&i.RepoPath,
 		&i.Description,
 		&i.WikiSlug,
+		&i.WikiUpkeep,
 		&i.WikiMaintainerTrigger,
 		&i.WikiOfferDeclinedAt,
 		&i.WikiSeenSeq,
 		&i.WikiExternalBundles,
+		&i.WorkspaceCopy,
+		&i.WorkspaceRun,
+		&i.WorkspacePending,
+		&i.InitializedAt,
+		&i.RelayLimit,
 		&i.CreatedAt,
 		&i.WikiMaintainerMemberID,
+		&i.LeaderMemberID,
 		&i.WikiThreadID,
 		&i.WikiOfferMessageID,
+		&i.SetupThreadID,
+		&i.WorkspacePendingMessageID,
 	)
 	return i, err
 }
@@ -72,15 +100,32 @@ func (q *Queries) DeleteProject(ctx context.Context, id pgtype.UUID) (int64, err
 	return result.RowsAffected(), nil
 }
 
+const dropWorkspacePending = `-- name: DropWorkspacePending :execrows
+UPDATE projects SET workspace_pending = NULL
+WHERE id = $1 AND workspace_pending IS NOT NULL
+`
+
+// A person turns the waiting steps down. No row changes when nothing
+// waits.
+func (q *Queries) DropWorkspacePending(ctx context.Context, id pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, dropWorkspacePending, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const getProject = `-- name: GetProject :one
-SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.created_at, projects.wiki_maintainer_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id,
-       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_upkeep, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.workspace_copy, projects.workspace_run, projects.workspace_pending, projects.initialized_at, projects.relay_limit, projects.created_at, projects.wiki_maintainer_member_id, projects.leader_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id, projects.setup_thread_id, projects.workspace_pending_message_id,
+       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id,
+       project_leader_id(projects.id)::uuid AS leader_id
 FROM projects WHERE projects.id = $1
 `
 
 type GetProjectRow struct {
 	Project    Project
 	MainRoomID pgtype.UUID
+	LeaderID   pgtype.UUID
 }
 
 func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (GetProjectRow, error) {
@@ -92,28 +137,40 @@ func (q *Queries) GetProject(ctx context.Context, id pgtype.UUID) (GetProjectRow
 		&i.Project.RepoPath,
 		&i.Project.Description,
 		&i.Project.WikiSlug,
+		&i.Project.WikiUpkeep,
 		&i.Project.WikiMaintainerTrigger,
 		&i.Project.WikiOfferDeclinedAt,
 		&i.Project.WikiSeenSeq,
 		&i.Project.WikiExternalBundles,
+		&i.Project.WorkspaceCopy,
+		&i.Project.WorkspaceRun,
+		&i.Project.WorkspacePending,
+		&i.Project.InitializedAt,
+		&i.Project.RelayLimit,
 		&i.Project.CreatedAt,
 		&i.Project.WikiMaintainerMemberID,
+		&i.Project.LeaderMemberID,
 		&i.Project.WikiThreadID,
 		&i.Project.WikiOfferMessageID,
+		&i.Project.SetupThreadID,
+		&i.Project.WorkspacePendingMessageID,
 		&i.MainRoomID,
+		&i.LeaderID,
 	)
 	return i, err
 }
 
 const getProjectBySlug = `-- name: GetProjectBySlug :one
-SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.created_at, projects.wiki_maintainer_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id,
-       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_upkeep, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.workspace_copy, projects.workspace_run, projects.workspace_pending, projects.initialized_at, projects.relay_limit, projects.created_at, projects.wiki_maintainer_member_id, projects.leader_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id, projects.setup_thread_id, projects.workspace_pending_message_id,
+       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id,
+       project_leader_id(projects.id)::uuid AS leader_id
 FROM projects WHERE projects.wiki_slug = $1
 `
 
 type GetProjectBySlugRow struct {
 	Project    Project
 	MainRoomID pgtype.UUID
+	LeaderID   pgtype.UUID
 }
 
 // The project whose wiki is in the folder of that name: whose team owns
@@ -127,41 +184,71 @@ func (q *Queries) GetProjectBySlug(ctx context.Context, wikiSlug string) (GetPro
 		&i.Project.RepoPath,
 		&i.Project.Description,
 		&i.Project.WikiSlug,
+		&i.Project.WikiUpkeep,
 		&i.Project.WikiMaintainerTrigger,
 		&i.Project.WikiOfferDeclinedAt,
 		&i.Project.WikiSeenSeq,
 		&i.Project.WikiExternalBundles,
+		&i.Project.WorkspaceCopy,
+		&i.Project.WorkspaceRun,
+		&i.Project.WorkspacePending,
+		&i.Project.InitializedAt,
+		&i.Project.RelayLimit,
 		&i.Project.CreatedAt,
 		&i.Project.WikiMaintainerMemberID,
+		&i.Project.LeaderMemberID,
 		&i.Project.WikiThreadID,
 		&i.Project.WikiOfferMessageID,
+		&i.Project.SetupThreadID,
+		&i.Project.WorkspacePendingMessageID,
 		&i.MainRoomID,
+		&i.LeaderID,
 	)
 	return i, err
 }
 
 const getRoomProject = `-- name: GetRoomProject :one
-SELECT p.id, p.name, p.repo_path, p.description, p.wiki_slug, p.wiki_maintainer_trigger, p.wiki_offer_declined_at, p.wiki_seen_seq, p.wiki_external_bundles, p.created_at, p.wiki_maintainer_member_id, p.wiki_thread_id, p.wiki_offer_message_id FROM projects p JOIN rooms r ON r.project_id = p.id WHERE r.id = $1
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_upkeep, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.workspace_copy, projects.workspace_run, projects.workspace_pending, projects.initialized_at, projects.relay_limit, projects.created_at, projects.wiki_maintainer_member_id, projects.leader_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id, projects.setup_thread_id, projects.workspace_pending_message_id,
+       (SELECT m.id FROM rooms m WHERE m.project_id = projects.id AND m.kind = 'main' ORDER BY m.created_at LIMIT 1) AS main_room_id,
+       project_leader_id(projects.id)::uuid AS leader_id
+FROM projects JOIN rooms r ON r.project_id = projects.id WHERE r.id = $1
 `
 
+type GetRoomProjectRow struct {
+	Project    Project
+	MainRoomID pgtype.UUID
+	LeaderID   pgtype.UUID
+}
+
 // The project a room belongs to.
-func (q *Queries) GetRoomProject(ctx context.Context, id pgtype.UUID) (Project, error) {
+func (q *Queries) GetRoomProject(ctx context.Context, id pgtype.UUID) (GetRoomProjectRow, error) {
 	row := q.db.QueryRow(ctx, getRoomProject, id)
-	var i Project
+	var i GetRoomProjectRow
 	err := row.Scan(
-		&i.ID,
-		&i.Name,
-		&i.RepoPath,
-		&i.Description,
-		&i.WikiSlug,
-		&i.WikiMaintainerTrigger,
-		&i.WikiOfferDeclinedAt,
-		&i.WikiSeenSeq,
-		&i.WikiExternalBundles,
-		&i.CreatedAt,
-		&i.WikiMaintainerMemberID,
-		&i.WikiThreadID,
-		&i.WikiOfferMessageID,
+		&i.Project.ID,
+		&i.Project.Name,
+		&i.Project.RepoPath,
+		&i.Project.Description,
+		&i.Project.WikiSlug,
+		&i.Project.WikiUpkeep,
+		&i.Project.WikiMaintainerTrigger,
+		&i.Project.WikiOfferDeclinedAt,
+		&i.Project.WikiSeenSeq,
+		&i.Project.WikiExternalBundles,
+		&i.Project.WorkspaceCopy,
+		&i.Project.WorkspaceRun,
+		&i.Project.WorkspacePending,
+		&i.Project.InitializedAt,
+		&i.Project.RelayLimit,
+		&i.Project.CreatedAt,
+		&i.Project.WikiMaintainerMemberID,
+		&i.Project.LeaderMemberID,
+		&i.Project.WikiThreadID,
+		&i.Project.WikiOfferMessageID,
+		&i.Project.SetupThreadID,
+		&i.Project.WorkspacePendingMessageID,
+		&i.MainRoomID,
+		&i.LeaderID,
 	)
 	return i, err
 }
@@ -187,18 +274,20 @@ func (q *Queries) IsCurrentProjectMember(ctx context.Context, arg IsCurrentProje
 }
 
 const listMaintainedProjects = `-- name: ListMaintainedProjects :many
-SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.created_at, projects.wiki_maintainer_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id,
-       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
-FROM projects WHERE projects.wiki_maintainer_member_id IS NOT NULL
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_upkeep, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.workspace_copy, projects.workspace_run, projects.workspace_pending, projects.initialized_at, projects.relay_limit, projects.created_at, projects.wiki_maintainer_member_id, projects.leader_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id, projects.setup_thread_id, projects.workspace_pending_message_id,
+       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id,
+       project_leader_id(projects.id)::uuid AS leader_id
+FROM projects WHERE projects.wiki_upkeep
 ORDER BY projects.created_at
 `
 
 type ListMaintainedProjectsRow struct {
 	Project    Project
 	MainRoomID pgtype.UUID
+	LeaderID   pgtype.UUID
 }
 
-// The projects a person has given a wiki maintainer.
+// The projects whose wiki upkeep a person turned on.
 func (q *Queries) ListMaintainedProjects(ctx context.Context) ([]ListMaintainedProjectsRow, error) {
 	rows, err := q.db.Query(ctx, listMaintainedProjects)
 	if err != nil {
@@ -214,15 +303,25 @@ func (q *Queries) ListMaintainedProjects(ctx context.Context) ([]ListMaintainedP
 			&i.Project.RepoPath,
 			&i.Project.Description,
 			&i.Project.WikiSlug,
+			&i.Project.WikiUpkeep,
 			&i.Project.WikiMaintainerTrigger,
 			&i.Project.WikiOfferDeclinedAt,
 			&i.Project.WikiSeenSeq,
 			&i.Project.WikiExternalBundles,
+			&i.Project.WorkspaceCopy,
+			&i.Project.WorkspaceRun,
+			&i.Project.WorkspacePending,
+			&i.Project.InitializedAt,
+			&i.Project.RelayLimit,
 			&i.Project.CreatedAt,
 			&i.Project.WikiMaintainerMemberID,
+			&i.Project.LeaderMemberID,
 			&i.Project.WikiThreadID,
 			&i.Project.WikiOfferMessageID,
+			&i.Project.SetupThreadID,
+			&i.Project.WorkspacePendingMessageID,
 			&i.MainRoomID,
+			&i.LeaderID,
 		); err != nil {
 			return nil, err
 		}
@@ -235,14 +334,16 @@ func (q *Queries) ListMaintainedProjects(ctx context.Context) ([]ListMaintainedP
 }
 
 const listProjects = `-- name: ListProjects :many
-SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.created_at, projects.wiki_maintainer_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id,
-       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_upkeep, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.workspace_copy, projects.workspace_run, projects.workspace_pending, projects.initialized_at, projects.relay_limit, projects.created_at, projects.wiki_maintainer_member_id, projects.leader_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id, projects.setup_thread_id, projects.workspace_pending_message_id,
+       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id,
+       project_leader_id(projects.id)::uuid AS leader_id
 FROM projects ORDER BY projects.created_at, projects.name
 `
 
 type ListProjectsRow struct {
 	Project    Project
 	MainRoomID pgtype.UUID
+	LeaderID   pgtype.UUID
 }
 
 func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
@@ -260,15 +361,25 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 			&i.Project.RepoPath,
 			&i.Project.Description,
 			&i.Project.WikiSlug,
+			&i.Project.WikiUpkeep,
 			&i.Project.WikiMaintainerTrigger,
 			&i.Project.WikiOfferDeclinedAt,
 			&i.Project.WikiSeenSeq,
 			&i.Project.WikiExternalBundles,
+			&i.Project.WorkspaceCopy,
+			&i.Project.WorkspaceRun,
+			&i.Project.WorkspacePending,
+			&i.Project.InitializedAt,
+			&i.Project.RelayLimit,
 			&i.Project.CreatedAt,
 			&i.Project.WikiMaintainerMemberID,
+			&i.Project.LeaderMemberID,
 			&i.Project.WikiThreadID,
 			&i.Project.WikiOfferMessageID,
+			&i.Project.SetupThreadID,
+			&i.Project.WorkspacePendingMessageID,
 			&i.MainRoomID,
+			&i.LeaderID,
 		); err != nil {
 			return nil, err
 		}
@@ -281,19 +392,21 @@ func (q *Queries) ListProjects(ctx context.Context) ([]ListProjectsRow, error) {
 }
 
 const listUnmaintainedProjects = `-- name: ListUnmaintainedProjects :many
-SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.created_at, projects.wiki_maintainer_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id,
-       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id
+SELECT projects.id, projects.name, projects.repo_path, projects.description, projects.wiki_slug, projects.wiki_upkeep, projects.wiki_maintainer_trigger, projects.wiki_offer_declined_at, projects.wiki_seen_seq, projects.wiki_external_bundles, projects.workspace_copy, projects.workspace_run, projects.workspace_pending, projects.initialized_at, projects.relay_limit, projects.created_at, projects.wiki_maintainer_member_id, projects.leader_member_id, projects.wiki_thread_id, projects.wiki_offer_message_id, projects.setup_thread_id, projects.workspace_pending_message_id,
+       (SELECT r.id FROM rooms r WHERE r.project_id = projects.id AND r.kind = 'main' ORDER BY r.created_at LIMIT 1) AS main_room_id,
+       project_leader_id(projects.id)::uuid AS leader_id
 FROM projects
-WHERE projects.wiki_maintainer_member_id IS NULL AND projects.wiki_offer_message_id IS NULL AND projects.wiki_offer_declined_at IS NULL
+WHERE NOT projects.wiki_upkeep AND projects.wiki_offer_message_id IS NULL AND projects.wiki_offer_declined_at IS NULL
 ORDER BY projects.created_at
 `
 
 type ListUnmaintainedProjectsRow struct {
 	Project    Project
 	MainRoomID pgtype.UUID
+	LeaderID   pgtype.UUID
 }
 
-// The projects a wiki maintainer may yet be offered to: none chosen, none
+// The projects a wiki maintainer may yet be offered to: upkeep off, none
 // offered, none declined (design.md 5.16).
 func (q *Queries) ListUnmaintainedProjects(ctx context.Context) ([]ListUnmaintainedProjectsRow, error) {
 	rows, err := q.db.Query(ctx, listUnmaintainedProjects)
@@ -310,15 +423,25 @@ func (q *Queries) ListUnmaintainedProjects(ctx context.Context) ([]ListUnmaintai
 			&i.Project.RepoPath,
 			&i.Project.Description,
 			&i.Project.WikiSlug,
+			&i.Project.WikiUpkeep,
 			&i.Project.WikiMaintainerTrigger,
 			&i.Project.WikiOfferDeclinedAt,
 			&i.Project.WikiSeenSeq,
 			&i.Project.WikiExternalBundles,
+			&i.Project.WorkspaceCopy,
+			&i.Project.WorkspaceRun,
+			&i.Project.WorkspacePending,
+			&i.Project.InitializedAt,
+			&i.Project.RelayLimit,
 			&i.Project.CreatedAt,
 			&i.Project.WikiMaintainerMemberID,
+			&i.Project.LeaderMemberID,
 			&i.Project.WikiThreadID,
 			&i.Project.WikiOfferMessageID,
+			&i.Project.SetupThreadID,
+			&i.Project.WorkspacePendingMessageID,
 			&i.MainRoomID,
+			&i.LeaderID,
 		); err != nil {
 			return nil, err
 		}
@@ -328,6 +451,17 @@ func (q *Queries) ListUnmaintainedProjects(ctx context.Context) ([]ListUnmaintai
 		return nil, err
 	}
 	return items, nil
+}
+
+const markProjectInitialized = `-- name: MarkProjectInitialized :exec
+UPDATE projects SET initialized_at = coalesce(initialized_at, now()) WHERE id = $1
+`
+
+// The project is set up, with the steps it has, perhaps none: its leader's
+// setup turn went well without writing any down.
+func (q *Queries) MarkProjectInitialized(ctx context.Context, id pgtype.UUID) error {
+	_, err := q.db.Exec(ctx, markProjectInitialized, id)
+	return err
 }
 
 const moveProjectMembers = `-- name: MoveProjectMembers :exec
@@ -410,27 +544,46 @@ func (q *Queries) ProjectTurnIDs(ctx context.Context, projectID pgtype.UUID) ([]
 	return items, nil
 }
 
-const setProjectMaintainer = `-- name: SetProjectMaintainer :exec
-UPDATE projects SET wiki_maintainer_member_id = $1, wiki_maintainer_trigger = $2
+const setProjectSetupThread = `-- name: SetProjectSetupThread :execrows
+UPDATE projects SET setup_thread_id = $1
+WHERE id = $2 AND setup_thread_id IS NULL
+`
+
+type SetProjectSetupThreadParams struct {
+	ThreadID pgtype.UUID
+	ID       pgtype.UUID
+}
+
+// Records the project's setup topic, unless it has one already.
+func (q *Queries) SetProjectSetupThread(ctx context.Context, arg SetProjectSetupThreadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setProjectSetupThread, arg.ThreadID, arg.ID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const setProjectUpkeep = `-- name: SetProjectUpkeep :exec
+UPDATE projects SET wiki_upkeep = true, wiki_maintainer_member_id = $1, wiki_maintainer_trigger = $2
 WHERE id = $3
 `
 
-type SetProjectMaintainerParams struct {
+type SetProjectUpkeepParams struct {
 	MemberID pgtype.UUID
 	Trigger  string
 	ID       pgtype.UUID
 }
 
-// Gives a project its wiki maintainer and when that runs, as the project
-// is created.
-func (q *Queries) SetProjectMaintainer(ctx context.Context, arg SetProjectMaintainerParams) error {
-	_, err := q.db.Exec(ctx, setProjectMaintainer, arg.MemberID, arg.Trigger, arg.ID)
+// Turns a project's wiki upkeep on as the project is created: kept by the
+// member given, or by the leader when none is, when the trigger says.
+func (q *Queries) SetProjectUpkeep(ctx context.Context, arg SetProjectUpkeepParams) error {
+	_, err := q.db.Exec(ctx, setProjectUpkeep, arg.MemberID, arg.Trigger, arg.ID)
 	return err
 }
 
 const setProjectWikiOffer = `-- name: SetProjectWikiOffer :execrows
 UPDATE projects SET wiki_offer_message_id = $1
-WHERE id = $2 AND wiki_maintainer_member_id IS NULL AND wiki_offer_message_id IS NULL AND wiki_offer_declined_at IS NULL
+WHERE id = $2 AND NOT wiki_upkeep AND wiki_offer_message_id IS NULL AND wiki_offer_declined_at IS NULL
 `
 
 type SetProjectWikiOfferParams struct {
@@ -438,8 +591,8 @@ type SetProjectWikiOfferParams struct {
 	ID        pgtype.UUID
 }
 
-// Records the note that offered the project a wiki maintainer, unless one
-// was chosen, offered or declined meanwhile.
+// Records the note that offered the project a wiki maintainer, unless
+// upkeep was turned on, or one offered or declined, meanwhile.
 func (q *Queries) SetProjectWikiOffer(ctx context.Context, arg SetProjectWikiOfferParams) (int64, error) {
 	result, err := q.db.Exec(ctx, setProjectWikiOffer, arg.MessageID, arg.ID)
 	if err != nil {
@@ -467,22 +620,74 @@ func (q *Queries) SetProjectWikiThread(ctx context.Context, arg SetProjectWikiTh
 	return result.RowsAffected(), nil
 }
 
+const setWorkspacePending = `-- name: SetWorkspacePending :exec
+UPDATE projects SET
+    workspace_pending = $1::jsonb,
+    workspace_pending_message_id = $2::uuid
+WHERE id = $3
+`
+
+type SetWorkspacePendingParams struct {
+	Pending   []byte
+	MessageID pgtype.UUID
+	ID        pgtype.UUID
+}
+
+// Keeps steps with a command for a person to adopt, and the note that
+// shows them; any waiting before are replaced.
+func (q *Queries) SetWorkspacePending(ctx context.Context, arg SetWorkspacePendingParams) error {
+	_, err := q.db.Exec(ctx, setWorkspacePending, arg.Pending, arg.MessageID, arg.ID)
+	return err
+}
+
+const setWorkspaceSteps = `-- name: SetWorkspaceSteps :exec
+UPDATE projects SET
+    workspace_copy = $1::text[],
+    workspace_run = $2::text,
+    workspace_pending = NULL,
+    workspace_pending_message_id = NULL,
+    initialized_at = coalesce(initialized_at, now())
+WHERE id = $3
+`
+
+type SetWorkspaceStepsParams struct {
+	Copy []string
+	Run  string
+	ID   pgtype.UUID
+}
+
+// Writes down how a member's new worktree is got ready (design.md 5.21),
+// which sets the project up: anything waiting for a person to adopt is
+// dropped, the steps written now stand in its place.
+func (q *Queries) SetWorkspaceSteps(ctx context.Context, arg SetWorkspaceStepsParams) error {
+	_, err := q.db.Exec(ctx, setWorkspaceSteps, arg.Copy, arg.Run, arg.ID)
+	return err
+}
+
 const updateProject = `-- name: UpdateProject :one
 WITH before AS (
-    SELECT repo_path FROM projects WHERE id = $9 FOR UPDATE
+    SELECT repo_path FROM projects WHERE id = $16 FOR UPDATE
 )
 UPDATE projects
 SET name               = coalesce($1, projects.name),
     repo_path          = coalesce($2, projects.repo_path),
     description        = coalesce($3, projects.description),
-    wiki_maintainer_member_id = CASE WHEN $4::boolean
-        THEN $5::uuid ELSE projects.wiki_maintainer_member_id END,
-    wiki_maintainer_trigger = coalesce($6, projects.wiki_maintainer_trigger),
-    wiki_external_bundles = coalesce($7::text[], projects.wiki_external_bundles),
-    wiki_offer_declined_at = CASE WHEN $8::boolean
-        THEN coalesce(projects.wiki_offer_declined_at, now()) ELSE projects.wiki_offer_declined_at END
+    leader_member_id   = CASE WHEN $4::boolean
+        THEN $5::uuid ELSE projects.leader_member_id END,
+    wiki_upkeep        = coalesce($6::boolean, projects.wiki_upkeep),
+    wiki_maintainer_member_id = CASE WHEN $7::boolean
+        THEN $8::uuid ELSE projects.wiki_maintainer_member_id END,
+    wiki_maintainer_trigger = coalesce($9, projects.wiki_maintainer_trigger),
+    wiki_external_bundles = coalesce($10::text[], projects.wiki_external_bundles),
+    workspace_copy     = coalesce($11::text[], projects.workspace_copy),
+    workspace_run      = coalesce($12::text, projects.workspace_run),
+    workspace_pending  = CASE WHEN $13::boolean THEN NULL ELSE projects.workspace_pending END,
+    initialized_at     = CASE WHEN $13::boolean THEN coalesce(projects.initialized_at, now()) ELSE projects.initialized_at END,
+    wiki_offer_declined_at = CASE WHEN $14::boolean
+        THEN coalesce(projects.wiki_offer_declined_at, now()) ELSE projects.wiki_offer_declined_at END,
+    relay_limit        = coalesce($15::integer, projects.relay_limit)
 FROM before
-WHERE projects.id = $9
+WHERE projects.id = $16
 RETURNING projects.id, projects.name, projects.repo_path, projects.created_at, before.repo_path AS old_repo_path
 `
 
@@ -490,11 +695,18 @@ type UpdateProjectParams struct {
 	Name               pgtype.Text
 	RepoPath           pgtype.Text
 	Description        pgtype.Text
+	SetLeader          bool
+	LeaderMemberID     pgtype.UUID
+	Upkeep             pgtype.Bool
 	SetMaintainer      bool
 	MaintainerMemberID pgtype.UUID
 	MaintainerTrigger  pgtype.Text
 	ExternalBundles    []string
+	WorkspaceCopy      []string
+	WorkspaceRun       pgtype.Text
+	SetSteps           bool
 	DeclineOffer       bool
+	RelayLimit         pgtype.Int4
 	ID                 pgtype.UUID
 }
 
@@ -506,23 +718,29 @@ type UpdateProjectRow struct {
 	OldRepoPath string
 }
 
-// Renames a project, moves its checkout, rewrites its description, turns
-// its members' wiki writes on or off, changes its wiki maintainer or when
-// that runs, or the bundles its wiki mounts; a NULL argument keeps the
-// current value, except that the
-// maintainer is set, to a member or to none, whenever set_maintainer is.
-// The checkout it had comes back beside it, for moving the members with
-// it.
+// Renames a project, moves its checkout, rewrites its description, changes
+// its leader, turns its wiki upkeep on or off, changes who keeps the wiki
+// or when, the bundles its wiki mounts, or its relay limit; a NULL argument keeps the
+// current value, except that the leader and the maintainer are set, to a
+// member or to none, whenever set_leader and set_maintainer are. The
+// checkout it had comes back beside it, for moving the members with it.
 func (q *Queries) UpdateProject(ctx context.Context, arg UpdateProjectParams) (UpdateProjectRow, error) {
 	row := q.db.QueryRow(ctx, updateProject,
 		arg.Name,
 		arg.RepoPath,
 		arg.Description,
+		arg.SetLeader,
+		arg.LeaderMemberID,
+		arg.Upkeep,
 		arg.SetMaintainer,
 		arg.MaintainerMemberID,
 		arg.MaintainerTrigger,
 		arg.ExternalBundles,
+		arg.WorkspaceCopy,
+		arg.WorkspaceRun,
+		arg.SetSteps,
 		arg.DeclineOffer,
+		arg.RelayLimit,
 		arg.ID,
 	)
 	var i UpdateProjectRow

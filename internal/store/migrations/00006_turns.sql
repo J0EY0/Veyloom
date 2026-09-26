@@ -20,10 +20,11 @@ CREATE TABLE turns (
     -- The runtime that ran the turn, as the member's agent named it when
     -- the turn started: an agent changed or deleted later leaves it be.
     runtime            text        NOT NULL DEFAULT '',
-    -- What the turn was for: answering the chat, or the wiki maintainer
-    -- going over what the chat did (design.md 5.12), which runs in a
-    -- session of its own and is not itself gone over.
-    kind               text        NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'upkeep')),
+    -- What the turn was for: answering the chat, the wiki maintainer
+    -- going over what the chat did (design.md 5.12), or the project's
+    -- leader setting the project up for its members' worktrees (5.21).
+    -- The last two run in sessions of their own and are not gone over.
+    kind               text        NOT NULL DEFAULT 'chat' CHECK (kind IN ('chat', 'upkeep', 'setup')),
     status             text        NOT NULL DEFAULT 'running' CHECK (status IN ('running', 'done', 'failed', 'cancelled')),
     error              text        NOT NULL DEFAULT '',
     -- The agent's reply, once posted.
@@ -45,6 +46,20 @@ CREATE TABLE turns (
     -- its tool calls, not merely given (docs/design.md 5.10). How a skill's
     -- team learns where it was used and how that went.
     skills_used        text[]      NOT NULL DEFAULT '{}',
+    -- The piece of work the turn is part of (design.md 5.22): the person's
+    -- message it started from, or the note a person let a held wake go on
+    -- from. A turn an agent woke carries on its waker's; woken_by_turn_id
+    -- is that turn, null for one a person woke.
+    chain_message_id   uuid        REFERENCES messages (id) ON DELETE SET NULL,
+    woken_by_turn_id   uuid        REFERENCES turns (id) ON DELETE SET NULL,
+    -- The turn did work: called a tool other than those that follow and
+    -- talk in the chat, or changed a file. Known once it ends.
+    worked             boolean     NOT NULL DEFAULT false,
+    -- A person let the rest of the turn's requests through (docs/design.md
+    -- 4.6): who and since when, NULL when nobody did or they took it back.
+    -- The account is no users row, hence no reference.
+    trusted_by         uuid,
+    trusted_at         timestamptz,
     started_at         timestamptz NOT NULL DEFAULT now(),
     ended_at           timestamptz
 );
@@ -57,6 +72,27 @@ CREATE INDEX turns_by_machine ON turns (machine_id, started_at);
 CREATE INDEX turns_by_skill ON turns USING gin (skills_used);
 -- A room's maintainer turns, newest first.
 CREATE INDEX turns_upkeep ON turns (room_id, started_at DESC) WHERE kind = 'upkeep';
+-- The turns agents woke in a piece of work, the latest to end first.
+CREATE INDEX turns_woken ON turns (chain_message_id, ended_at DESC) WHERE woken_by_turn_id IS NOT NULL;
+-- A piece of work across its topics, in the order its turns began.
+CREATE INDEX turns_by_chain ON turns (chain_message_id, started_at);
+
+-- A wake that one of the limits on agents waking one another held back
+-- (design.md 5.22): the note telling the person, with what to do should
+-- they let it go on after all. It goes on once.
+CREATE TABLE relay_holds (
+    message_id         uuid        PRIMARY KEY REFERENCES messages (id) ON DELETE CASCADE,
+    -- Who was not woken, where, and by what message.
+    member_id          uuid        NOT NULL REFERENCES members (id),
+    thread_id          uuid        NOT NULL REFERENCES threads (id) ON DELETE CASCADE,
+    trigger_message_id uuid        NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
+    -- idle: the last turns agents woke did no work; limit: the piece of
+    -- work reached the project's relay limit.
+    reason             text        NOT NULL CHECK (reason IN ('idle', 'limit')),
+    created_at         timestamptz NOT NULL DEFAULT now(),
+    continued_at       timestamptz
+);
 
 -- +goose Down
+DROP TABLE relay_holds;
 DROP TABLE turns;

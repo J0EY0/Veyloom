@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -30,10 +31,19 @@ type Project struct {
 	// WikiThreadID is the project's "wiki" topic, where its wiki maintainer
 	// works; empty until first needed.
 	WikiThreadID string `json:"wiki_thread_id,omitempty"`
-	// WikiMaintainerMemberID is the member a person chose to keep the wiki
-	// (docs/design.md 5.12); empty is none.
+	// LeaderMemberID is the member a person made the project's leader
+	// (docs/design.md 5.21); empty leaves it to the first to have joined.
+	// LeaderID is the leader as it stands, either way; empty while the
+	// project has no current, enabled member.
+	LeaderMemberID string `json:"leader_member_id,omitempty"`
+	LeaderID       string `json:"leader_id,omitempty"`
+	// WikiUpkeep says whether the wiki is kept: a person turned upkeep on
+	// (docs/design.md 5.12, 5.21).
+	WikiUpkeep bool `json:"wiki_upkeep"`
+	// WikiMaintainerMemberID is the member a person chose to keep the
+	// wiki; empty leaves it to the leader.
 	WikiMaintainerMemberID string `json:"wiki_maintainer_member_id,omitempty"`
-	// WikiMaintainerTrigger is when that member goes over the chat.
+	// WikiMaintainerTrigger is when the wiki is gone over.
 	WikiMaintainerTrigger UpkeepTrigger `json:"wiki_maintainer_trigger"`
 	// WikiOfferMessageID is the note in the chat that offered a wiki
 	// maintainer to a project that had none (docs/design.md 5.16), which the
@@ -48,10 +58,38 @@ type Project struct {
 	// WikiExternalBundles are the folders of the OKF bundles the wiki
 	// mounts, read-only (docs/design.md 5.9).
 	WikiExternalBundles []string `json:"wiki_external_bundles"`
+	// WorkspaceCopy and WorkspaceRun are how a member's new worktree is got
+	// ready (docs/design.md 5.21): what is copied into it from the checkout
+	// and the command run in it. WorkspacePending are steps the leader wrote
+	// down with a command a person has yet to adopt, shown to them by the
+	// note WorkspacePendingMessageID; nil when nothing waits.
+	WorkspaceCopy             []string        `json:"workspace_copy"`
+	WorkspaceRun              string          `json:"workspace_run"`
+	WorkspacePending          *WorkspaceSteps `json:"workspace_pending,omitempty"`
+	WorkspacePendingMessageID string          `json:"workspace_pending_message_id,omitempty"`
+	// InitializedAt is when the project was set up for its members'
+	// worktrees; nil until then, while they wait.
+	InitializedAt *time.Time `json:"initialized_at,omitempty"`
+	// SetupThreadID is the project's "setup" topic, where its leader sets
+	// it up; empty until first needed.
+	SetupThreadID string `json:"setup_thread_id,omitempty"`
+	// RelayLimit is how many turns agents may wake one another to in a
+	// piece of work a person started (docs/design.md 5.22): 0 is no limit,
+	// below 0 agents wake no one.
+	RelayLimit int `json:"relay_limit"`
 	// MainRoomID is the project's group chat: to the UI a project is one
 	// chat (docs/webui.md §3), and this is where it lives.
 	MainRoomID string    `json:"main_room_id"`
 	CreatedAt  time.Time `json:"created_at"`
+}
+
+// WorkspaceSteps are how a member's new git worktree is got ready
+// (docs/design.md 5.21): files or folders copied into it from the
+// checkout, named relative to the checkout, then one shell command run in
+// it.
+type WorkspaceSteps struct {
+	Copy []string `json:"copy"`
+	Run  string   `json:"run"`
 }
 
 // NewProject is the input to CreateProject. Each of AgentIDs joins the
@@ -61,9 +99,11 @@ type NewProject struct {
 	RepoPath    string
 	Description string
 	AgentIDs    []string
-	// WikiMaintainerAgentID, one of AgentIDs, makes that agent's member the
-	// wiki maintainer from the start, running as WikiMaintainerTrigger
-	// (daily when empty); empty chooses none (docs/design.md 5.16).
+	// WikiUpkeep turns the wiki's upkeep on from the start (docs/design.md
+	// 5.16, 5.21), running as WikiMaintainerTrigger (daily when empty) and
+	// kept by the member of WikiMaintainerAgentID, one of AgentIDs, or by
+	// the leader when that is empty.
+	WikiUpkeep            bool
 	WikiMaintainerAgentID string
 	WikiMaintainerTrigger UpkeepTrigger
 }
@@ -153,23 +193,30 @@ func (s *Store) CreateProject(ctx context.Context, p NewProject) (Project, Room,
 			maintainer = created
 		}
 	}
-	if p.WikiMaintainerAgentID != "" {
-		if maintainer.ID == "" {
-			return Project{}, Room{}, fmt.Errorf("%w: the wiki maintainer must be one of the agents the project starts with", ErrInvalidInput)
+	if p.WikiMaintainerAgentID != "" && maintainer.ID == "" {
+		return Project{}, Room{}, fmt.Errorf("%w: the wiki maintainer must be one of the agents the project starts with", ErrInvalidInput)
+	}
+	if p.WikiMaintainerAgentID != "" && !p.WikiUpkeep {
+		return Project{}, Room{}, fmt.Errorf("%w: a wiki maintainer keeps the wiki only once its upkeep is on", ErrInvalidInput)
+	}
+	if p.WikiUpkeep {
+		var memberID pgtype.UUID
+		if maintainer.ID != "" {
+			memberID, _ = parseUUID(maintainer.ID)
 		}
-		memberID, _ := parseUUID(maintainer.ID)
-		if err := q.SetProjectMaintainer(ctx, db.SetProjectMaintainerParams{ID: projectRow.ID, MemberID: memberID, Trigger: string(trigger)}); err != nil {
-			return Project{}, Room{}, fmt.Errorf("set the wiki maintainer of %q: %w", p.Name, err)
+		if err := q.SetProjectUpkeep(ctx, db.SetProjectUpkeepParams{ID: projectRow.ID, MemberID: memberID, Trigger: string(trigger)}); err != nil {
+			return Project{}, Room{}, fmt.Errorf("turn on the wiki upkeep of %q: %w", p.Name, err)
 		}
-		projectRow.WikiMaintainerMemberID, projectRow.WikiMaintainerTrigger = memberID, string(trigger)
+	}
+	created, err := q.GetProject(ctx, projectRow.ID)
+	if err != nil {
+		return Project{}, Room{}, fmt.Errorf("get project %q: %w", p.Name, err)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
 		return Project{}, Room{}, fmt.Errorf("commit: %w", err)
 	}
-	project := toProject(projectRow)
-	project.MainRoomID = uuidString(roomRow.ID)
-	return project, toRoom(roomRow), nil
+	return withComputed(toProject(created.Project), created.MainRoomID, created.LeaderID), toRoom(roomRow), nil
 }
 
 // GetProject returns one project, or ErrNotFound.
@@ -185,7 +232,7 @@ func (s *Store) GetProject(ctx context.Context, id string) (Project, error) {
 	if err != nil {
 		return Project{}, fmt.Errorf("get project %s: %w", id, err)
 	}
-	return withMainRoom(toProject(row.Project), row.MainRoomID), nil
+	return withComputed(toProject(row.Project), row.MainRoomID, row.LeaderID), nil
 }
 
 // ListProjects returns every project in creation order.
@@ -196,7 +243,7 @@ func (s *Store) ListProjects(ctx context.Context) ([]Project, error) {
 	}
 	out := make([]Project, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, withMainRoom(toProject(row.Project), row.MainRoomID))
+		out = append(out, withComputed(toProject(row.Project), row.MainRoomID, row.LeaderID))
 	}
 	return out, nil
 }
@@ -206,8 +253,13 @@ type ProjectPatch struct {
 	Name        *string
 	RepoPath    *string
 	Description *string
+	// Leader is the member made the project's leader, one of its current
+	// members; "" leaves it to the first to have joined.
+	Leader *string
+	// WikiUpkeep turns the wiki's upkeep on or off.
+	WikiUpkeep *bool
 	// WikiMaintainer is the member who keeps the wiki, one of the project's
-	// current members; "" is none.
+	// current members; "" leaves it to the leader.
 	WikiMaintainer *string
 	// WikiMaintainerTrigger is when the maintainer runs.
 	WikiMaintainerTrigger *UpkeepTrigger
@@ -217,6 +269,13 @@ type ProjectPatch struct {
 	// DeclineWikiOffer records that a person said no to a wiki maintainer,
 	// which is then not offered again.
 	DeclineWikiOffer bool
+	// WorkspaceSteps, written by a person, are how new worktrees are got
+	// ready from now on: the project is set up, and steps waiting for a
+	// person to adopt are dropped.
+	WorkspaceSteps *WorkspaceSteps
+	// RelayLimit replaces how many turns agents may wake one another to in
+	// a piece of work.
+	RelayLimit *int
 }
 
 // UpkeepTrigger is when a project's wiki maintainer goes over what the
@@ -283,21 +342,25 @@ func (s *Store) UpdateProject(ctx context.Context, id string, patch ProjectPatch
 	if b := patch.WikiExternalBundles; b != nil {
 		params.ExternalBundles = nonNil(*b)
 	}
+	params.Upkeep = optionalBool(patch.WikiUpkeep)
+	if n := patch.RelayLimit; n != nil {
+		params.RelayLimit = pgtype.Int4{Int32: int32(max(min(*n, 100000), -1)), Valid: true}
+	}
+	if steps := patch.WorkspaceSteps; steps != nil {
+		params.SetSteps = true
+		params.WorkspaceCopy = nonNil(steps.Copy)
+		params.WorkspaceRun = pgtype.Text{String: steps.Run, Valid: true}
+	}
 	if m := patch.WikiMaintainer; m != nil {
 		params.SetMaintainer = true
-		if *m != "" {
-			memberID, err := parseUUID(*m)
-			if err != nil {
-				return Project{}, err
-			}
-			current, err := q.IsCurrentProjectMember(ctx, db.IsCurrentProjectMemberParams{MemberID: memberID, ProjectID: uid})
-			if err != nil {
-				return Project{}, fmt.Errorf("check the wiki maintainer: %w", err)
-			}
-			if !current {
-				return Project{}, Invalid("maintainerNotMember", nil, "the wiki maintainer must be one of the project's members")
-			}
-			params.MaintainerMemberID = memberID
+		if params.MaintainerMemberID, err = projectMember(ctx, q, uid, *m, "maintainerNotMember", "the wiki maintainer"); err != nil {
+			return Project{}, err
+		}
+	}
+	if m := patch.Leader; m != nil {
+		params.SetLeader = true
+		if params.LeaderMemberID, err = projectMember(ctx, q, uid, *m, "leaderNotMember", "the leader"); err != nil {
+			return Project{}, err
 		}
 	}
 	row, err := q.UpdateProject(ctx, params)
@@ -320,7 +383,28 @@ func (s *Store) UpdateProject(ctx context.Context, id string, patch ProjectPatch
 	if err := tx.Commit(ctx); err != nil {
 		return Project{}, fmt.Errorf("commit: %w", err)
 	}
-	return withMainRoom(toProject(updated.Project), updated.MainRoomID), nil
+	return withComputed(toProject(updated.Project), updated.MainRoomID, updated.LeaderID), nil
+}
+
+// projectMember checks that id, when not empty, is one of the project's
+// current members, which a role in the project must be; empty is none.
+// code names the problem otherwise, and who the role.
+func projectMember(ctx context.Context, q *db.Queries, project pgtype.UUID, id, code, who string) (pgtype.UUID, error) {
+	if id == "" {
+		return pgtype.UUID{}, nil
+	}
+	memberID, err := parseUUID(id)
+	if err != nil {
+		return pgtype.UUID{}, err
+	}
+	current, err := q.IsCurrentProjectMember(ctx, db.IsCurrentProjectMemberParams{MemberID: memberID, ProjectID: project})
+	if err != nil {
+		return pgtype.UUID{}, fmt.Errorf("check %s: %w", who, err)
+	}
+	if !current {
+		return pgtype.UUID{}, Invalid(code, nil, "%s must be one of the project's members", who)
+	}
+	return memberID, nil
 }
 
 // ProjectRemains is what a deleted project leaves on disk for its caller
@@ -447,16 +531,34 @@ func toProject(row db.Project) Project {
 		Description:            row.Description,
 		WikiSlug:               row.WikiSlug,
 		WikiThreadID:           uuidString(row.WikiThreadID),
+		LeaderMemberID:         uuidString(row.LeaderMemberID),
+		WikiUpkeep:             row.WikiUpkeep,
 		WikiMaintainerMemberID: uuidString(row.WikiMaintainerMemberID),
 		WikiMaintainerTrigger:  UpkeepTrigger(row.WikiMaintainerTrigger),
 		WikiOfferMessageID:     uuidString(row.WikiOfferMessageID),
 		WikiSeenSeq:            row.WikiSeenSeq,
 		WikiExternalBundles:    nonNil(row.WikiExternalBundles),
+		WorkspaceCopy:          nonNil(row.WorkspaceCopy),
+		WorkspaceRun:           row.WorkspaceRun,
+		SetupThreadID:          uuidString(row.SetupThreadID),
+		RelayLimit:             int(row.RelayLimit),
 		CreatedAt:              row.CreatedAt.Time,
 	}
+	p.WorkspacePendingMessageID = uuidString(row.WorkspacePendingMessageID)
 	if row.WikiOfferDeclinedAt.Valid {
 		declined := row.WikiOfferDeclinedAt.Time
 		p.WikiOfferDeclinedAt = &declined
+	}
+	if row.InitializedAt.Valid {
+		at := row.InitializedAt.Time
+		p.InitializedAt = &at
+	}
+	if len(row.WorkspacePending) > 0 {
+		var steps WorkspaceSteps
+		if json.Unmarshal(row.WorkspacePending, &steps) == nil {
+			steps.Copy = nonNil(steps.Copy)
+			p.WorkspacePending = &steps
+		}
 	}
 	return p
 }
@@ -469,7 +571,7 @@ func (s *Store) ListMaintainedProjects(ctx context.Context) ([]Project, error) {
 	}
 	out := make([]Project, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, withMainRoom(toProject(row.Project), row.MainRoomID))
+		out = append(out, withComputed(toProject(row.Project), row.MainRoomID, row.LeaderID))
 	}
 	return out, nil
 }
@@ -483,7 +585,7 @@ func (s *Store) ListUnmaintainedProjects(ctx context.Context) ([]Project, error)
 	}
 	out := make([]Project, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, withMainRoom(toProject(row.Project), row.MainRoomID))
+		out = append(out, withComputed(toProject(row.Project), row.MainRoomID, row.LeaderID))
 	}
 	return out, nil
 }
@@ -518,7 +620,7 @@ func (s *Store) GetProjectBySlug(ctx context.Context, slug string) (Project, err
 	if err != nil {
 		return Project{}, fmt.Errorf("get project with wiki %q: %w", slug, err)
 	}
-	return withMainRoom(toProject(row.Project), row.MainRoomID), nil
+	return withComputed(toProject(row.Project), row.MainRoomID, row.LeaderID), nil
 }
 
 // SetProjectWikiThread records the project's wiki topic. A project that
@@ -582,15 +684,17 @@ func (s *Store) RoomProject(ctx context.Context, roomID string) (Project, error)
 	if err != nil {
 		return Project{}, fmt.Errorf("project of room %s: %w", roomID, err)
 	}
-	return toProject(row), nil
+	return withComputed(toProject(row.Project), row.MainRoomID, row.LeaderID), nil
 }
 
-// withMainRoom fills the chat id the listing queries compute alongside
-// the project; a project without one (never, in practice) stays empty.
-func withMainRoom(p Project, id pgtype.UUID) Project {
-	if id.Valid {
-		p.MainRoomID = uuidString(id)
+// withComputed fills what the queries compute alongside the project: its
+// chat, which a project always has in practice, and its leader, which one
+// without current members lacks.
+func withComputed(p Project, mainRoom, leader pgtype.UUID) Project {
+	if mainRoom.Valid {
+		p.MainRoomID = uuidString(mainRoom)
 	}
+	p.LeaderID = uuidString(leader)
 	return p
 }
 

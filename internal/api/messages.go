@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -20,12 +21,24 @@ type MessageStore interface {
 	GetThread(ctx context.Context, id string) (store.Thread, error)
 	ThreadSummaries(ctx context.Context, rootMessageIDs []string) (map[string]store.ThreadSummary, error)
 	ListUserMentions(ctx context.Context, userID string, before int64, limit int) ([]store.InboxItem, error)
+	CountUnreadMentions(ctx context.Context, userID string) (int, error)
+	// ChainWork is a piece of work across its topics.
+	ChainWork(ctx context.Context, chain string) (store.WorkSummary, error)
 }
 
 // InboxResponse is the body of GET /api/v1/users/{id}/inbox: messages that
-// mention the user, newest first.
+// mention the user, newest first, and how many of all of them the user has
+// not read.
 type InboxResponse struct {
-	Items []store.InboxItem `json:"items"`
+	Items  []store.InboxItem `json:"items"`
+	Unread int               `json:"unread"`
+}
+
+// InboxReadResponse answers POST /api/v1/users/{id}/inbox/read: how many
+// were marked, and how many are left unread.
+type InboxReadResponse struct {
+	Marked int `json:"marked"`
+	Unread int `json:"unread"`
 }
 
 // PostMessageRequest is the body of POST /api/v1/rooms/{id}/messages.
@@ -75,6 +88,9 @@ type ThreadResponse struct {
 	Thread store.Thread  `json:"thread"`
 	Root   store.Message `json:"root"`
 	Turns  []store.Turn  `json:"turns"`
+	// Work is the piece of work the topic's latest turn is part of, which
+	// may have begun in another topic.
+	Work *store.WorkSummary `json:"work,omitempty"`
 }
 
 func (h *handlers) postMessage(w http.ResponseWriter, r *http.Request) {
@@ -204,8 +220,39 @@ func (h *handlers) userInbox(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, r, err)
 		return
 	}
+	unread, err := h.deps.Messages.CountUnreadMentions(r.Context(), userID)
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
 	h.fillSenderNames(r.Context(), items)
-	writeJSON(w, http.StatusOK, InboxResponse{Items: items})
+	writeJSON(w, http.StatusOK, InboxResponse{Items: items, Unread: unread})
+}
+
+// readInbox marks read what the body picks of what mentions a user: the
+// messages named, those in a topic, or all up to a seq (docs/webui.md 4.19).
+func (h *handlers) readInbox(w http.ResponseWriter, r *http.Request) {
+	userID := r.PathValue("id")
+	if user, ok := userFrom(r.Context()); ok && user.ID != userID {
+		writeError(w, http.StatusForbidden, "a person marks only their own inbox read")
+		return
+	}
+	var read store.InboxRead
+	if err := decodeJSON(r, &read); err != nil {
+		writeReason(w, http.StatusBadRequest, err)
+		return
+	}
+	marked, err := h.deps.Chat.MarkInboxRead(r.Context(), userID, read)
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	unread, err := h.deps.Messages.CountUnreadMentions(r.Context(), userID)
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, InboxReadResponse{Marked: marked, Unread: unread})
 }
 
 func (h *handlers) getMessage(w http.ResponseWriter, r *http.Request) {
@@ -233,7 +280,18 @@ func (h *handlers) getThread(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, ThreadResponse{Thread: thread, Root: root, Turns: turns})
+	res := ThreadResponse{Thread: thread, Root: root, Turns: turns}
+	if len(turns) > 0 && turns[len(turns)-1].ChainMessageID != "" {
+		work, err := h.deps.Messages.ChainWork(r.Context(), turns[len(turns)-1].ChainMessageID)
+		switch {
+		case err == nil:
+			res.Work = &work
+		case !errors.Is(err, store.ErrNotFound):
+			h.writeStoreError(w, r, err)
+			return
+		}
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (h *handlers) listThreadMessages(w http.ResponseWriter, r *http.Request) {

@@ -16,21 +16,26 @@ func TestProjects_WikiMaintainer(t *testing.T) {
 	ctx := context.Background()
 	project := f.room.ProjectID
 	fresh, _ := f.s.GetProject(ctx, project)
-	if fresh.WikiMaintainerMemberID != "" || fresh.WikiMaintainerTrigger != store.UpkeepDaily {
-		t.Fatalf("a new project has no maintainer and would run it daily: %+v", fresh)
+	if fresh.WikiUpkeep || fresh.WikiMaintainerMemberID != "" || fresh.WikiMaintainerTrigger != store.UpkeepDaily {
+		t.Fatalf("a new project keeps no wiki, and would do it daily: %+v", fresh)
 	}
 
-	member, weekly := f.member.ID, store.UpkeepWeekly
-	got, err := f.s.UpdateProject(ctx, project, store.ProjectPatch{WikiMaintainer: &member, WikiMaintainerTrigger: &weekly})
-	if err != nil || got.WikiMaintainerMemberID != member || got.WikiMaintainerTrigger != store.UpkeepWeekly {
-		t.Fatalf("set the maintainer: %+v %v", got, err)
+	// Turned on, the leader keeps it until someone else is chosen.
+	on, weekly := true, store.UpkeepWeekly
+	got, err := f.s.UpdateProject(ctx, project, store.ProjectPatch{WikiUpkeep: &on, WikiMaintainerTrigger: &weekly})
+	if err != nil || !got.WikiUpkeep || got.WikiMaintainerMemberID != "" || got.LeaderID != f.member.ID || got.WikiMaintainerTrigger != store.UpkeepWeekly {
+		t.Fatalf("turn upkeep on: %+v %v", got, err)
 	}
-	if listed, _ := f.s.ListMaintainedProjects(ctx); len(listed) != 1 || listed[0].ID != project || listed[0].MainRoomID != f.room.ID {
+	if listed, _ := f.s.ListMaintainedProjects(ctx); len(listed) != 1 || listed[0].ID != project || listed[0].MainRoomID != f.room.ID || listed[0].LeaderID != f.member.ID {
 		t.Errorf("maintained projects %+v", listed)
 	}
-	// Renaming keeps the maintainer.
+	member := f.member.ID
+	if got, err := f.s.UpdateProject(ctx, project, store.ProjectPatch{WikiMaintainer: &member}); err != nil || got.WikiMaintainerMemberID != member || !got.WikiUpkeep {
+		t.Fatalf("choose the maintainer: %+v %v", got, err)
+	}
+	// Renaming keeps it all.
 	name := "renamed"
-	if got, _ := f.s.UpdateProject(ctx, project, store.ProjectPatch{Name: &name}); got.WikiMaintainerMemberID != member {
+	if got, _ := f.s.UpdateProject(ctx, project, store.ProjectPatch{Name: &name}); got.WikiMaintainerMemberID != member || !got.WikiUpkeep {
 		t.Errorf("a rename lost the maintainer: %+v", got)
 	}
 
@@ -45,24 +50,31 @@ func TestProjects_WikiMaintainer(t *testing.T) {
 	}
 
 	none := ""
-	if got, err := f.s.UpdateProject(ctx, project, store.ProjectPatch{WikiMaintainer: &none}); err != nil || got.WikiMaintainerMemberID != "" || got.WikiMaintainerTrigger != store.UpkeepWeekly {
-		t.Errorf("no maintainer: %+v %v", got, err)
+	if got, err := f.s.UpdateProject(ctx, project, store.ProjectPatch{WikiMaintainer: &none}); err != nil || got.WikiMaintainerMemberID != "" || !got.WikiUpkeep || got.WikiMaintainerTrigger != store.UpkeepWeekly {
+		t.Errorf("back to the leader: %+v %v", got, err)
+	}
+	off := false
+	if got, err := f.s.UpdateProject(ctx, project, store.ProjectPatch{WikiUpkeep: &off}); err != nil || got.WikiUpkeep {
+		t.Errorf("turn upkeep off: %+v %v", got, err)
+	}
+	if listed, _ := f.s.ListMaintainedProjects(ctx); len(listed) != 0 {
+		t.Errorf("a project whose upkeep is off is still kept: %+v", listed)
 	}
 
 	// A member taken out of the project keeps its wiki no longer.
-	f.s.UpdateProject(ctx, project, store.ProjectPatch{WikiMaintainer: &member})
+	f.s.UpdateProject(ctx, project, store.ProjectPatch{WikiUpkeep: &on, WikiMaintainer: &member})
 	if _, err := f.s.RemoveMember(ctx, member); err != nil {
 		t.Fatal(err)
 	}
-	if got, _ := f.s.GetProject(ctx, project); got.WikiMaintainerMemberID != "" {
-		t.Errorf("a removed member still keeps the wiki: %+v", got)
+	if got, _ := f.s.GetProject(ctx, project); got.WikiMaintainerMemberID != "" || !got.WikiUpkeep || got.LeaderID != "" {
+		t.Errorf("a removed member still keeps the wiki, or leads: %+v", got)
 	}
 	if _, err := f.s.UpdateProject(ctx, project, store.ProjectPatch{WikiMaintainer: &member}); !errors.Is(err, store.ErrInvalidInput) {
 		t.Errorf("a removed member: %v", err)
 	}
 }
 
-// A project gets its maintainer as it is created, or is offered one in its
+// A project's wiki upkeep is turned on as it is created, or offered in its
 // chat, once, unless a person said no (design.md 5.16).
 func TestProjects_WikiMaintainerOffer(t *testing.T) {
 	f := newTurnFixture(t)
@@ -82,7 +94,7 @@ func TestProjects_WikiMaintainerOffer(t *testing.T) {
 		return false
 	}
 	if !offerable(project) {
-		t.Fatal("a project without a maintainer may be offered one")
+		t.Fatal("a project whose upkeep is off may be offered it")
 	}
 	note, err := f.s.CreateMessage(ctx, store.NewMessage{RoomID: f.room.ID, SenderKind: store.SenderSystem, Body: "offer"})
 	if err != nil {
@@ -113,20 +125,31 @@ func TestProjects_WikiMaintainerOffer(t *testing.T) {
 		t.Error("a declined project was offered a maintainer")
 	}
 
-	// Chosen as the project is created: daily unless said otherwise.
-	kept, keptRoom, err := f.s.CreateProject(ctx, store.NewProject{Name: "kept", AgentIDs: []string{f.agent.ID}, WikiMaintainerAgentID: f.agent.ID})
-	if err != nil || kept.WikiMaintainerMemberID == "" || kept.WikiMaintainerTrigger != store.UpkeepDaily || offerable(kept.ID) {
+	// Turned on as the project is created: daily unless said otherwise, by
+	// the leader unless someone else is chosen.
+	led, ledRoom, err := f.s.CreateProject(ctx, store.NewProject{Name: "led", AgentIDs: []string{f.agent.ID}, WikiUpkeep: true})
+	if err != nil || !led.WikiUpkeep || led.WikiMaintainerMemberID != "" || led.WikiMaintainerTrigger != store.UpkeepDaily || offerable(led.ID) {
+		t.Fatalf("created with upkeep on: %+v %v", led, err)
+	}
+	if members, _ := f.s.ListRoomMembers(ctx, ledRoom.ID); len(members) != 1 || members[0].ID != led.LeaderID || led.MainRoomID != ledRoom.ID {
+		t.Errorf("the leader is the agent's member: %+v %+v", members, led)
+	}
+	kept, keptRoom, err := f.s.CreateProject(ctx, store.NewProject{Name: "kept", AgentIDs: []string{f.agent.ID}, WikiUpkeep: true, WikiMaintainerAgentID: f.agent.ID})
+	if err != nil || kept.WikiMaintainerMemberID == "" || !kept.WikiUpkeep {
 		t.Fatalf("created with a maintainer: %+v %v", kept, err)
 	}
 	if members, _ := f.s.ListRoomMembers(ctx, keptRoom.ID); len(members) != 1 || members[0].ID != kept.WikiMaintainerMemberID {
 		t.Errorf("the maintainer is the agent's member: %+v", members)
 	}
-	weekly, _, err := f.s.CreateProject(ctx, store.NewProject{Name: "weekly", AgentIDs: []string{f.agent.ID}, WikiMaintainerAgentID: f.agent.ID, WikiMaintainerTrigger: store.UpkeepWeekly})
+	weekly, _, err := f.s.CreateProject(ctx, store.NewProject{Name: "weekly", AgentIDs: []string{f.agent.ID}, WikiUpkeep: true, WikiMaintainerTrigger: store.UpkeepWeekly})
 	if err != nil || weekly.WikiMaintainerTrigger != store.UpkeepWeekly {
 		t.Errorf("created weekly: %+v %v", weekly, err)
 	}
-	if _, _, err := f.s.CreateProject(ctx, store.NewProject{Name: "nobody", WikiMaintainerAgentID: f.agent.ID}); !errors.Is(err, store.ErrInvalidInput) {
+	if _, _, err := f.s.CreateProject(ctx, store.NewProject{Name: "nobody", WikiUpkeep: true, WikiMaintainerAgentID: f.agent.ID}); !errors.Is(err, store.ErrInvalidInput) {
 		t.Errorf("a maintainer the project does not start with: %v", err)
+	}
+	if _, _, err := f.s.CreateProject(ctx, store.NewProject{Name: "off", AgentIDs: []string{f.agent.ID}, WikiMaintainerAgentID: f.agent.ID}); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("a maintainer with upkeep off: %v", err)
 	}
 	if _, _, err := f.s.CreateProject(ctx, store.NewProject{Name: "hourly", WikiMaintainerTrigger: "hourly"}); !errors.Is(err, store.ErrInvalidInput) {
 		t.Errorf("a trigger there is none of: %v", err)

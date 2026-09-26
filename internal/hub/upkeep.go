@@ -10,15 +10,16 @@ import (
 	"github.com/J0EY0/veyloom/internal/wiki"
 )
 
-// The wiki maintainer (docs/design.md 5.12). A person chooses one member
-// of a project to keep its wiki. From then on that member now and then
+// The wiki maintainer (docs/design.md 5.12, 5.21). A person turns a
+// project's wiki upkeep on, and the member chosen to keep the wiki, or the
+// project's leader when none was, now and then
 // runs a turn of its own, an upkeep, in the project's wiki topic: it goes
 // over what the chat did since the last one, and over what other projects'
 // turns did with the skills the project's team owns, and records what is
 // worth keeping. It runs once a topic has gone quiet, once a day (the
 // default), every three days, once a week, or when a person asks; never
-// when there is nothing new, unless a person asks. A project that has no
-// maintainer is offered one in its chat once enough topics wait (5.16).
+// when there is nothing new, unless a person asks. A project whose upkeep
+// is off is offered it in its chat once enough topics wait (5.16).
 
 // upkeepStore is what the maintainer's bookkeeping reads and writes.
 type upkeepStore interface {
@@ -130,15 +131,18 @@ func (u *upkeep) turnIDs() []string {
 
 // Why an upkeep does not start.
 var (
-	ErrNoMaintainer = store.Invalid("noMaintainer", nil, "this project has no wiki maintainer: a person chooses one in the project's settings")
+	ErrNoMaintainer = store.Invalid("noMaintainer", nil, "this project's wiki upkeep is off, or it has no member to keep the wiki: a person turns it on in the project's settings")
 	errUpkeepBusy   = store.Conflicting("upkeepBusy", nil, "an upkeep of this wiki is running or waiting to")
 )
 
 // UpkeepStatus is how a project's wiki upkeep stands.
 type UpkeepStatus struct {
-	// MemberID and MemberName are the maintainer; empty when there is none.
+	// MemberID and MemberName are the maintainer; empty while upkeep is off
+	// or nobody can do it. Leader says it is the project's leader, keeping
+	// the wiki because nobody else was chosen to.
 	MemberID   string              `json:"member_id,omitempty"`
 	MemberName string              `json:"member_name,omitempty"`
+	Leader     bool                `json:"leader,omitempty"`
 	Trigger    store.UpkeepTrigger `json:"trigger"`
 	// IdleMinutes is how long a topic stays quiet before an upkeep on idle
 	// topics goes over it.
@@ -162,10 +166,9 @@ func (h *Hub) UpkeepStatus(ctx context.Context, projectID string) (UpkeepStatus,
 		return UpkeepStatus{}, err
 	}
 	status := UpkeepStatus{Trigger: project.WikiMaintainerTrigger, IdleMinutes: int(h.cfg.UpkeepIdle / time.Minute), ThreadID: project.WikiThreadID}
-	if project.WikiMaintainerMemberID != "" {
-		if member, err := h.store.GetMember(ctx, project.WikiMaintainerMemberID); err == nil {
-			status.MemberID, status.MemberName = member.ID, member.DisplayName
-		}
+	if member, err := h.maintainerOf(ctx, project); err == nil {
+		status.MemberID, status.MemberName = member.ID, member.DisplayName
+		status.Leader = project.WikiMaintainerMemberID == ""
 	}
 	owned := h.turns.ownedSkills(ctx, project)
 	if status.Waiting, err = h.store.CountUpkeepWaiting(ctx, project.ID, owned, h.now().Add(-h.cfg.UpkeepIdle)); err != nil {
@@ -191,7 +194,7 @@ func (h *Hub) StartUpkeep(ctx context.Context, projectID string) (UpkeepStatus, 
 	if h.cfg.WikiDir == "" {
 		return UpkeepStatus{}, ErrNoWikis
 	}
-	if project.WikiMaintainerMemberID == "" {
+	if !project.WikiUpkeep {
 		return UpkeepStatus{}, ErrNoMaintainer
 	}
 	if err := h.upkeep(ctx, project, upkeepAsked); err != nil {
@@ -226,6 +229,10 @@ func (h *Hub) checkUpkeep(ctx context.Context) {
 		return
 	}
 	for _, project := range projects {
+		if _, err := h.keeper(ctx, project); err != nil {
+			// Nobody to do it: a person chooses someone, or turns it off.
+			continue
+		}
 		reason, due, err := h.upkeepDue(ctx, project)
 		if err != nil {
 			h.logger.Error("check the wiki upkeep", "project", project.ID, "err", err)
@@ -336,12 +343,9 @@ func (h *Hub) upkeep(ctx context.Context, project store.Project, reason upkeepRe
 // gone over yet, oldest first, as many as UpkeepTurns; on quiet topics
 // only the turns of the topics that are.
 func (h *Hub) planUpkeep(ctx context.Context, project store.Project, reason upkeepReason) (*upkeep, error) {
-	member, err := h.store.GetMember(ctx, project.WikiMaintainerMemberID)
+	member, err := h.keeper(ctx, project)
 	if err != nil {
-		return nil, fmt.Errorf("the wiki maintainer: %w", err)
-	}
-	if member.Removed() || !member.Enabled {
-		return nil, store.Conflicting("maintainerOff", store.Params{"name": member.DisplayName}, "the wiki maintainer %s is switched off or out of the project: a person chooses another in the project's settings", member.DisplayName)
+		return nil, err
 	}
 	up := &upkeep{project: project, member: member, reason: reason, owned: h.turns.ownedSkills(ctx, project)}
 	q := store.UpkeepQuery{ProjectID: project.ID, Unreviewed: true, OldestFirst: true, Limit: h.cfg.UpkeepTurns}
@@ -373,6 +377,42 @@ func (h *Hub) planUpkeep(ctx context.Context, project store.Project, reason upke
 		}
 	}
 	return up, nil
+}
+
+// maintainerOf is the member who keeps the project's wiki once its upkeep
+// is on (docs/design.md 5.12, 5.21): the one a person chose, else the
+// project's leader. ErrNoMaintainer while upkeep is off or the project has
+// no member to lead it.
+func (h *Hub) maintainerOf(ctx context.Context, project store.Project) (store.Member, error) {
+	if !project.WikiUpkeep {
+		return store.Member{}, ErrNoMaintainer
+	}
+	id := project.WikiMaintainerMemberID
+	if id == "" {
+		id = project.LeaderID
+	}
+	if id == "" {
+		return store.Member{}, ErrNoMaintainer
+	}
+	member, err := h.store.GetMember(ctx, id)
+	if err != nil {
+		return store.Member{}, fmt.Errorf("the wiki maintainer: %w", err)
+	}
+	return member, nil
+}
+
+// keeper is maintainerOf, as long as that member may run turns: one
+// switched off, or taken out of the project, keeps nothing until a person
+// chooses another.
+func (h *Hub) keeper(ctx context.Context, project store.Project) (store.Member, error) {
+	member, err := h.maintainerOf(ctx, project)
+	if err != nil {
+		return store.Member{}, err
+	}
+	if member.Removed() || !member.Enabled {
+		return store.Member{}, store.Conflicting("maintainerOff", store.Params{"name": member.DisplayName}, "the wiki maintainer %s is switched off or out of the project: a person chooses another in the project's settings", member.DisplayName)
+	}
+	return member, nil
 }
 
 // upkeepNote is what the wiki topic says as an upkeep starts, in words the
@@ -410,7 +450,7 @@ func (m *TurnManager) TriggerUpkeep(ctx context.Context, member store.Member, no
 	}
 	st.starting = true
 	m.mu.Unlock()
-	m.start(ctx, member.ID, topic, []store.Message{note}, up)
+	m.start(ctx, member.ID, topic, []store.Message{note}, "", up, nil)
 	return nil
 }
 

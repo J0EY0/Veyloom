@@ -5,6 +5,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -50,9 +52,22 @@ type Turn struct {
 	FilesChanged []string `json:"files_changed,omitempty"`
 	// SkillsUsed are the library's skills the turn used, by name, each
 	// once; known once it ends.
-	SkillsUsed []string   `json:"skills_used,omitempty"`
-	StartedAt  time.Time  `json:"started_at"`
-	EndedAt    *time.Time `json:"ended_at,omitempty"`
+	SkillsUsed []string `json:"skills_used,omitempty"`
+	// ChainMessageID is the piece of work the turn is part of (docs/
+	// design.md 5.22): the person's message it started from. WokenByTurnID
+	// is the turn whose message woke it, empty when a person did. Worked
+	// says it did work, not only followed and talked in the chat; known
+	// once it ends.
+	ChainMessageID string `json:"chain_message_id,omitempty"`
+	WokenByTurnID  string `json:"woken_by_turn_id,omitempty"`
+	Worked         bool   `json:"worked"`
+	// TrustedBy is the person who let the rest of the turn's requests
+	// through, and TrustedAt when (docs/design.md 4.6); empty when nobody
+	// did or they took it back.
+	TrustedBy string     `json:"trusted_by,omitempty"`
+	TrustedAt *time.Time `json:"trusted_at,omitempty"`
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
 }
 
 // NewTurn is the input to CreateTurn.
@@ -69,6 +84,10 @@ type NewTurn struct {
 	SessionID string
 	// Kind is what the turn is for; empty is TurnChat.
 	Kind TurnKind
+	// ChainMessageID is the piece of work the turn is part of, and
+	// WokenByTurnID the turn that woke it, if an agent did.
+	ChainMessageID string
+	WokenByTurnID  string
 }
 
 // TurnKind says what a turn was for.
@@ -77,6 +96,9 @@ type TurnKind string
 const (
 	// TurnChat answers the chat: someone asked the member for something.
 	TurnChat TurnKind = "chat"
+	// TurnSetup is the project's leader setting the project up for its
+	// members' worktrees (docs/design.md 5.21), in a session of its own.
+	TurnSetup TurnKind = "setup"
 	// TurnUpkeep is the project's wiki maintainer going over what the chat
 	// did (docs/design.md 5.12), in a session of its own.
 	TurnUpkeep TurnKind = "upkeep"
@@ -96,6 +118,9 @@ type TurnOutcome struct {
 	FilesChanged []string
 	// SkillsUsed are the skills it used.
 	SkillsUsed []string
+	// Worked says it did work: called a tool other than those that follow
+	// and talk in the chat, or changed a file.
+	Worked bool
 }
 
 // CreateTurn records a turn that is starting, in status running.
@@ -129,6 +154,14 @@ func (s *Store) CreateTurn(ctx context.Context, t NewTurn) (Turn, error) {
 			return Turn{}, err
 		}
 	}
+	chainID, err := optionalUUID(t.ChainMessageID)
+	if err != nil {
+		return Turn{}, err
+	}
+	wokenBy, err := optionalUUID(t.WokenByTurnID)
+	if err != nil {
+		return Turn{}, err
+	}
 
 	row, err := s.q.CreateTurn(ctx, db.CreateTurnParams{
 		MemberID:         memberID,
@@ -140,6 +173,8 @@ func (s *Store) CreateTurn(ctx context.Context, t NewTurn) (Turn, error) {
 		TranscriptPath:   t.TranscriptPath,
 		SessionID:        sessionID,
 		Kind:             string(cmp.Or(t.Kind, TurnChat)),
+		ChainMessageID:   chainID,
+		WokenByTurnID:    wokenBy,
 	})
 	if err != nil {
 		return Turn{}, mapPGError("create turn", err)
@@ -170,6 +205,7 @@ func (s *Store) FinishTurn(ctx context.Context, id string, out TurnOutcome) (Tur
 		CacheWriteTokens: out.Usage.CacheWriteTokens,
 		OutputTokens:     out.Usage.OutputTokens,
 		FilesChanged:     nonNil(out.FilesChanged),
+		Worked:           out.Worked,
 		SkillsUsed:       nonNil(out.SkillsUsed),
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
@@ -200,6 +236,45 @@ func (s *Store) SetTurnSession(ctx context.Context, turnID, sessionID string) er
 		return fmt.Errorf("turn %s: %w", turnID, ErrNotFound)
 	}
 	return nil
+}
+
+// TrustTurn records that a person let the rest of a running turn's
+// requests through (docs/design.md 4.6). A turn that is over cannot be:
+// that is ErrConflict.
+func (s *Store) TrustTurn(ctx context.Context, turnID, userID string) (Turn, error) {
+	tid, err := parseUUID(turnID)
+	if err != nil {
+		return Turn{}, err
+	}
+	uid, err := parseUUID(userID)
+	if err != nil {
+		return Turn{}, err
+	}
+	row, err := s.q.SetTurnTrust(ctx, db.SetTurnTrustParams{ID: tid, TrustedBy: uid})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Turn{}, fmt.Errorf("turn %s: %w: it is not running", turnID, ErrConflict)
+	}
+	if err != nil {
+		return Turn{}, mapPGError("trust turn", err)
+	}
+	return toTurn(row), nil
+}
+
+// UntrustTurn takes back a person's letting a turn's requests through; a
+// turn nobody trusted is returned as it is.
+func (s *Store) UntrustTurn(ctx context.Context, turnID string) (Turn, error) {
+	tid, err := parseUUID(turnID)
+	if err != nil {
+		return Turn{}, err
+	}
+	row, err := s.q.ClearTurnTrust(ctx, tid)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Turn{}, fmt.Errorf("turn %s: %w", turnID, ErrNotFound)
+	}
+	if err != nil {
+		return Turn{}, mapPGError("untrust turn", err)
+	}
+	return toTurn(row), nil
 }
 
 // GetTurn returns one turn, or ErrNotFound.
@@ -296,6 +371,9 @@ type RunningTopic struct {
 	RoomID        string `json:"room_id"`
 	RootMessageID string `json:"root_message_id"`
 	RootBody      string `json:"root_body"`
+	// Ask is what the topic was asked, in a line (AskLine); empty when the
+	// words that set it off say nothing.
+	Ask string `json:"ask"`
 	// Members names the members working in it.
 	Members   []string  `json:"members"`
 	StartedAt time.Time `json:"started_at"`
@@ -319,11 +397,37 @@ func (s *Store) ListRunningTopics(ctx context.Context) ([]RunningTopic, error) {
 			RoomID:        uuidString(row.RoomID),
 			RootMessageID: uuidString(row.RootMessageID),
 			RootBody:      row.RootBody,
+			Ask:           AskLine(row.Ask, row.Names),
 			Members:       members,
 			StartedAt:     row.StartedAt.Time,
 		})
 	}
 	return out, nil
+}
+
+// AskLine says what a message asks, in a line: its first line with words,
+// without the @s of the names given it began with, up to where its first
+// sentence or clause ends.
+func AskLine(body string, names []string) string {
+	var line string
+	for _, l := range strings.Split(body, "\n") {
+		if line = strings.TrimSpace(l); line != "" {
+			break
+		}
+	}
+	names = slices.Clone(names)
+	slices.SortFunc(names, func(a, b string) int { return len(b) - len(a) })
+	for {
+		i := slices.IndexFunc(names, func(n string) bool { return n != "" && strings.HasPrefix(line, "@"+n) })
+		if i < 0 {
+			break
+		}
+		line = strings.TrimSpace(line[len(names[i])+1:])
+	}
+	if end := strings.IndexAny(line, "：:。！？!?；;"); end > 0 {
+		line = strings.TrimSpace(line[:end])
+	}
+	return line
 }
 
 // ListThreadTurns returns every turn of a topic, oldest first.
@@ -361,7 +465,15 @@ func toTurn(row db.Turn) Turn {
 		Usage:            usageOf(row.InputTokens, row.CacheReadTokens, row.CacheWriteTokens, row.OutputTokens),
 		FilesChanged:     row.FilesChanged,
 		SkillsUsed:       row.SkillsUsed,
+		ChainMessageID:   uuidString(row.ChainMessageID),
+		WokenByTurnID:    uuidString(row.WokenByTurnID),
+		Worked:           row.Worked,
+		TrustedBy:        uuidString(row.TrustedBy),
 		StartedAt:        row.StartedAt.Time,
+	}
+	if row.TrustedAt.Valid {
+		trusted := row.TrustedAt.Time
+		t.TrustedAt = &trusted
 	}
 	if row.EndedAt.Valid {
 		ended := row.EndedAt.Time
@@ -418,4 +530,23 @@ func (s *Store) ListSkillUses(ctx context.Context, skill string, limit int) ([]S
 		out = append(out, use)
 	}
 	return out, nil
+}
+
+// ChainWakes says how a piece of work stands against the limits on agents
+// waking one another (docs/design.md 5.22): how many turns agents woke in
+// it, under way or over, and whether the last recent of them to end did
+// work, the latest first.
+func (s *Store) ChainWakes(ctx context.Context, chainMessageID string, recent int) (woken int, worked []bool, err error) {
+	id, err := parseUUID(chainMessageID)
+	if err != nil {
+		return 0, nil, err
+	}
+	n, err := s.q.CountChainWakes(ctx, id)
+	if err != nil {
+		return 0, nil, fmt.Errorf("count the wakes of piece of work %s: %w", chainMessageID, err)
+	}
+	if worked, err = s.q.RecentChainWakes(ctx, db.RecentChainWakesParams{ChainMessageID: id, Limit: int32(recent)}); err != nil {
+		return 0, nil, fmt.Errorf("the recent wakes of piece of work %s: %w", chainMessageID, err)
+	}
+	return int(n), worked, nil
 }

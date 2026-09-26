@@ -367,9 +367,14 @@ func (h *handlers) updateMember(w http.ResponseWriter, r *http.Request) {
 // removeMember takes a member out of its project: 204, 404 when it is
 // unknown or already out, 409 while one of its turns is running.
 func (h *handlers) removeMember(w http.ResponseWriter, r *http.Request) {
-	if _, err := h.deps.Agents.RemoveMember(r.Context(), r.PathValue("id")); err != nil {
+	member, err := h.deps.Agents.RemoveMember(r.Context(), r.PathValue("id"))
+	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
+	}
+	if h.deps.Worktrees != nil && member.WorktreeDir != "" {
+		// Its worktree goes too, what it did kept on its branch.
+		h.deps.Worktrees.ReleaseWorktree(member)
 	}
 	w.WriteHeader(http.StatusNoContent)
 }

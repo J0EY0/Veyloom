@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/J0EY0/veyloom/internal/runtime"
+	"github.com/J0EY0/veyloom/internal/worktree"
 )
 
 // Kind identifies a message type on the wire.
@@ -40,6 +41,8 @@ const (
 	// the turn's room: a call of one of the agent's room tools. The call
 	// waits for a RoomResult.
 	KindRoomQuery Kind = "room_query"
+	// KindWorkspaceResult answers a WorkspaceRequest.
+	KindWorkspaceResult Kind = "workspace_result"
 )
 
 // Messages sent by the hub to a machine.
@@ -56,6 +59,9 @@ const (
 	KindApprovalDecision Kind = "approval_decision"
 	// KindRoomResult answers a RoomQuery.
 	KindRoomResult Kind = "room_result"
+	// KindWorkspaceRequest asks the machine to work on a project's checkout
+	// or a member's worktree; the machine answers with a WorkspaceResult.
+	KindWorkspaceRequest Kind = "workspace_request"
 )
 
 // Message is implemented by every payload type.
@@ -169,6 +175,9 @@ type ApprovalRequest struct {
 	Tool         string    `json:"tool"`
 	Input        string    `json:"input"`
 	At           time.Time `json:"at"`
+	// Similar is what an allow can take in besides, for the rest of the
+	// turn, as the runtime offers.
+	Similar *runtime.Similar `json:"similar,omitempty"`
 	// Reviewer, Verdict, Why and Detail describe a request the runtime
 	// settled: who decided, the verdict (a runtime.Verdict constant), why,
 	// and the reviewer's findings as JSON.
@@ -216,6 +225,138 @@ type RoomResult struct {
 
 // Kind implements Message.
 func (RoomResult) Kind() Kind { return KindRoomResult }
+
+// WorkspaceOp names what a WorkspaceRequest asks for.
+type WorkspaceOp string
+
+// The operations on checkouts and worktrees (docs/design.md 5.21).
+const (
+	// WorkspaceInspect: how the checkout stands.
+	WorkspaceInspect WorkspaceOp = "inspect"
+	// WorkspaceCreate: a new worktree for a member, on a branch of its own.
+	WorkspaceCreate WorkspaceOp = "create"
+	// WorkspacePrepare: the steps the project's leader wrote down, run in a
+	// new worktree.
+	WorkspacePrepare WorkspaceOp = "prepare"
+	// WorkspaceStatus: how a worktree stands against the main line.
+	WorkspaceStatus WorkspaceOp = "status"
+	// WorkspaceDiff: the patch of what a worktree changed.
+	WorkspaceDiff WorkspaceOp = "diff"
+	// WorkspaceSquash: a worktree's work put on the main line as one commit.
+	WorkspaceSquash WorkspaceOp = "squash"
+	// WorkspaceSync: the main line brought into a worktree.
+	WorkspaceSync WorkspaceOp = "sync"
+	// WorkspaceRemove: a worktree taken away, its branch kept.
+	WorkspaceRemove WorkspaceOp = "remove"
+	// WorkspaceConclude: a merge a member left under way in its worktree
+	// committed once its conflicts are settled, named while not.
+	WorkspaceConclude WorkspaceOp = "conclude"
+	// WorkspaceAbortMerge: a merge under way in a worktree given up.
+	WorkspaceAbortMerge WorkspaceOp = "abort_merge"
+	// WorkspaceCheckoutDiff: the patch of what the checkout changed and did
+	// not commit.
+	WorkspaceCheckoutDiff WorkspaceOp = "checkout_diff"
+	// WorkspaceCheckoutCommit: the changes to some files of the checkout,
+	// not committed, committed on its branch.
+	WorkspaceCheckoutCommit WorkspaceOp = "checkout_commit"
+	// WorkspaceSetAside: what a worktree has kept aside in git, and the
+	// worktree started over from the main line.
+	WorkspaceSetAside WorkspaceOp = "set_aside"
+	// WorkspaceOverlap: the files two worktrees' work both changes, each
+	// its own way.
+	WorkspaceOverlap WorkspaceOp = "overlap"
+)
+
+// WorkspaceRequest asks the machine to work on a project's checkout and its
+// members' worktrees there (docs/design.md 5.21), hub to machine. Every
+// request is answered by a WorkspaceResult with its RequestID.
+type WorkspaceRequest struct {
+	RequestID string      `json:"request_id"`
+	Op        WorkspaceOp `json:"op"`
+	// Checkout is the project's checkout: the main line is its branch.
+	Checkout string `json:"checkout"`
+	// Dir is the member's worktree; WorkDir where in it the member works,
+	// which prepare works in.
+	Dir     string `json:"dir,omitempty"`
+	WorkDir string `json:"work_dir,omitempty"`
+	// Name and Branch are what create calls the worktree, under the
+	// machine's folder for them, and its branch.
+	Name   string `json:"name,omitempty"`
+	Branch string `json:"branch,omitempty"`
+	// Copy and Run are prepare's steps.
+	Copy []string `json:"copy,omitempty"`
+	Run  string   `json:"run,omitempty"`
+	// Message is squash's commit message, checkout_commit's, what remove
+	// commits the work left uncommitted with, or what set_aside keeps the
+	// work with.
+	Message string `json:"message,omitempty"`
+	// Leave are the new files squash leaves out, from the top of the
+	// repository: they stay in the worktree.
+	Leave []string `json:"leave,omitempty"`
+	// Sides are where the two worktrees overlap sets side by side stand,
+	// as their statuses said.
+	Sides []worktree.Side `json:"sides,omitempty"`
+	// Paths are the files checkout_commit commits, from the top of the
+	// repository.
+	Paths []string `json:"paths,omitempty"`
+	// FastForwardOnly has sync leave alone a worktree with work of its own.
+	FastForwardOnly bool `json:"fast_forward_only,omitempty"`
+	// MaxBytes caps diff's patch; zero leaves it whole.
+	MaxBytes int `json:"max_bytes,omitempty"`
+}
+
+// Kind implements Message.
+func (WorkspaceRequest) Kind() Kind { return KindWorkspaceRequest }
+
+// Workspace failures the hub tells apart, in WorkspaceResult.Code.
+const (
+	WorkspaceNotRepo       = "not_repo"
+	WorkspaceNoCommits     = "no_commits"
+	WorkspaceDetached      = "detached"
+	WorkspaceNoChanges     = "no_changes"
+	WorkspaceMainLineMoved = "main_line_moved"
+	WorkspaceNoFolder      = "no_folder"
+	// WorkspaceGone: the worktree is not there any more.
+	WorkspaceGone = "gone"
+	// WorkspaceMergeUnderway: a merge is under way in the worktree.
+	WorkspaceMergeUnderway = "merge_underway"
+	// WorkspaceCheckoutChanged: the merge changes files that have changes
+	// in the checkout not committed; Files names them.
+	WorkspaceCheckoutChanged = "checkout_changed"
+	// WorkspaceNotNew: squash was asked to leave out files that are not
+	// new, which Files names.
+	WorkspaceNotNew = "not_new"
+)
+
+// WorkspaceResult answers a WorkspaceRequest, machine to hub: what the
+// operation came to, or why it failed. Error is empty on success; Code
+// names the failures the hub tells apart.
+type WorkspaceResult struct {
+	RequestID string `json:"request_id"`
+	Error     string `json:"error,omitempty"`
+	Code      string `json:"code,omitempty"`
+
+	Repo      *worktree.Repo           `json:"repo,omitempty"`
+	Workspace *worktree.Workspace      `json:"workspace,omitempty"`
+	Status    *worktree.Status         `json:"status,omitempty"`
+	Merge     *worktree.MergeResult    `json:"merge,omitempty"`
+	Sync      *worktree.SyncResult     `json:"sync,omitempty"`
+	Conclude  *worktree.ConcludeResult `json:"conclude,omitempty"`
+	// Text is what prepare did and its command said, or diff's patch, cut
+	// when Cut says so. Prepare's text comes with a failure too.
+	Text string `json:"text,omitempty"`
+	Cut  bool   `json:"cut,omitempty"`
+	// Commit is checkout_commit's new commit.
+	Commit string `json:"commit,omitempty"`
+	// Ref is where set_aside kept the work.
+	Ref string `json:"ref,omitempty"`
+	// Files are overlap's files, or those a checkout_changed or not_new
+	// failure names.
+	Files []string `json:"files,omitempty"`
+}
+
+// Kind implements Message.
+func (WorkspaceResult) Kind() Kind { return KindWorkspaceResult }
 
 // Duration is a time.Duration that marshals as a human-readable string such
 // as "15s", which keeps the wire format legible and language-neutral.
@@ -293,6 +434,9 @@ var decoders = map[Kind]func(json.RawMessage) (Message, error){
 
 	KindRoomQuery:  decodeAs[RoomQuery],
 	KindRoomResult: decodeAs[RoomResult],
+
+	KindWorkspaceRequest: decodeAs[WorkspaceRequest],
+	KindWorkspaceResult:  decodeAs[WorkspaceResult],
 }
 
 // decodeAs decodes payload into a value of type T. An empty payload yields the

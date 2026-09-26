@@ -133,9 +133,12 @@ func TestRun_StopsCleanlyWhenHubDisconnects(t *testing.T) {
 	w := New(Config{Name: "laptop"}, NewDiscovery(nil, time.Second), &MemoryIdentity{}, runtime.BuiltinRunners())
 	hubEnd, errCh, _ := startMachine(t, w)
 	recvKind[protocol.Hello](t, hubEnd)
-	if err := hubEnd.Send(context.Background(), protocol.Welcome{MachineID: "w1"}); err != nil {
+	if err := hubEnd.Send(context.Background(), protocol.Welcome{MachineID: "w1", HeartbeatInterval: protocol.Duration(20 * time.Millisecond)}); err != nil {
 		t.Fatal(err)
 	}
+	// Welcomed, as its first heartbeat says: closing sooner could beat the
+	// welcome to it, which is the handshake failing, not the hub leaving.
+	recvKind[protocol.Heartbeat](t, hubEnd)
 
 	hubEnd.Close()
 

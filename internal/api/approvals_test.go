@@ -55,8 +55,8 @@ func (f fakeApprovals) ListTurnApprovals(_ context.Context, turnID string) ([]st
 }
 
 // DecideApproval mirrors the hub: the first decision wins, later ones
-// conflict, unknown ids are not found.
-func (c *fakeChat) DecideApproval(ctx context.Context, id, userID string, d runtime.Decision) (store.Approval, error) {
+// conflict, unknown ids are not found. It keeps the scope as asked.
+func (c *fakeChat) DecideApproval(ctx context.Context, id, userID string, d runtime.Decision, scope store.AllowScope) (store.Approval, error) {
 	a, err := c.approvals.GetApproval(ctx, id)
 	if err != nil {
 		return store.Approval{}, err
@@ -68,7 +68,7 @@ func (c *fakeChat) DecideApproval(ctx context.Context, id, userID string, d runt
 	if d.Allow {
 		a.Status = store.ApprovalAllowed
 	}
-	a.Message, a.DecidedBy, a.Answer = d.Message, userID, d.Answer
+	a.Message, a.DecidedBy, a.Answer, a.Scope = d.Message, userID, d.Answer, scope
 	c.approvals[id] = a
 	c.decided = append(c.decided, id)
 	return a, nil

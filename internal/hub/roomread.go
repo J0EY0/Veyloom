@@ -65,6 +65,10 @@ func (m *TurnManager) OnRoomQuery(conn protocol.Conn, q protocol.RoomQuery) {
 			text, err = m.answerReadTurn(ctx, at, q.Query)
 		case slices.Contains(runtime.UpkeepToolNames, q.Query.Tool):
 			text, err = m.answerUpkeep(ctx, at, q.Query)
+		case q.Query.Tool == runtime.SetupToolSteps:
+			text, err = m.answerSetupSteps(ctx, at, q.Query)
+		case q.Query.Tool == runtime.MessageToolSend:
+			text, err = m.answerSendMessage(ctx, at, q.Query)
 		default:
 			text, err = answerRoomQuery(ctx, m.store, at.thread.RoomID, m.attachmentDir, q.Query)
 		}

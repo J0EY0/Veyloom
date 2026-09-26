@@ -29,11 +29,13 @@ import (
 // the thread's config and reaches the turn's endpoint through it from the
 // read-only sandbox, that a command waiting on a person runs when they
 // allow it and does not when they deny it, that the room tools are not
-// held up for approval under a policy that asks, that what Codex's own
-// reviewer decides is recorded for people to see, that an MCP server's form
-// and link reach a person and their answer the server, that a question
-// Codex puts to a person is answered on its card, and that codex asking for
-// more than its sandbox allows reaches a person as an approval.
+// held up for approval under a policy that asks, that under auto_review
+// what Codex's own reviewer decides is recorded for people to see, that an
+// MCP server's form and link reach a person and their answer the server,
+// that a question Codex puts to a person is answered on its card, that
+// codex asking for more than its sandbox allows reaches a person as an
+// approval, and that a command allowed always, with the words Codex
+// proposed, is not put to anyone again.
 func TestCodexSmoke(t *testing.T) {
 	if os.Getenv("VEYLOOM_CODEX_SMOKE") != "1" {
 		t.Skip("set VEYLOOM_CODEX_SMOKE=1 to run against the real codex CLI")
@@ -146,17 +148,17 @@ func TestCodexSmoke(t *testing.T) {
 	}
 	t.Logf("turn 6 with the room tools under untrusted: codex said %q", r.lastReply(thread.ID))
 
-	// Turn 7: Codex's own reviewer decides instead of a person
-	// (approvals_reviewer), and people see what it decided and why, recorded
-	// as settled. A thread keeps the reviewer it started with, so the turn
-	// starts a new one.
+	// Turn 7: under auto_review, Codex's own reviewer decides instead of a
+	// person (approvalsReviewer), and people see what it decided and why,
+	// recorded as settled. A thread keeps the reviewer it started with, so
+	// the turn starts a new one.
 	if err := r.s.ResetSession(r.ctx, r.member.ID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := r.s.UpdateAgent(r.ctx, agent.ID, store.NewAgent{
 		Name: agent.Name, MachineID: agent.MachineID, Runtime: agent.Runtime, RoleCard: agent.RoleCard,
-		PermissionPreset: store.PermissionEditWithApproval,
-		RuntimeOptions:   withoutCodexMemories(map[string]any{"extra_args": []any{"-c", `approvals_reviewer="auto_review"`}}),
+		PermissionPreset: store.PermissionAutoReview,
+		RuntimeOptions:   withoutCodexMemories(nil),
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -178,11 +180,11 @@ func TestCodexSmoke(t *testing.T) {
 	t.Logf("turn 7: Codex's reviewer %s %s %s (%s): %s; codex said %q", reviewed[0].Status, reviewed[0].Tool, reviewed[0].Input, reviewed[0].Answer, reviewed[0].Message, r.lastReply(thread.ID))
 
 	// The rest asks the person through tools Codex has yet to turn on by
-	// default; the agent's extra_args turn them on for its app-server. Codex
-	// may be set up to have what it asks reviewed by a subagent of its own
-	// (approvals_reviewer) rather than by a person, so they also send it to
-	// the person, and since a thread keeps the reviewer it started with,
-	// each starts a new one. A codex without the tool skips the turn.
+	// default; the agent's extra_args turn them on for its app-server. The
+	// preset has what Codex asks go to the person even where Codex is set
+	// up to have a subagent of its own review it, and since a thread keeps
+	// the reviewer it started with, each starts a new one. A codex without
+	// the tool skips the turn.
 	n := 7
 	// configure gives the agent's app-server these arguments, and starts the
 	// member on a new thread, which keeps the reviewer it starts with.
@@ -206,7 +208,7 @@ func TestCodexSmoke(t *testing.T) {
 	if out, err := exec.Command("go", "build", "-o", elicit, "./testdata/elicitmcp").CombinedOutput(); err != nil {
 		t.Fatalf("build the elicitation server: %v\n%s", err, out)
 	}
-	configure("-c", `approvals_reviewer="user"`, "-c", "mcp_servers.elicit.command="+strconv.Quote(elicit), "-c", `mcp_servers.elicit.default_tools_approval_mode="approve"`)
+	configure("-c", "mcp_servers.elicit.command="+strconv.Quote(elicit), "-c", `mcp_servers.elicit.default_tools_approval_mode="approve"`)
 	n++
 	r.say("Call the deploy_form tool of the elicit MCP server, then reply with exactly what it returned.", thread.ID)
 	_, forms := r.decideAllWith(n, func(a store.Approval) runtime.Decision {
@@ -242,7 +244,7 @@ func TestCodexSmoke(t *testing.T) {
 			t.Logf("skipped: this codex has no %s feature", feature)
 			return false
 		}
-		configure("--enable", feature, "-c", `approvals_reviewer="user"`)
+		configure("--enable", feature)
 		n++
 		return true
 	}
@@ -279,6 +281,64 @@ func TestCodexSmoke(t *testing.T) {
 		}
 		t.Logf("turn %d: allowed %s %s, codex said %q", n, asked[0].Tool, asked[0].Input, r.lastReply(thread.ID))
 	}
+
+	// A command allowed always, with the words Codex proposed, is kept for
+	// the member, and the runner lets it through in the turns after: nobody
+	// is asked again (docs/design.md 4.6).
+	if _, err := r.s.UpdateAgent(r.ctx, agent.ID, store.NewAgent{
+		Name: agent.Name, MachineID: agent.MachineID, Runtime: agent.Runtime, RoleCard: agent.RoleCard,
+		PermissionPreset: store.PermissionEditWithApproval,
+		RuntimeOptions:   withoutCodexMemories(map[string]any{"approval_policy": "untrusted"}),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	const touch = "Run this exact shell command: touch kept.txt\nThen reply with exactly: done"
+	n++
+	r.say(touch, thread.ID)
+	var kept []store.Approval
+	r.waitTurn(n, func() {
+		pending, err := r.s.ListPendingRoomApprovals(r.ctx, r.room.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, a := range pending {
+			// Allowed always where Codex proposed words to keep, else once.
+			scope := store.ScopeOnce
+			if strings.Contains(string(a.Similar), `"prefix"`) {
+				scope = store.ScopeAlways
+			}
+			d, err := r.h.DecideApproval(r.ctx, a.ID, r.user.ID, runtime.Decision{Allow: true}, scope)
+			if err != nil {
+				t.Fatal(err)
+			}
+			kept = append(kept, d)
+		}
+	})
+	rules, err := r.s.ListMemberRules(r.ctx, r.member.ID, "codex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(rules) == 0 {
+		t.Logf("turn %d: codex proposed no words to keep for %d request(s); nothing more to try", n, len(kept))
+		return
+	}
+	n++
+	r.say(touch, thread.ID)
+	ruled := r.waitTurn(n, func() {
+		pending, _ := r.s.ListPendingRoomApprovals(r.ctx, r.room.ID)
+		for _, a := range pending {
+			t.Errorf("asked again despite the rule %s: %s", rules[0].Rule, a.Input)
+			_, _ = r.h.DecideApproval(r.ctx, a.ID, r.user.ID, runtime.Decision{Allow: true}, "")
+		}
+	})
+	byRule := 0
+	later, _ := r.s.ListTurnApprovals(r.ctx, ruled.ID)
+	for _, a := range later {
+		if a.Reviewer == store.ReviewerRule {
+			byRule++
+		}
+	}
+	t.Logf("turn %d: kept %s; %d request(s) let through by it, codex said %q", n, rules[0].Rule, byRule, r.lastReply(thread.ID))
 }
 
 // toolResults returns what the turn's calls to tool reported, in order.

@@ -58,6 +58,10 @@ func (h *handlers) writeStoreError(w http.ResponseWriter, r *http.Request, err e
 		writeReason(w, http.StatusBadRequest, err)
 	case errors.Is(err, store.ErrConflict):
 		writeReason(w, http.StatusConflict, err)
+	case r.Context().Err() != nil:
+		// The client gave up on it, as a page does that is left: nobody
+		// reads the answer, and nothing went wrong here.
+		h.deps.Logger.Debug("request given up", "method", r.Method, "path", r.URL.Path, "err", err)
 	default:
 		h.deps.Logger.Error("request failed", "method", r.Method, "path", r.URL.Path, "err", err)
 		writeError(w, http.StatusInternalServerError, "internal error")

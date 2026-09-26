@@ -11,6 +11,70 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const chainWork = `-- name: ChainWork :one
+WITH c AS (
+    SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns WHERE chain_message_id = $1
+), origin AS (
+    SELECT thread_id FROM c ORDER BY started_at LIMIT 1
+)
+SELECT (SELECT thread_id FROM origin)::uuid AS thread_id,
+       coalesce((SELECT th.number FROM threads th WHERE th.id = (SELECT thread_id FROM origin)), 0)::int AS thread_number,
+       (SELECT count(*) FROM c)::int AS turns,
+       (SELECT min(started_at) FROM c)::timestamptz AS started_at,
+       (SELECT CASE WHEN bool_or(ended_at IS NULL) THEN NULL ELSE max(ended_at) END FROM c)::timestamptz AS ended_at,
+       coalesce((SELECT bool_or(status = 'running') FROM c), false)::bool AS running,
+       coalesce((SELECT array_agg(x.member_id ORDER BY x.first) FROM (
+           SELECT member_id, min(started_at) AS first FROM c GROUP BY member_id
+       ) x), '{}')::uuid[] AS members
+`
+
+type ChainWorkRow struct {
+	ThreadID     pgtype.UUID
+	ThreadNumber int32
+	Turns        int32
+	StartedAt    pgtype.Timestamptz
+	EndedAt      pgtype.Timestamptz
+	Running      bool
+	Members      []pgtype.UUID
+}
+
+// A piece of work across its topics: the topic it began in, how many turns
+// it took, when it began and, once none runs, when it ended, and the
+// members who took turns in it, in the order they first did.
+func (q *Queries) ChainWork(ctx context.Context, chainMessageID pgtype.UUID) (ChainWorkRow, error) {
+	row := q.db.QueryRow(ctx, chainWork, chainMessageID)
+	var i ChainWorkRow
+	err := row.Scan(
+		&i.ThreadID,
+		&i.ThreadNumber,
+		&i.Turns,
+		&i.StartedAt,
+		&i.EndedAt,
+		&i.Running,
+		&i.Members,
+	)
+	return i, err
+}
+
+const countUnreadMentions = `-- name: CountUnreadMentions :one
+SELECT count(*) FROM messages m
+WHERE m.mentions @> $1::jsonb
+  AND NOT EXISTS (SELECT 1 FROM inbox_reads ir WHERE ir.user_id = $2 AND ir.message_id = m.id)
+`
+
+type CountUnreadMentionsParams struct {
+	Needle []byte
+	UserID pgtype.UUID
+}
+
+// How many of the messages that mention one user they have not read.
+func (q *Queries) CountUnreadMentions(ctx context.Context, arg CountUnreadMentionsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnreadMentions, arg.Needle, arg.UserID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createMessage = `-- name: CreateMessage :one
 INSERT INTO messages (room_id, thread_id, sender_kind, user_id, member_id, body, mentions, turn_id)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
@@ -296,21 +360,24 @@ func (q *Queries) ListThreadMessagesBefore(ctx context.Context, arg ListThreadMe
 }
 
 const listUserMentions = `-- name: ListUserMentions :many
-SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id, r.name AS room_name, p.name AS project_name, coalesce(u.name, mb.display_name, '')::text AS sender_name
+SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id, r.name AS room_name, p.name AS project_name, coalesce(u.name, mb.display_name, '')::text AS sender_name,
+       (ir.message_id IS NOT NULL)::boolean AS read
 FROM messages m
 JOIN rooms r ON r.id = m.room_id
 JOIN projects p ON p.id = r.project_id
 LEFT JOIN users u ON u.id = m.user_id
 LEFT JOIN members mb ON mb.id = m.member_id
-WHERE m.mentions @> $1::jsonb AND m.seq < $2
+LEFT JOIN inbox_reads ir ON ir.message_id = m.id AND ir.user_id = $1
+WHERE m.mentions @> $2::jsonb AND m.seq < $3
 ORDER BY m.seq DESC
-LIMIT $3
+LIMIT $4
 `
 
 type ListUserMentionsParams struct {
-	Column1 []byte
-	Seq     int64
-	Limit   int32
+	UserID pgtype.UUID
+	Needle []byte
+	Before int64
+	Max    int32
 }
 
 type ListUserMentionsRow struct {
@@ -328,12 +395,18 @@ type ListUserMentionsRow struct {
 	RoomName    string
 	ProjectName string
 	SenderName  string
+	Read        bool
 }
 
 // Messages that mention one user, newest first, with the names the inbox
-// shows so it needs no second lookup.
+// shows so it needs no second lookup, and whether the user read them.
 func (q *Queries) ListUserMentions(ctx context.Context, arg ListUserMentionsParams) ([]ListUserMentionsRow, error) {
-	rows, err := q.db.Query(ctx, listUserMentions, arg.Column1, arg.Seq, arg.Limit)
+	rows, err := q.db.Query(ctx, listUserMentions,
+		arg.UserID,
+		arg.Needle,
+		arg.Before,
+		arg.Max,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -356,6 +429,7 @@ func (q *Queries) ListUserMentions(ctx context.Context, arg ListUserMentionsPara
 			&i.RoomName,
 			&i.ProjectName,
 			&i.SenderName,
+			&i.Read,
 		); err != nil {
 			return nil, err
 		}
@@ -367,6 +441,42 @@ func (q *Queries) ListUserMentions(ctx context.Context, arg ListUserMentionsPara
 	return items, nil
 }
 
+const markMentionsRead = `-- name: MarkMentionsRead :execrows
+INSERT INTO inbox_reads (user_id, message_id)
+SELECT $1, m.id FROM messages m
+WHERE m.mentions @> $2::jsonb
+  AND (m.id = ANY ($3::uuid[])
+       OR m.thread_id = $4
+       OR m.id = (SELECT t.root_message_id FROM threads t WHERE t.id = $4)
+       OR m.seq <= $5)
+ON CONFLICT DO NOTHING
+`
+
+type MarkMentionsReadParams struct {
+	UserID   pgtype.UUID
+	Needle   []byte
+	Ids      []pgtype.UUID
+	ThreadID pgtype.UUID
+	UpTo     int64
+}
+
+// Marks read, of the messages that mention one user, those named, those in
+// a topic (its root and replies), or all up to a seq; zero or empty picks
+// none by that way. How many were not read before.
+func (q *Queries) MarkMentionsRead(ctx context.Context, arg MarkMentionsReadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markMentionsRead,
+		arg.UserID,
+		arg.Needle,
+		arg.Ids,
+		arg.ThreadID,
+		arg.UpTo,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const threadSummaries = `-- name: ThreadSummaries :many
 SELECT t.root_message_id,
        t.id AS thread_id,
@@ -375,14 +485,31 @@ SELECT t.root_message_id,
        (SELECT max(m.created_at) FROM messages m WHERE m.thread_id = t.id)::timestamptz AS last_reply_at,
        (SELECT count(*) FROM turns tu WHERE tu.thread_id = t.id) AS turn_count,
        coalesce(lt.id::text, '')::text AS last_turn_id,
+       coalesce(lt.member_id::text, '')::text AS last_turn_member_id,
        coalesce(lt.status, '') AS last_turn_status,
        coalesce(lt.error, '') AS last_turn_error,
        lt.started_at AS last_turn_started_at,
-       lt.ended_at AS last_turn_ended_at
+       lt.ended_at AS last_turn_ended_at,
+       coalesce(w.chain::text, '')::text AS work_chain,
+       coalesce(w.turns, 0)::int AS work_turns,
+       w.started_at::timestamptz AS work_started_at,
+       w.ended_at::timestamptz AS work_ended_at,
+       coalesce(w.running, false)::bool AS work_running
 FROM threads t
 LEFT JOIN LATERAL (
-    SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, started_at, ended_at FROM turns tu WHERE tu.thread_id = t.id ORDER BY tu.started_at DESC LIMIT 1
+    SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns tu WHERE tu.thread_id = t.id ORDER BY tu.started_at DESC LIMIT 1
 ) lt ON true
+LEFT JOIN LATERAL (
+    SELECT c.chain_message_id AS chain,
+           count(*) AS turns,
+           min(c.started_at) AS started_at,
+           CASE WHEN bool_or(c.ended_at IS NULL) THEN NULL ELSE max(c.ended_at) END AS ended_at,
+           bool_or(c.status = 'running') AS running
+    FROM turns c
+    WHERE c.chain_message_id = lt.chain_message_id
+    GROUP BY c.chain_message_id
+    HAVING (SELECT o.thread_id FROM turns o WHERE o.chain_message_id = lt.chain_message_id ORDER BY o.started_at LIMIT 1) = t.id
+) w ON true
 WHERE t.root_message_id = ANY($1::uuid[])
 `
 
@@ -394,14 +521,21 @@ type ThreadSummariesRow struct {
 	LastReplyAt       pgtype.Timestamptz
 	TurnCount         int64
 	LastTurnID        string
+	LastTurnMemberID  string
 	LastTurnStatus    string
 	LastTurnError     string
 	LastTurnStartedAt pgtype.Timestamptz
 	LastTurnEndedAt   pgtype.Timestamptz
+	WorkChain         string
+	WorkTurns         int32
+	WorkStartedAt     pgtype.Timestamptz
+	WorkEndedAt       pgtype.Timestamptz
+	WorkRunning       bool
 }
 
 // What the room timeline shows under each topic root: reply count, last
-// reply time, and the latest turn.
+// reply time, the latest turn, and, under the topic where the latest turn's
+// piece of work began, that piece of work across all its topics.
 func (q *Queries) ThreadSummaries(ctx context.Context, dollar_1 []pgtype.UUID) ([]ThreadSummariesRow, error) {
 	rows, err := q.db.Query(ctx, threadSummaries, dollar_1)
 	if err != nil {
@@ -419,10 +553,16 @@ func (q *Queries) ThreadSummaries(ctx context.Context, dollar_1 []pgtype.UUID) (
 			&i.LastReplyAt,
 			&i.TurnCount,
 			&i.LastTurnID,
+			&i.LastTurnMemberID,
 			&i.LastTurnStatus,
 			&i.LastTurnError,
 			&i.LastTurnStartedAt,
 			&i.LastTurnEndedAt,
+			&i.WorkChain,
+			&i.WorkTurns,
+			&i.WorkStartedAt,
+			&i.WorkEndedAt,
+			&i.WorkRunning,
 		); err != nil {
 			return nil, err
 		}

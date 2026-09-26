@@ -59,12 +59,32 @@ ALTER TABLE projects
 ALTER TABLE projects
     ADD COLUMN wiki_offer_message_id uuid REFERENCES messages (id) ON DELETE SET NULL;
 
+-- The project's "setup" topic, where its leader sets the project up for
+-- its members' worktrees (design.md 5.21); opened the first time it is
+-- needed. And the note there that shows a person the steps waiting for
+-- them to adopt, drawn as a card.
+ALTER TABLE projects
+    ADD COLUMN setup_thread_id uuid REFERENCES threads (id) ON DELETE SET NULL,
+    ADD COLUMN workspace_pending_message_id uuid REFERENCES messages (id) ON DELETE SET NULL;
+
 -- Room timeline: top-level messages in order.
 CREATE INDEX messages_room_timeline ON messages (room_id, seq) WHERE thread_id IS NULL;
 -- Thread view: replies in order.
 CREATE INDEX messages_by_thread ON messages (thread_id, seq) WHERE thread_id IS NOT NULL;
+-- What a person has read of the messages that mention them: their inbox
+-- counts the rest (docs/webui.md 4.19). Read in the inbox, by opening the
+-- topic it is in, or all at once. The person is no users row: the account
+-- lives in the state dir (00011).
+CREATE TABLE inbox_reads (
+    user_id    uuid        NOT NULL,
+    message_id uuid        NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
+    read_at    timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (user_id, message_id)
+);
 
 -- +goose Down
+DROP TABLE inbox_reads;
+ALTER TABLE projects DROP COLUMN workspace_pending_message_id, DROP COLUMN setup_thread_id;
 ALTER TABLE projects DROP COLUMN wiki_offer_message_id, DROP COLUMN wiki_thread_id;
 ALTER TABLE messages DROP CONSTRAINT messages_thread_id_fkey;
 DROP TABLE threads;

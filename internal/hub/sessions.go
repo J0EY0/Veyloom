@@ -40,13 +40,13 @@ type newSession struct {
 	Announce bool
 }
 
-func (m *TurnManager) sessionFor(ctx context.Context, member store.Member, agent store.Agent) (store.MemberSession, newSession, error) {
+func (m *TurnManager) sessionFor(ctx context.Context, member store.Member, agent store.Agent, dir string) (store.MemberSession, newSession, error) {
 	open, err := m.store.GetOpenSession(ctx, member.ID)
 	var replaces store.SessionEndReason
 	var follows newSession
 	switch {
 	case err == nil:
-		if replaces = staleReason(open, member, agent); replaces == "" {
+		if replaces = staleReason(open, member, agent, dir); replaces == "" {
 			return open, newSession{}, nil
 		}
 		follows = newSession{Reason: replaces, Announce: true}
@@ -66,7 +66,7 @@ func (m *TurnManager) sessionFor(ctx context.Context, member store.Member, agent
 		MemberID:  member.ID,
 		Runtime:   agent.Runtime,
 		MachineID: member.MachineID,
-		WorkDir:   member.RepoPath,
+		WorkDir:   dir,
 		Replaces:  replaces,
 	})
 	if err != nil {
@@ -76,17 +76,17 @@ func (m *TurnManager) sessionFor(ctx context.Context, member store.Member, agent
 }
 
 // staleReason says why a member's open session cannot carry its next turn,
-// or "" when it can. A session belongs to the runtime, the machine and the
-// directory it was opened on: no runtime resumes another's session, session
-// files do not travel between machines, and resuming in another directory
-// fails or stalls depending on the CLI.
-func staleReason(open store.MemberSession, member store.Member, agent store.Agent) store.SessionEndReason {
+// in dir, or "" when it can. A session belongs to the runtime, the machine
+// and the directory it was opened on: no runtime resumes another's session,
+// session files do not travel between machines, and resuming in another
+// directory fails or stalls depending on the CLI.
+func staleReason(open store.MemberSession, member store.Member, agent store.Agent, dir string) store.SessionEndReason {
 	switch {
 	case open.Runtime != agent.Runtime:
 		return store.SessionRuntimeChanged
 	case open.MachineID != member.MachineID:
 		return store.SessionMachineChanged
-	case !sameDir(open.WorkDir, member.RepoPath):
+	case !sameDir(open.WorkDir, dir):
 		return store.SessionDirChanged
 	}
 	return ""
@@ -249,7 +249,7 @@ func (m *TurnManager) rerun(at *activeTurn, first protocol.TurnDone) {
 	// A session that has read nothing: the brief is the whole story.
 	b, err := m.brief.Build(ctx, briefInput{
 		Member: at.member, Thread: at.thread, Triggers: at.triggers, NewSession: endReasonOf(first.Result.Failure),
-		Busy: m.busyIn(at.thread.RoomID, at.member.ID),
+		Busy: m.busyIn(at.thread.RoomID, at.member.ID), Dir: at.dir, Relays: at.relays, HandedOn: at.handedOn, HandedBy: at.handedBy,
 	})
 	if err != nil {
 		giveUp("brief", err)
@@ -296,7 +296,7 @@ func (m *TurnManager) adopt(ctx context.Context, at *activeTurn, fresh *freshSes
 		MemberID:  at.member.ID,
 		Runtime:   at.agent.Runtime,
 		MachineID: at.member.MachineID,
-		WorkDir:   at.member.RepoPath,
+		WorkDir:   at.dir,
 		Ref:       fresh.ref,
 		Replaces:  fresh.reason,
 	})

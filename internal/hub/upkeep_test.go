@@ -32,10 +32,13 @@ func (l *loop) setOptions(member store.Member, options map[string]any) {
 	}
 }
 
+// upkeepOn turns a project's wiki upkeep on, in a ProjectPatch.
+var upkeepOn = true
+
 // keep makes member the project's wiki maintainer, running on trigger.
 func (l *loop) keep(member store.Member, trigger store.UpkeepTrigger) {
 	l.t.Helper()
-	if _, err := l.s.UpdateProject(l.ctx, l.room.ProjectID, store.ProjectPatch{WikiMaintainer: &member.ID, WikiMaintainerTrigger: &trigger}); err != nil {
+	if _, err := l.s.UpdateProject(l.ctx, l.room.ProjectID, store.ProjectPatch{WikiUpkeep: &upkeepOn, WikiMaintainer: &member.ID, WikiMaintainerTrigger: &trigger}); err != nil {
 		l.t.Fatal(err)
 	}
 }

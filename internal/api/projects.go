@@ -23,10 +23,11 @@ type CreateProjectRequest struct {
 	// with it. Optional.
 	Description string   `json:"description"`
 	AgentIDs    []string `json:"agent_ids"`
-	// WikiMaintainerAgentID, one of AgentIDs, has that agent's member keep
-	// the wiki from the start (docs/design.md 5.16), running as
-	// WikiMaintainerTrigger, daily when empty. Optional: without one the
-	// chat offers a maintainer later.
+	// WikiUpkeep turns the wiki's upkeep on from the start (docs/design.md
+	// 5.16, 5.21), running as WikiMaintainerTrigger, daily when empty, and
+	// kept by the member of WikiMaintainerAgentID, one of AgentIDs, or by
+	// the leader when that is empty. Off, the chat offers it later.
+	WikiUpkeep            bool                `json:"wiki_upkeep"`
 	WikiMaintainerAgentID string              `json:"wiki_maintainer_agent_id"`
 	WikiMaintainerTrigger store.UpkeepTrigger `json:"wiki_maintainer_trigger"`
 }
@@ -42,8 +43,13 @@ type UpdateProjectRequest struct {
 	Name        *string `json:"name"`
 	RepoPath    *string `json:"repo_path"`
 	Description *string `json:"description"`
-	// WikiMaintainerMemberID is the member who keeps the wiki (docs/design.md
-	// 5.12), one of the project's; "" is none.
+	// LeaderMemberID makes one of the project's members its leader
+	// (docs/design.md 5.21); "" leaves it to the first to have joined.
+	LeaderMemberID *string `json:"leader_member_id"`
+	// WikiUpkeep turns the wiki's upkeep on or off (docs/design.md 5.12).
+	WikiUpkeep *bool `json:"wiki_upkeep"`
+	// WikiMaintainerMemberID is the member who keeps the wiki, one of the
+	// project's; "" leaves it to the leader.
 	WikiMaintainerMemberID *string `json:"wiki_maintainer_member_id"`
 	// WikiMaintainerTrigger is when it runs: idle, daily, every_3_days,
 	// weekly or manual.
@@ -54,6 +60,12 @@ type UpdateProjectRequest struct {
 	// WikiExternalBundles are the folders of the OKF bundles the wiki
 	// mounts, read-only, all of them: an empty list mounts none.
 	WikiExternalBundles *[]string `json:"wiki_external_bundles"`
+	// WorkspaceSteps are how a member's new worktree is got ready
+	// (docs/design.md 5.21), written by a person: the project is set up.
+	WorkspaceSteps *store.WorkspaceSteps `json:"workspace_steps"`
+	// RelayLimit is how many turns agents may wake one another to in a
+	// piece of work (docs/design.md 5.22): 0 is no limit.
+	RelayLimit *int `json:"relay_limit"`
 }
 
 // ProjectResponse is the body of project endpoints: the project and its
@@ -115,6 +127,7 @@ func (h *handlers) createProject(w http.ResponseWriter, r *http.Request) {
 		RepoPath:              cleanRepoPath(req.RepoPath),
 		Description:           description,
 		AgentIDs:              agentIDs,
+		WikiUpkeep:            req.WikiUpkeep,
 		WikiMaintainerAgentID: strings.TrimSpace(req.WikiMaintainerAgentID),
 		WikiMaintainerTrigger: req.WikiMaintainerTrigger,
 	})
@@ -178,8 +191,10 @@ func (h *handlers) updateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		patch.Description = &description
 	}
+	patch.Leader, patch.WikiUpkeep = req.LeaderMemberID, req.WikiUpkeep
 	patch.WikiMaintainer, patch.WikiMaintainerTrigger = req.WikiMaintainerMemberID, req.WikiMaintainerTrigger
 	patch.DeclineWikiOffer = req.WikiOfferDeclined != nil && *req.WikiOfferDeclined
+	patch.RelayLimit = req.RelayLimit
 	if req.WikiExternalBundles != nil {
 		mounts, err := hub.CleanWikiMounts(*req.WikiExternalBundles)
 		if err != nil {
@@ -188,12 +203,24 @@ func (h *handlers) updateProject(w http.ResponseWriter, r *http.Request) {
 		}
 		patch.WikiExternalBundles = &mounts
 	}
+	if req.WorkspaceSteps != nil {
+		steps, err := store.CleanWorkspaceSteps(*req.WorkspaceSteps)
+		if err != nil {
+			writeReason(w, http.StatusBadRequest, err)
+			return
+		}
+		patch.WorkspaceSteps = &steps
+	}
 
 	id := r.PathValue("id")
 	project, err := h.deps.Projects.UpdateProject(r.Context(), id, patch)
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
+	}
+	if patch.WorkspaceSteps != nil && h.deps.Worktrees != nil {
+		// Members waiting for the project to be set up go on.
+		h.deps.Worktrees.WorkspaceStepsWritten(id)
 	}
 	rooms, err := h.deps.Projects.ListRooms(r.Context(), id)
 	if err != nil {

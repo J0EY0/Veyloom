@@ -156,6 +156,51 @@ func TestClaude_CommandsAllowedAndDenied(t *testing.T) {
 	}
 }
 
+// A request offers what Claude Code suggests allowing besides, and a
+// person who takes it up has it allowed for the session, the turn, not
+// saved to the project's settings; a request without suggestions offers
+// nothing, and a person cannot take up what was not offered.
+func TestClaude_TheLikeOfARequestIsAllowedForTheTurn(t *testing.T) {
+	events, answers := runScripted(t, "[bash] [rm]", PermissionEditWithApproval, func(ev Event) *Decision {
+		return &Decision{Allow: true, Similar: true}
+	})
+	asked := eventsOf(events, EventApprovalRequest)
+	if len(asked) != 2 || asked[0].Similar == nil || !slices.Equal(asked[0].Similar.Rules, []string{"Bash(make test)"}) || asked[1].Similar != nil {
+		t.Fatalf("offers: %+v", asked)
+	}
+	answerIs(t, answers, "[bash]", `{"behavior":"allow","updatedInput":{"command":"make test","description":"run the tests"},`+
+		`"updatedPermissions":[{"behavior":"allow","destination":"session","rules":[{"ruleContent":"make test","toolName":"Bash"}],"type":"addRules"}],"toolUseID":"tu-bash"}`)
+	answerIs(t, answers, "[rm]", `{"behavior":"allow","updatedInput":{"command":"rm -rf build"},"toolUseID":"tu-rm"}`)
+}
+
+func TestClaudeSimilar(t *testing.T) {
+	for _, c := range []struct {
+		name, suggestions string
+		want              *Similar
+	}{
+		{"a rule", `[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"go test *"}],"behavior":"allow","destination":"localSettings"}]`, &Similar{Rules: []string{"Bash(go test *)"}}},
+		{"a mode", `[{"type":"setMode","mode":"acceptEdits","destination":"session"}]`, &Similar{Mode: "acceptEdits"}},
+		{"folders", `[{"type":"addRules","rules":[{"toolName":"Read","ruleContent":"//etc/**"}],"behavior":"allow","destination":"session"},{"type":"addDirectories","directories":["/srv"],"destination":"session"}]`,
+			&Similar{Rules: []string{"Read(//etc/**)"}, Dirs: []string{"/srv"}}},
+		{"a rule that denies", `[{"type":"addRules","rules":[{"toolName":"Bash"}],"behavior":"deny","destination":"session"}]`, nil},
+		{"none", `[]`, nil},
+	} {
+		var raw []json.RawMessage
+		if err := json.Unmarshal([]byte(c.suggestions), &raw); err != nil {
+			t.Fatal(err)
+		}
+		got, updates := claudeSimilar(raw)
+		if !reflect.DeepEqual(got, c.want) {
+			t.Errorf("%s: %+v, want %+v", c.name, got, c.want)
+		}
+		for _, u := range updates {
+			if !strings.Contains(string(u), `"destination":"session"`) {
+				t.Errorf("%s: an update not for the session: %s", c.name, u)
+			}
+		}
+	}
+}
+
 // Two requests at once wait for people side by side.
 func TestClaude_RequestsWaitSideBySide(t *testing.T) {
 	_, answers := runScripted(t, "[both]", PermissionEditWithApproval, func(Event) *Decision { return &Decision{Allow: true} })
@@ -401,6 +446,43 @@ func TestClaude_AnswerAfterTheTurn(t *testing.T) {
 	drain(t, turn)
 	if err := turn.Answer(req.ApprovalID, Decision{Allow: true}); !errors.Is(err, ErrUnknownApproval) {
 		t.Errorf("late answer: %v, want ErrUnknownApproval", err)
+	}
+}
+
+// What people allowed the member always goes to Claude Code as the
+// permission rules it suggested, in settings of their own, whole: a rule
+// with parentheses, commas and spaces of its own included. Claude Code
+// matches them itself. Veyloom's own tools stay on --allowedTools, and
+// without room tools the rules still go.
+func TestClaude_MemberRulesGoAsSettings(t *testing.T) {
+	rules := []string{"Bash(go test:*)", `Bash(git commit -m "fix(tags): a, b")`}
+	runner := NewClaudeRunner(ClaudeConfig{ProxyBinary: "/opt/veyloom"})
+	t.Cleanup(func() { runner.Close() })
+	argsPath, _ := fakeClaudeCLI(t, claudeFixture, 0, "")
+	turn, err := runner.StartTurn(context.Background(), TurnSpec{Prompt: "a", Permission: PermissionEditWithApproval, Host: &recordingHost{}, AllowedRules: rules})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, turn)
+	args := claudeArgs(t, argsPath)
+	var settings struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal([]byte(flagValue(args, "--settings")), &settings); err != nil || !slices.Equal(settings.Permissions.Allow, rules) {
+		t.Errorf("--settings %q: %v", flagValue(args, "--settings"), err)
+	}
+	if allowed := flagValue(args, "--allowedTools"); strings.Contains(allowed, "Bash") || !strings.HasPrefix(allowed, claudeToolName(AgentToolNames[0])) {
+		t.Errorf("--allowedTools %q", allowed)
+	}
+
+	argsPath, _ = fakeClaudeCLI(t, claudeFixture, 0, "")
+	if _, _, err := runClaude(t, ClaudeConfig{}, TurnSpec{Prompt: "a", Permission: PermissionEditWithApproval, AllowedRules: rules[:1]}); err != nil {
+		t.Fatal(err)
+	}
+	if args := claudeArgs(t, argsPath); flagValue(args, "--settings") != `{"permissions":{"allow":["Bash(go test:*)"]}}` || slices.Contains(args, "--allowedTools") {
+		t.Errorf("without room tools: %q", args)
 	}
 }
 

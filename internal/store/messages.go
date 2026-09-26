@@ -94,6 +94,18 @@ type InboxItem struct {
 	RoomName    string `json:"room_name"`
 	ProjectName string `json:"project_name"`
 	SenderName  string `json:"sender_name"`
+	// Read says the user has read it: in the inbox, in its topic, or all
+	// at once.
+	Read bool `json:"read"`
+}
+
+// InboxRead picks what of a user's inbox to mark read: the messages
+// named, those in a topic, or all up to a seq. Only messages that mention
+// the user are ever marked.
+type InboxRead struct {
+	MessageIDs []string `json:"message_ids,omitempty"`
+	ThreadID   string   `json:"thread_id,omitempty"`
+	UpTo       int64    `json:"up_to,omitempty"`
 }
 
 // ThreadSummary is what a room timeline shows under a topic root without
@@ -108,11 +120,36 @@ type ThreadSummary struct {
 	LastReplyAt *time.Time   `json:"last_reply_at,omitempty"`
 	Turns       int          `json:"turns"`
 	LastTurn    *TurnSummary `json:"last_turn,omitempty"`
+	// Work is, under the topic a piece of work began in, the piece of work
+	// its latest turn is part of, counted across all its topics.
+	Work *WorkSummary `json:"work,omitempty"`
+}
+
+// WorkSummary is a piece of work (docs/design.md 5.22) as a timeline
+// shows it: from what a person said, every turn it took, in whichever
+// topic.
+type WorkSummary struct {
+	// ThreadID is the topic the work began in, ThreadNumber what that
+	// topic is called; Chain the message that began it.
+	ThreadID     string `json:"thread_id"`
+	ThreadNumber int    `json:"thread_number,omitempty"`
+	Chain        string `json:"chain"`
+	Turns        int    `json:"turns"`
+	// Members are the members that took turns in it, in the order they
+	// first did; a timeline's summary leaves them out.
+	Members []string `json:"members,omitempty"`
+	// StartedAt is when its first turn began; EndedAt when its last one
+	// ended, once none runs.
+	StartedAt time.Time  `json:"started_at"`
+	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	Running   bool       `json:"running"`
 }
 
 // TurnSummary is the slice of a Turn a timeline needs.
 type TurnSummary struct {
-	ID        string     `json:"id"`
+	ID string `json:"id"`
+	// MemberID is whose turn it is.
+	MemberID  string     `json:"member_id,omitempty"`
 	Status    TurnStatus `json:"status"`
 	Error     string     `json:"error,omitempty"`
 	StartedAt time.Time  `json:"started_at"`
@@ -250,17 +287,14 @@ func mapMessageError(err error) error {
 // ListUserMentions returns the messages that mention userID across every
 // room, newest first, with seq less than before (0 means the latest).
 func (s *Store) ListUserMentions(ctx context.Context, userID string, before int64, limit int) ([]InboxItem, error) {
-	if _, err := parseUUID(userID); err != nil {
-		return nil, err
-	}
-	needle, err := json.Marshal([]Mention{{Kind: MentionUser, ID: userID}})
+	uid, needle, err := mentionOf(userID)
 	if err != nil {
-		return nil, fmt.Errorf("inbox of %s: %w", userID, err)
+		return nil, err
 	}
 	if before <= 0 {
 		before = math.MaxInt64
 	}
-	rows, err := s.q.ListUserMentions(ctx, db.ListUserMentionsParams{Column1: needle, Seq: before, Limit: clampLimit(limit)})
+	rows, err := s.q.ListUserMentions(ctx, db.ListUserMentionsParams{UserID: uid, Needle: needle, Before: before, Max: clampLimit(limit)})
 	if err != nil {
 		return nil, fmt.Errorf("inbox of %s: %w", userID, err)
 	}
@@ -281,9 +315,64 @@ func (s *Store) ListUserMentions(ctx context.Context, userID string, before int6
 	}
 	out := make([]InboxItem, 0, len(rows))
 	for i, row := range rows {
-		out = append(out, InboxItem{Message: msgs[i], RoomName: row.RoomName, ProjectName: row.ProjectName, SenderName: row.SenderName})
+		out = append(out, InboxItem{Message: msgs[i], RoomName: row.RoomName, ProjectName: row.ProjectName, SenderName: row.SenderName, Read: row.Read})
 	}
 	return out, nil
+}
+
+// CountUnreadMentions is how many of the messages that mention userID they
+// have not read.
+func (s *Store) CountUnreadMentions(ctx context.Context, userID string) (int, error) {
+	uid, needle, err := mentionOf(userID)
+	if err != nil {
+		return 0, err
+	}
+	n, err := s.q.CountUnreadMentions(ctx, db.CountUnreadMentionsParams{UserID: uid, Needle: needle})
+	if err != nil {
+		return 0, fmt.Errorf("unread inbox of %s: %w", userID, err)
+	}
+	return int(n), nil
+}
+
+// MarkMentionsRead marks read what read picks of the messages that mention
+// userID, and says how many were not read before.
+func (s *Store) MarkMentionsRead(ctx context.Context, userID string, read InboxRead) (int, error) {
+	uid, needle, err := mentionOf(userID)
+	if err != nil {
+		return 0, err
+	}
+	params := db.MarkMentionsReadParams{UserID: uid, Needle: needle, Ids: []pgtype.UUID{}, UpTo: read.UpTo}
+	for _, id := range read.MessageIDs {
+		mid, err := parseUUID(id)
+		if err != nil {
+			return 0, err
+		}
+		params.Ids = append(params.Ids, mid)
+	}
+	if read.ThreadID != "" {
+		if params.ThreadID, err = parseUUID(read.ThreadID); err != nil {
+			return 0, err
+		}
+	}
+	n, err := s.q.MarkMentionsRead(ctx, params)
+	if err != nil {
+		return 0, mapPGError("mark the inbox read", err)
+	}
+	return int(n), nil
+}
+
+// mentionOf is a user's id, parsed, and the mention of them as the
+// messages' mentions column is matched against.
+func mentionOf(userID string) (pgtype.UUID, []byte, error) {
+	uid, err := parseUUID(userID)
+	if err != nil {
+		return pgtype.UUID{}, nil, err
+	}
+	needle, err := json.Marshal([]Mention{{Kind: MentionUser, ID: userID}})
+	if err != nil {
+		return pgtype.UUID{}, nil, fmt.Errorf("inbox of %s: %w", userID, err)
+	}
+	return uid, needle, nil
 }
 
 // UpdateMessageBody sets a message's text, its mentions and the turn it
@@ -346,6 +435,7 @@ func (s *Store) ThreadSummaries(ctx context.Context, rootMessageIDs []string) (m
 		if row.LastTurnID != "" {
 			summary.LastTurn = &TurnSummary{
 				ID:        row.LastTurnID,
+				MemberID:  row.LastTurnMemberID,
 				Status:    TurnStatus(row.LastTurnStatus),
 				Error:     row.LastTurnError,
 				StartedAt: row.LastTurnStartedAt.Time,
@@ -355,9 +445,47 @@ func (s *Store) ThreadSummaries(ctx context.Context, rootMessageIDs []string) (m
 				summary.LastTurn.EndedAt = &t
 			}
 		}
+		if row.WorkChain != "" {
+			summary.Work = &WorkSummary{
+				ThreadID: summary.ID, ThreadNumber: summary.Number, Chain: row.WorkChain, Turns: int(row.WorkTurns),
+				StartedAt: row.WorkStartedAt.Time, Running: row.WorkRunning,
+			}
+			if row.WorkEndedAt.Valid {
+				t := row.WorkEndedAt.Time
+				summary.Work.EndedAt = &t
+			}
+		}
 		out[uuidString(row.RootMessageID)] = summary
 	}
 	return out, nil
+}
+
+// ChainWork is the piece of work the message chain began, across all its
+// topics; ErrNotFound when no turn is part of it.
+func (s *Store) ChainWork(ctx context.Context, chain string) (WorkSummary, error) {
+	uid, err := parseUUID(chain)
+	if err != nil {
+		return WorkSummary{}, err
+	}
+	row, err := s.q.ChainWork(ctx, uid)
+	if err != nil {
+		return WorkSummary{}, fmt.Errorf("chain work: %w", err)
+	}
+	if row.Turns == 0 {
+		return WorkSummary{}, ErrNotFound
+	}
+	work := WorkSummary{
+		ThreadID: uuidString(row.ThreadID), ThreadNumber: int(row.ThreadNumber), Chain: chain, Turns: int(row.Turns),
+		StartedAt: row.StartedAt.Time, Running: row.Running,
+	}
+	for _, id := range row.Members {
+		work.Members = append(work.Members, uuidString(id))
+	}
+	if row.EndedAt.Valid {
+		t := row.EndedAt.Time
+		work.EndedAt = &t
+	}
+	return work, nil
 }
 
 // GetMessage returns one message, or ErrNotFound.

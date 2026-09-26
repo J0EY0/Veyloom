@@ -36,6 +36,14 @@ type DecideApprovalRequest struct {
 	// Answer goes with an allowed request that asked for more than yes or
 	// no: for a question {"answers": {"<question id>": ["..."]}}.
 	Answer json.RawMessage `json:"answer,omitempty"`
+	// Scope is how far an allow goes (docs/design.md 4.6): once, similar
+	// (the like of the request for the rest of the turn, as its runtime
+	// offered), always (that, and kept for the member from now on) or turn
+	// (whatever else the turn asks for). Empty is once, or similar when
+	// Similar is set.
+	Scope store.AllowScope `json:"scope,omitempty"`
+	// Similar is the older way of asking for scope similar.
+	Similar bool `json:"similar,omitempty"`
 }
 
 // ApprovalResponse is the body of single-approval endpoints.
@@ -79,7 +87,13 @@ func (h *handlers) decideApproval(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "answer must be a JSON object")
 		return
 	}
-	a, err := h.deps.Chat.DecideApproval(r.Context(), r.PathValue("id"), req.UserID, runtime.Decision{Allow: req.Allow, Message: strings.TrimSpace(req.Message), Answer: req.Answer})
+	if req.Scope != "" && !req.Scope.Valid() {
+		writeError(w, http.StatusBadRequest, "scope must be once, similar, always or turn")
+		return
+	}
+	a, err := h.deps.Chat.DecideApproval(r.Context(), r.PathValue("id"), req.UserID, runtime.Decision{
+		Allow: req.Allow, Similar: req.Similar, Message: strings.TrimSpace(req.Message), Answer: req.Answer,
+	}, req.Scope)
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return

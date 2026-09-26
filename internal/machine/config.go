@@ -34,6 +34,14 @@ type Config struct {
 	// temporary directory for the one, no skills for the other; the config
 	// loader fills in one under the state dir.
 	ToolDir string `mapstructure:"tool_dir"`
+	// WorktreeDir is where the members' git worktrees are made, one folder
+	// per project and member (docs/design.md 5.21). Empty makes none; the
+	// config loader fills in one under the state dir.
+	WorktreeDir string `mapstructure:"worktree_dir"`
+	// WorkspaceSetupTimeout bounds the command a project's leader wrote
+	// down for getting a new worktree ready, such as installing its
+	// dependencies.
+	WorkspaceSetupTimeout time.Duration `mapstructure:"workspace_setup_timeout"`
 }
 
 // DefaultConfig returns the defaults every Config is completed with.
@@ -44,6 +52,8 @@ func DefaultConfig() Config {
 		HandshakeTimeout:   10 * time.Second,
 		HeartbeatInterval:  15 * time.Second,
 		EventFlushInterval: 50 * time.Millisecond,
+		// Installing a project's dependencies from scratch can take a while.
+		WorkspaceSetupTimeout: 10 * time.Minute,
 	}
 }
 
@@ -64,6 +74,9 @@ func (c Config) withDefaults() Config {
 	}
 	if c.EventFlushInterval == 0 {
 		c.EventFlushInterval = def.EventFlushInterval
+	}
+	if c.WorkspaceSetupTimeout <= 0 {
+		c.WorkspaceSetupTimeout = def.WorkspaceSetupTimeout
 	}
 	return c
 }

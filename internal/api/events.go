@@ -7,6 +7,8 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/coder/websocket/wsjson"
+
+	"github.com/J0EY0/veyloom/internal/hub"
 )
 
 // EventsOptions tunes the WebSocket event stream.
@@ -31,6 +33,26 @@ func (h *handlers) roomEvents(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, r, err)
 		return
 	}
+	h.stream(w, r, func() hub.Subscription { return h.deps.Chat.Subscribe(roomID) })
+}
+
+// inboxEvents upgrades GET /api/v1/users/{id}/inbox/events to a WebSocket
+// and streams what reaches the user's inbox as it happens, in every
+// project: the messages mentioning them, and the requests waiting for a
+// person as they are asked and decided. Otherwise it is roomEvents.
+func (h *handlers) inboxEvents(w http.ResponseWriter, r *http.Request) {
+	userID := r.PathValue("id")
+	if _, err := h.deps.Users.GetUser(r.Context(), userID); err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	h.stream(w, r, func() hub.Subscription { return h.deps.Chat.SubscribeInbox(userID) })
+}
+
+// stream upgrades the request to a WebSocket and writes the events of the
+// subscription it opens, one hub.Event per message, until either side
+// goes away.
+func (h *handlers) stream(w http.ResponseWriter, r *http.Request, subscribe func() hub.Subscription) {
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{OriginPatterns: h.deps.Events.AllowedOrigins})
 	if err != nil {
 		// Accept has already answered with the reason.
@@ -38,7 +60,7 @@ func (h *handlers) roomEvents(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.CloseNow()
 
-	sub := h.deps.Chat.Subscribe(roomID)
+	sub := subscribe()
 	defer sub.Close()
 
 	// CloseRead keeps reading so pings are answered and a closed peer is

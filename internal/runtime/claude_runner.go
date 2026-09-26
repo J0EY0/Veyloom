@@ -67,10 +67,13 @@ func (c ClaudeConfig) withDefaults() ClaudeConfig {
 // claude_control.go): read_only is plan mode, where the member may ask
 // questions and put up a plan but not do more; edit_with_approval is
 // acceptEdits, where edits go through and people decide on commands;
-// full_auto is bypassPermissions, where only questions and plans ask.
+// auto_review is auto mode, where Claude Code's own classifier decides on
+// commands and people only on what it will not; full_auto is
+// bypassPermissions, where only questions and plans ask.
 var claudePermissionModes = map[string]string{
 	PermissionReadOnly:         "plan",
 	PermissionEditWithApproval: "acceptEdits",
+	PermissionAutoReview:       "auto",
 	PermissionFullAuto:         "bypassPermissions",
 }
 
@@ -149,6 +152,7 @@ func (r *ClaudeRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, erro
 		Args:        append(r.args(spec), toolArgs...),
 		Dir:         spec.WorkDir,
 		StdinPipe:   true,
+		Env:         spec.Env,
 		StderrBytes: r.cfg.StderrBytes,
 		WaitDelay:   r.cfg.WaitDelay,
 	})
@@ -197,6 +201,16 @@ func (r *ClaudeRunner) args(spec TurnSpec) []string {
 	}
 	if budget := optFloat(spec.Options, "max_budget_usd"); budget > 0 {
 		args = append(args, "--max-budget-usd", strconv.FormatFloat(budget, 'f', -1, 64))
+	}
+	// What people allowed the member always, as the permission rules Claude
+	// Code suggested; it matches them itself (docs/design.md 4.6). They go
+	// as settings, a JSON list added to the person's own, not on
+	// --allowedTools: the CLI splits that on commas and spaces outside
+	// parentheses, and loses count in a rule with parentheses of its own.
+	// A --settings among the agent's extra_args comes later and wins.
+	if len(spec.AllowedRules) > 0 {
+		settings, _ := json.Marshal(map[string]any{"permissions": map[string]any{"allow": spec.AllowedRules}})
+		args = append(args, "--settings", string(settings))
 	}
 	return append(args, optStrings(spec.Options, "extra_args")...)
 }

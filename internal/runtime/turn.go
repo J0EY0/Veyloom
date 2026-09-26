@@ -35,10 +35,19 @@ type TurnSpec struct {
 	// SkillDir is where the machine wrote Skills (see WriteSkills), for the
 	// runtime to load them from. Like Host, the machine sets it.
 	SkillDir string `json:"-"`
+	// Env is added to the environment the runtime runs in, and with it the
+	// commands it runs. Like Host, the machine sets it.
+	Env []string `json:"-"`
 	// ExtraTools names the tools of Veyloom's the turn gets beyond every
-	// turn's: MemoryToolNames while the person uses a memory, and
-	// UpkeepToolNames for a wiki maintainer's upkeep turn.
+	// turn's: MemoryToolNames while the person uses a memory,
+	// UpkeepToolNames for a wiki maintainer's upkeep turn, and
+	// SetupToolNames for the project leader's turns (design.md 5.21).
 	ExtraTools []string `json:"extra_tools,omitempty"`
+	// AllowedRules are what people allowed the member always, in the
+	// runtime's own terms (docs/design.md 4.6): permission rules Claude
+	// Code matches itself, command prefixes as JSON arrays the Codex runner
+	// matches. Only presets that ask people carry them.
+	AllowedRules []string `json:"allowed_rules,omitempty"`
 }
 
 // Session tells a runtime which conversation a turn belongs to. The hub
@@ -77,6 +86,11 @@ const (
 	// PermissionEditWithApproval lets the agent edit files freely but asks
 	// before running commands.
 	PermissionEditWithApproval = "edit_with_approval"
+	// PermissionAutoReview is edit_with_approval with the runtime's own
+	// reviewer deciding what it would ask, and a person asked only when the
+	// reviewer cannot tell: Claude Code's auto mode, Codex's automatic
+	// review.
+	PermissionAutoReview = "auto_review"
 	// PermissionFullAuto lets the agent edit and run without asking.
 	PermissionFullAuto = "full_auto"
 )
@@ -170,6 +184,9 @@ type Event struct {
 	// ApprovalKind is set on an EventApprovalRequest that asks for more
 	// than permission: one of the Approval constants other than tool_use.
 	ApprovalKind string `json:"approval_kind,omitempty"`
+	// Similar is set on an EventApprovalRequest whose runtime can take in,
+	// with an allow, the like of the request for the rest of the turn.
+	Similar *Similar `json:"similar,omitempty"`
 	// Reviewer, Verdict and Detail are set on an EventApprovalRequest the
 	// runtime settled itself: who decided, one of the Verdict constants, and
 	// the reviewer's findings as JSON, such as the risk it saw.
@@ -191,6 +208,9 @@ const (
 // Decision answers an approval request.
 type Decision struct {
 	Allow bool `json:"allow"`
+	// Similar has an allow take in, for the rest of the turn, what the
+	// request's Similar says: a person need not be asked again for it.
+	Similar bool `json:"similar,omitempty"`
 	// Message is shown to the agent when the request is denied, so it can
 	// explain itself or try something else.
 	Message string `json:"message,omitempty"`
@@ -199,6 +219,43 @@ type Decision struct {
 	// {"content": {...}}.
 	Answer json.RawMessage `json:"answer,omitempty"`
 }
+
+// Similar is what allowing a request can take in besides, for the rest of
+// the turn, as its runtime offers: the permission rules Claude Code
+// suggests, such as Bash(go test *), a permission mode it would switch to,
+// or folders it would open up; or, for Codex, the same request again, and
+// commands starting with the words it proposes, such as go test.
+//
+// Rules and Prefix can also be kept for the member, for every turn after
+// (docs/design.md 4.6): see TurnSpec.AllowedRules and Standing.
+type Similar struct {
+	Rules  []string `json:"rules,omitempty"`
+	Mode   string   `json:"mode,omitempty"`
+	Dirs   []string `json:"dirs,omitempty"`
+	Same   bool     `json:"same,omitempty"`
+	Prefix []string `json:"prefix,omitempty"`
+}
+
+// Standing is what of the offer can be kept for the member, as the rules
+// TurnSpec.AllowedRules carries: Claude Code's permission rules, and a
+// Codex command prefix as a JSON array. Nil when nothing can.
+func (s *Similar) Standing() []string {
+	if s == nil {
+		return nil
+	}
+	rules := append([]string(nil), s.Rules...)
+	if len(s.Prefix) > 0 {
+		if raw, err := json.Marshal(s.Prefix); err == nil {
+			rules = append(rules, string(raw))
+		}
+	}
+	return rules
+}
+
+// ReviewerRule names, on a request a runtime settled itself, a rule of the
+// member's it matched: one in TurnSpec.AllowedRules, or one a person
+// allowed for the rest of the turn.
+const ReviewerRule = "rule"
 
 // Result is what a finished turn produced. A turn that failed or was
 // cancelled has only its Usage, what it had spent by then, and for a

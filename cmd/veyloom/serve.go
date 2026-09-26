@@ -124,6 +124,7 @@ func runServe(cmd *cobra.Command, cfg config.Config) error {
 		Agents:        s,
 		Turns:         s,
 		Approvals:     s,
+		Rules:         s,
 		Chat:          h,
 		Events:        api.EventsOptions{AllowedOrigins: cfg.Server.AllowedOrigins, WriteTimeout: cfg.Server.WriteTimeout},
 		TranscriptDir: cfg.Hub.TranscriptDir,
@@ -132,6 +133,7 @@ func runServe(cmd *cobra.Command, cfg config.Config) error {
 		AvatarDir:     cfg.Hub.AvatarDir,
 		Wikis:         h,
 		Prefs:         accounts,
+		Worktrees:     h,
 		Logger:        logger,
 	}))
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, _ *http.Request) {

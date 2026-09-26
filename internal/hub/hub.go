@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -71,12 +72,6 @@ type Config struct {
 	// before it is denied. Zero takes the default; a negative value waits
 	// forever.
 	ApprovalTimeout time.Duration `mapstructure:"approval_timeout"`
-	// RelayBudget is how many agent-to-agent turns a topic may run in a
-	// row without a person speaking: an agent's reply that @-mentions
-	// another agent wakes it, up to this many times, then the topic waits
-	// for a person. Zero takes the default; a negative value turns the
-	// relay off, leaving mentions as hand-off buttons.
-	RelayBudget int `mapstructure:"relay_budget"`
 	// UpkeepIdle is how long a topic stays quiet before the wiki maintainer
 	// of a project that runs it on quiet topics goes over it (docs/design.md
 	// 5.12); also the least time between two such upkeeps.
@@ -117,7 +112,6 @@ func DefaultConfig() Config {
 		MemoryPersonalChars: 2000,
 		MemoryProjectChars:  3000,
 		ApprovalTimeout:     15 * time.Minute,
-		RelayBudget:         4,
 		UpkeepIdle:          30 * time.Minute,
 		UpkeepCheck:         time.Minute,
 		UpkeepTurns:         20,
@@ -162,9 +156,6 @@ func (c Config) withDefaults() Config {
 	}
 	if c.ApprovalTimeout == 0 {
 		c.ApprovalTimeout = def.ApprovalTimeout
-	}
-	if c.RelayBudget == 0 {
-		c.RelayBudget = def.RelayBudget
 	}
 	if c.UpkeepIdle <= 0 {
 		c.UpkeepIdle = def.UpkeepIdle
@@ -251,6 +242,9 @@ type Hub struct {
 
 	mu       sync.Mutex
 	machines map[string]*connectedMachine
+	// calls are the requests on checkouts and worktrees waiting for their
+	// machine's answer (docs/design.md 5.21).
+	calls workspaceCalls
 }
 
 // Option customises a Hub.
@@ -309,7 +303,8 @@ func New(st Store, cfg Config, opts ...Option) *Hub {
 	if h.cfg.WikiDir != "" {
 		brief.wikis = h.wikis
 	}
-	h.turns = newTurnManager(st, brief, h.connFor, h.events.publish, h.cfg.TranscriptDir, h.cfg.StoreTimeout, h.cfg.ApprovalTimeout, h.cfg.RelayBudget, h.logger)
+	h.turns = newTurnManager(st, brief, h.connFor, h.events.publish, h.cfg.TranscriptDir, h.cfg.StoreTimeout, h.cfg.ApprovalTimeout, h.logger)
+	h.turns.workspace = h.workspace
 	h.turns.wikis = h.wikis
 	h.turns.upkeepTurns, h.turns.residentBudget = h.cfg.UpkeepTurns, h.cfg.BriefResidentChars
 	h.turns.attachmentDir = h.cfg.AttachmentDir
@@ -328,6 +323,38 @@ func New(st Store, cfg Config, opts ...Option) *Hub {
 // exist; an unknown room simply never produces events.
 func (h *Hub) Subscribe(roomID string) Subscription {
 	return h.events.subscribe(roomID)
+}
+
+// SubscribeInbox delivers what reaches a person's inbox as it happens, in
+// every project: the messages that mention them, the requests waiting for
+// a person as they are asked and decided (docs/webui.md 5.2), and what
+// they read of it.
+func (h *Hub) SubscribeInbox(userID string) Subscription {
+	mention := store.Mention{Kind: store.MentionUser, ID: userID}
+	return h.events.subscribeWhere(func(ev Event) bool {
+		switch ev.Kind {
+		case EventMessage:
+			return ev.Message != nil && slices.Contains(ev.Message.Mentions, mention)
+		case EventApprovalRequested, EventApprovalDecided:
+			return true
+		case EventInboxRead:
+			return ev.UserID == userID
+		}
+		return false
+	})
+}
+
+// MarkInboxRead marks read what read picks of the messages that mention a
+// person (docs/webui.md 4.19), and tells their inbox streams when that
+// changed anything, so every tab counts again. It says how many were not
+// read before.
+func (h *Hub) MarkInboxRead(ctx context.Context, userID string, read store.InboxRead) (int, error) {
+	n, err := h.store.MarkMentionsRead(ctx, userID, read)
+	if err != nil || n == 0 {
+		return n, err
+	}
+	h.events.publish(Event{Kind: EventInboxRead, At: time.Now(), UserID: userID})
+	return n, nil
 }
 
 // Serve handles one machine connection: it performs the handshake, registers
@@ -426,6 +453,7 @@ func (h *Hub) forget(w *connectedMachine) {
 	delete(h.machines, w.info.ID)
 	h.mu.Unlock()
 	h.turns.MachineGone(w.info.ID)
+	h.workspaceMachineGone(w.info.ID)
 
 	ctx, cancel := context.WithTimeout(context.Background(), h.cfg.StoreTimeout)
 	defer cancel()
@@ -460,6 +488,8 @@ func (h *Hub) handle(ctx context.Context, w *connectedMachine, m protocol.Messag
 		h.turns.OnApproval(w.conn, m)
 	case protocol.RoomQuery:
 		h.turns.OnRoomQuery(w.conn, m)
+	case protocol.WorkspaceResult:
+		h.onWorkspaceResult(m)
 	}
 
 	h.mu.Lock()
@@ -518,7 +548,7 @@ func (h *Hub) dispatch(ctx context.Context, msg store.Message) {
 			h.logger.Error("open topic for message", "message", msg.ID, "err", err)
 			return
 		}
-		h.events.publish(Event{Kind: EventMessage, RoomID: msg.Room, At: msg.CreatedAt, Message: &msg, Thread: &store.ThreadSummary{ID: thread.ID}})
+		h.events.publish(Event{Kind: EventMessage, RoomID: msg.Room, At: msg.CreatedAt, Message: &msg, Thread: topicSummary(thread)})
 		for _, member := range targets {
 			if err := h.turns.TriggerIn(ctx, member, msg, thread); err != nil {
 				h.logger.Error("trigger member", "member", member.ID, "message", msg.ID, "err", err)
@@ -544,10 +574,18 @@ func (h *Hub) TurnRunning(turnID string) bool {
 }
 
 // DecideApproval applies userID's decision to a pending approval and
-// forwards it to the waiting turn. An unknown approval is
-// store.ErrNotFound; one already decided is store.ErrConflict.
-func (h *Hub) DecideApproval(ctx context.Context, approvalID, userID string, d runtime.Decision) (store.Approval, error) {
-	return h.turns.Decide(ctx, approvalID, userID, d)
+// forwards it to the waiting turn; scope is how far an allow goes. An
+// unknown approval is store.ErrNotFound; one already decided is
+// store.ErrConflict; a scope the request does not offer is
+// store.ErrInvalidInput.
+func (h *Hub) DecideApproval(ctx context.Context, approvalID, userID string, d runtime.Decision, scope store.AllowScope) (store.Approval, error) {
+	return h.turns.Decide(ctx, approvalID, userID, d, scope)
+}
+
+// UntrustTurn takes back a person's letting the rest of a running turn's
+// requests through. A turn not running is ErrUnknownTurn.
+func (h *Hub) UntrustTurn(ctx context.Context, turnID string) (store.Turn, error) {
+	return h.turns.UntrustTurn(ctx, turnID)
 }
 
 // Machines returns a snapshot of every connected machine, ordered by ID.

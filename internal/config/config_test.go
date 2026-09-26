@@ -239,6 +239,9 @@ func TestLoad_TranscriptDirDerivedFromStateDir(t *testing.T) {
 	if cfg.Machine.ToolDir != filepath.Join(home, "state", "tools") {
 		t.Errorf("ToolDir = %q, want it under the state dir", cfg.Machine.ToolDir)
 	}
+	if cfg.Machine.WorktreeDir != filepath.Join(home, "state", "worktrees") {
+		t.Errorf("WorktreeDir = %q, want it under the state dir", cfg.Machine.WorktreeDir)
+	}
 
 	cfg, err = NewLoader().Load(writeConfig(t, "hub:\n  transcript_dir: ~/elsewhere\nmachine:\n  session_dir: ~/pi-sessions\n"))
 	if err != nil {

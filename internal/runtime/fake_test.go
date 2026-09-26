@@ -3,6 +3,8 @@ package runtime
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -251,5 +253,132 @@ func TestFake_CompactsWhenAsked(t *testing.T) {
 	}
 	if got := compactionPhases(drain(t, turn)); got != "start,end" {
 		t.Errorf("compaction phases = %q, want start then end", got)
+	}
+}
+
+func TestFake_WritesFiles(t *testing.T) {
+	dir := t.TempDir()
+	turn, err := NewFake().StartTurn(context.Background(), TurnSpec{
+		Prompt: "hi", WorkDir: dir,
+		Options: map[string]any{"write": []any{"docs/a.md", "../outside.md"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var changed, results []string
+	for _, ev := range drain(t, turn) {
+		switch ev.Kind {
+		case EventFileChanged:
+			changed = append(changed, ev.Path)
+		case EventToolResult:
+			results = append(results, ev.Text)
+		}
+	}
+	first, err := os.ReadFile(filepath.Join(dir, "docs", "a.md"))
+	if err != nil || !strings.HasPrefix(string(first), "written in a fake turn ") {
+		t.Errorf("the file written: %q %v", first, err)
+	}
+	if len(changed) != 1 || changed[0] != "docs/a.md" || len(results) != 2 || !strings.HasPrefix(results[1], "error:") {
+		t.Errorf("changed %v, results %v", changed, results)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(dir), "outside.md")); err == nil {
+		t.Error("a path outside the working directory was written")
+	}
+
+	// Written again, the file changes.
+	again, _ := NewFake().StartTurn(context.Background(), TurnSpec{Prompt: "hi", WorkDir: dir, Options: map[string]any{"write": []any{"docs/a.md"}}})
+	drain(t, again)
+	if second, _ := os.ReadFile(filepath.Join(dir, "docs", "a.md")); string(second) == string(first) {
+		t.Error("writing again changed nothing")
+	}
+}
+
+// The fake asks as many times over as it is told, and a rule of the
+// member's settles its requests as a runtime's would: one of Claude Code's
+// lets the command through unasked, a Codex prefix says it did.
+func TestFake_RulesSettleRequests(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		options map[string]any
+		rules   []string
+		ruled   int
+	}{
+		{"a rule of Claude Code's", map[string]any{"similar": []any{"Bash(make test)"}}, []string{"Bash(make test)"}, 0},
+		{"a prefix of Codex's", map[string]any{"prefix": []any{"make", "test"}}, []string{`["make","test"]`}, 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			options := map[string]any{"approval": true, "approvals": float64(2)}
+			for k, v := range tc.options {
+				options[k] = v
+			}
+			turn, err := NewFake().StartTurn(context.Background(), TurnSpec{Prompt: "go", Options: options, AllowedRules: tc.rules})
+			if err != nil {
+				t.Fatal(err)
+			}
+			events := drain(t, turn)
+			if res, err := turn.Result(); err != nil || res.Output != "Allowed 2 of 2" {
+				t.Fatalf("result = %+v, %v", res, err)
+			}
+			ruled := 0
+			for _, ev := range events {
+				if ev.Kind == EventApprovalRequest {
+					if ev.Reviewer != ReviewerRule || ev.Verdict != VerdictAllowed {
+						t.Errorf("asked: %+v", ev)
+					}
+					ruled++
+				}
+			}
+			if ruled != tc.ruled {
+				t.Errorf("%d settled by the rule, want %d", ruled, tc.ruled)
+			}
+		})
+	}
+}
+
+// Allowed with the like of it, the rest of the turn's requests are the
+// rule's: asked for once.
+func TestFake_AllowingTheLikeOfItCoversTheRest(t *testing.T) {
+	turn, err := NewFake().StartTurn(context.Background(), TurnSpec{Prompt: "go", Options: map[string]any{"approval": true, "approvals": float64(3), "prefix": []any{"make"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req, _ := awaitApproval(t, turn)
+	if req.Similar == nil || strings.Join(req.Similar.Prefix, " ") != "make" {
+		t.Fatalf("offer: %+v", req.Similar)
+	}
+	if err := turn.Answer(req.ApprovalID, Decision{Allow: true, Similar: true}); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if ev, _ := awaitApproval(t, turn); ev.Reviewer != ReviewerRule {
+			t.Fatalf("asked again: %+v", ev)
+		}
+	}
+	drain(t, turn)
+	if res, _ := turn.Result(); res.Output != "Allowed 3 of 3" {
+		t.Errorf("Output = %q", res.Output)
+	}
+}
+
+// Asked all at once, every request waits for its own answer.
+func TestFake_RequestsTogether(t *testing.T) {
+	turn, err := NewFake().StartTurn(context.Background(), TurnSpec{Prompt: "go", Options: map[string]any{"approval": true, "approvals": float64(2), "together": true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first, _ := awaitApproval(t, turn)
+	second, _ := awaitApproval(t, turn)
+	if first.ApprovalID == second.ApprovalID {
+		t.Fatal("the same request twice")
+	}
+	if err := turn.Answer(second.ApprovalID, Decision{Allow: false}); err != nil {
+		t.Fatal(err)
+	}
+	if err := turn.Answer(first.ApprovalID, Decision{Allow: true}); err != nil {
+		t.Fatal(err)
+	}
+	drain(t, turn)
+	if res, _ := turn.Result(); res.Output != "Allowed 1 of 2" {
+		t.Errorf("Output = %q", res.Output)
 	}
 }

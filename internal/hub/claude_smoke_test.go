@@ -31,36 +31,10 @@ import (
 // there leaves it read-only; and that a request the person's own hook
 // settles first is taken back from the room.
 func TestClaudeSmoke(t *testing.T) {
-	if os.Getenv("VEYLOOM_CLAUDE_SMOKE") != "1" {
-		t.Skip("set VEYLOOM_CLAUDE_SMOKE=1 to run against the real claude CLI")
-	}
-	bin := os.Getenv("VEYLOOM_CLAUDE_BIN")
-	if bin == "" {
-		path, err := exec.LookPath("claude")
-		if err != nil {
-			t.Skipf("claude is not installed: %v", err)
-		}
-		bin = path
-	}
-	version, _ := exec.Command(bin, "--version").Output()
-	t.Logf("claude %s", strings.TrimSpace(string(version)))
+	cli := claudeSmokeCLI(t)
+	bin, api, config, proxy := cli.bin, cli.api, cli.config, cli.proxy
 
-	api := newFakeAnthropic(t)
-	config := t.TempDir()
-	for key, value := range map[string]string{
-		"ANTHROPIC_BASE_URL": api.URL, "ANTHROPIC_API_KEY": "sk-ant-veyloom-smoke-not-a-key", "ANTHROPIC_AUTH_TOKEN": "",
-		"CLAUDE_CONFIG_DIR": config, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1",
-	} {
-		t.Setenv(key, value)
-	}
-
-	// The CLI runs the room tools' MCP server as `veyloom mcp-proxy`, and
-	// the test binary is not veyloom: build one. And an MCP server that asks
-	// a person for things.
-	proxy := filepath.Join(t.TempDir(), "veyloom")
-	if out, err := exec.Command("go", "build", "-o", proxy, "../../cmd/veyloom").CombinedOutput(); err != nil {
-		t.Fatalf("build veyloom for the MCP proxy: %v\n%s", err, out)
-	}
+	// And an MCP server that asks a person for things.
 	elicit := filepath.Join(t.TempDir(), "elicitmcp")
 	if out, err := exec.Command("go", "build", "-o", elicit, "./testdata/elicitmcp").CombinedOutput(); err != nil {
 		t.Fatalf("build the elicitation server: %v\n%s", err, out)
@@ -227,6 +201,52 @@ func TestClaudeSmoke(t *testing.T) {
 		a, err := r.s.GetApproval(r.ctx, withdrawn[0].ID)
 		return err == nil && a.Status == store.ApprovalCancelled && a.Message == withdrawnReason
 	}, "the approval to be closed as withdrawn")
+}
+
+// claudeCLI is the real Claude Code CLI set up for a smoke test: the
+// binary, the fake Messages API playing the model, the throwaway config
+// directory it keeps its sessions in, and a veyloom binary for the room
+// tools' MCP proxy.
+type claudeCLI struct {
+	bin, config, proxy string
+	api                *fakeAnthropic
+}
+
+// claudeSmokeCLI sets the CLI up, or skips unless VEYLOOM_CLAUDE_SMOKE=1
+// and the CLI is there: claude on PATH, or the binary VEYLOOM_CLAUDE_BIN
+// names.
+func claudeSmokeCLI(t *testing.T) claudeCLI {
+	t.Helper()
+	if os.Getenv("VEYLOOM_CLAUDE_SMOKE") != "1" {
+		t.Skip("set VEYLOOM_CLAUDE_SMOKE=1 to run against the real claude CLI")
+	}
+	bin := os.Getenv("VEYLOOM_CLAUDE_BIN")
+	if bin == "" {
+		path, err := exec.LookPath("claude")
+		if err != nil {
+			t.Skipf("claude is not installed: %v", err)
+		}
+		bin = path
+	}
+	version, _ := exec.Command(bin, "--version").Output()
+	t.Logf("claude %s", strings.TrimSpace(string(version)))
+
+	api := newFakeAnthropic(t)
+	config := t.TempDir()
+	for key, value := range map[string]string{
+		"ANTHROPIC_BASE_URL": api.URL, "ANTHROPIC_API_KEY": "sk-ant-veyloom-smoke-not-a-key", "ANTHROPIC_AUTH_TOKEN": "",
+		"CLAUDE_CONFIG_DIR": config, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DISABLE_AUTOUPDATER": "1", "DISABLE_TELEMETRY": "1",
+	} {
+		t.Setenv(key, value)
+	}
+
+	// The CLI runs the room tools' MCP server as `veyloom mcp-proxy`, and
+	// the test binary is not veyloom: build one.
+	proxy := filepath.Join(t.TempDir(), "veyloom")
+	if out, err := exec.Command("go", "build", "-o", proxy, "../../cmd/veyloom").CombinedOutput(); err != nil {
+		t.Fatalf("build veyloom for the MCP proxy: %v\n%s", err, out)
+	}
+	return claudeCLI{bin: bin, config: config, proxy: proxy, api: api}
 }
 
 // approvalsOf returns the approvals turn raised, failing unless there are n.

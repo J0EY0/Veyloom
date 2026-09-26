@@ -125,6 +125,8 @@ func TestPi_PermissionToolSets(t *testing.T) {
 	cases := map[string]string{
 		PermissionReadOnly:         "--tools\nread,grep,find,ls\n",
 		PermissionEditWithApproval: "--tools\nread,grep,find,ls,edit,write\n",
+		// No reviewer of pi's own to hand commands to.
+		PermissionAutoReview: "--tools\nread,grep,find,ls,edit,write\n",
 	}
 	for preset, want := range cases {
 		argsPath := fakePiCLI(t, piFixture, 0, "")

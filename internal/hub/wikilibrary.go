@@ -210,6 +210,6 @@ func (m *TurnManager) wikiTopic(ctx context.Context, project store.Project) (sto
 	}
 	// Announced once the project names it, with the topic it heads, as a
 	// turn's root is: the room reads the project again on hearing of it.
-	m.publish(Event{Kind: EventMessage, RoomID: root.Room, At: root.CreatedAt, Message: &root, Thread: &store.ThreadSummary{ID: thread.ID, Number: thread.Number}})
+	m.publish(Event{Kind: EventMessage, RoomID: root.Room, At: root.CreatedAt, Message: &root, Thread: topicSummary(thread)})
 	return thread, nil
 }

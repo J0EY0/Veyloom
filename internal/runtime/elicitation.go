@@ -53,7 +53,7 @@ func (t *turnBase) askForm(ctx context.Context, tool string, req FormRequest) (D
 	if err != nil {
 		return Decision{}, err
 	}
-	return t.ask(ctx, ApprovalForm, tool, string(input))
+	return t.ask(ctx, ApprovalForm, tool, string(input), nil)
 }
 
 // askLink puts an MCP server's link to a person on behalf of tool and waits.
@@ -62,7 +62,7 @@ func (t *turnBase) askLink(ctx context.Context, tool string, req LinkRequest) (D
 	if err != nil {
 		return Decision{}, err
 	}
-	return t.ask(ctx, ApprovalLink, tool, string(input))
+	return t.ask(ctx, ApprovalLink, tool, string(input), nil)
 }
 
 // elicitationTool names, in approvals, what an MCP server asks a person

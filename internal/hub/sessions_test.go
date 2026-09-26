@@ -27,7 +27,7 @@ func TestStaleReason(t *testing.T) {
 		{"everything changed", store.Member{MachineID: "m2", RepoPath: "/elsewhere"}, store.Agent{Runtime: "pi"}, store.SessionRuntimeChanged},
 	}
 	for _, c := range cases {
-		if got := staleReason(open, c.member, c.agent); got != c.want {
+		if got := staleReason(open, c.member, c.agent, c.member.RepoPath); got != c.want {
 			t.Errorf("%s: staleReason = %q, want %q", c.name, got, c.want)
 		}
 	}

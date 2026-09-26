@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store/db"
 )
 
@@ -45,6 +46,42 @@ const (
 	ApprovalLink ApprovalKind = "link"
 )
 
+// AllowScope says how far a person's allow goes (docs/design.md 4.6).
+type AllowScope string
+
+const (
+	// ScopeOnce allows the request and nothing more.
+	ScopeOnce AllowScope = "once"
+	// ScopeSimilar also allows, for the rest of the turn, the like of the
+	// request, as its runtime offered.
+	ScopeSimilar AllowScope = "similar"
+	// ScopeAlways also allows the like of the request from now on: the
+	// runtime's rule is kept for the member (MemberRule).
+	ScopeAlways AllowScope = "always"
+	// ScopeTurn also allows every request the turn makes from here on,
+	// until the person takes it back or the turn ends.
+	ScopeTurn AllowScope = "turn"
+)
+
+// Valid reports whether s is a scope the approvals table holds.
+func (s AllowScope) Valid() bool {
+	switch s {
+	case ScopeOnce, ScopeSimilar, ScopeAlways, ScopeTurn:
+		return true
+	}
+	return false
+}
+
+// Reviewers the hub names when it answered a request for a person.
+const (
+	// ReviewerRule settled it with a rule the member has: the runtime
+	// matched it (runtime.ReviewerRule).
+	ReviewerRule = runtime.ReviewerRule
+	// ReviewerTurn answered because a person let the rest of the turn
+	// through; DecidedBy is that person.
+	ReviewerTurn = "turn"
+)
+
 // Valid reports whether k is a kind the approvals table holds.
 func (k ApprovalKind) Valid() bool {
 	switch k {
@@ -76,12 +113,17 @@ type Approval struct {
 	// DecidedBy is the user who decided, empty for a timeout, a turn that
 	// ended first, or a reviewer of the runtime's own.
 	DecidedBy string `json:"decided_by,omitempty"`
-	// Reviewer names the runtime's own reviewer when it decided rather than
-	// a person, such as codex_auto_review.
+	// Reviewer names who decided when no person was asked: the runtime's
+	// own reviewer, such as codex_auto_review, or the hub answering for a
+	// person (ReviewerRule, ReviewerTurn).
 	Reviewer string `json:"reviewer,omitempty"`
 	// Answer is what came with the decision: a question's answers, a form's
 	// content, or a reviewer's findings.
-	Answer    json.RawMessage `json:"answer,omitempty"`
+	Answer json.RawMessage `json:"answer,omitempty"`
+	// Similar is what an allow can take in besides, as the runtime
+	// offered, as JSON; Scope is how far the person's allow went.
+	Similar   json.RawMessage `json:"similar,omitempty"`
+	Scope     AllowScope      `json:"scope"`
 	CreatedAt time.Time       `json:"created_at"`
 	DecidedAt *time.Time      `json:"decided_at,omitempty"`
 }
@@ -103,6 +145,9 @@ type NewApproval struct {
 	// JSON is stored as a JSON string so the payload stays well-formed.
 	Input     string
 	MessageID string
+	// Similar is what an allow can take in besides, as JSON; empty for
+	// nothing.
+	Similar json.RawMessage
 }
 
 // NewReviewedApproval is the input to CreateReviewedApproval: a request the
@@ -117,6 +162,9 @@ type NewReviewedApproval struct {
 	Reviewer string
 	// Answer holds the reviewer's findings as JSON; empty for none.
 	Answer json.RawMessage
+	// DecidedBy is the person the hub answered for (ReviewerTurn), empty
+	// otherwise.
+	DecidedBy string
 }
 
 // ApprovalOutcome is the input to DecideApproval.
@@ -128,6 +176,10 @@ type ApprovalOutcome struct {
 	DecidedBy string
 	// Answer is what came with the decision, as JSON; empty for none.
 	Answer json.RawMessage
+	// Scope is how far an allow goes; empty is ScopeOnce.
+	Scope AllowScope
+	// Reviewer is set when the hub decided for DecidedBy (ReviewerTurn).
+	Reviewer string
 }
 
 // approvalPayload is the JSON shape of the payload column.
@@ -151,15 +203,16 @@ func (s *Store) CreateApproval(ctx context.Context, a NewApproval) (Approval, er
 		return Approval{}, err
 	}
 	row, err := s.q.CreateApproval(ctx, db.CreateApprovalParams{
-		ID:        id,
-		TurnID:    r.turnID,
-		RoomID:    r.roomID,
-		ThreadID:  r.threadID,
-		MemberID:  r.memberID,
-		RequestID: a.RequestID,
-		Kind:      string(r.kind),
-		Payload:   r.payload,
-		MessageID: r.messageID,
+		ID:           id,
+		TurnID:       r.turnID,
+		RoomID:       r.roomID,
+		ThreadID:     r.threadID,
+		MemberID:     r.memberID,
+		RequestID:    a.RequestID,
+		Kind:         string(r.kind),
+		Payload:      r.payload,
+		MessageID:    r.messageID,
+		SimilarOffer: answerColumn(a.Similar),
 	})
 	if err != nil {
 		return Approval{}, mapPGError("create approval", err)
@@ -180,6 +233,12 @@ func (s *Store) CreateReviewedApproval(ctx context.Context, a NewReviewedApprova
 	if err != nil {
 		return Approval{}, err
 	}
+	var decidedBy pgtype.UUID
+	if a.DecidedBy != "" {
+		if decidedBy, err = parseUUID(a.DecidedBy); err != nil {
+			return Approval{}, err
+		}
+	}
 	row, err := s.q.CreateReviewedApproval(ctx, db.CreateReviewedApprovalParams{
 		TurnID:    r.turnID,
 		RoomID:    r.roomID,
@@ -193,6 +252,7 @@ func (s *Store) CreateReviewedApproval(ctx context.Context, a NewReviewedApprova
 		Message:   a.Message,
 		Reviewer:  a.Reviewer,
 		Answer:    answerColumn(a.Answer),
+		DecidedBy: decidedBy,
 	})
 	if err != nil {
 		return Approval{}, mapPGError("create reviewed approval", err)
@@ -284,6 +344,13 @@ func (s *Store) DecideApproval(ctx context.Context, id string, out ApprovalOutco
 			return Approval{}, err
 		}
 	}
+	scope := out.Scope
+	if scope == "" {
+		scope = ScopeOnce
+	}
+	if !scope.Valid() {
+		return Approval{}, fmt.Errorf("%w: unknown allow scope %q", ErrInvalidInput, out.Scope)
+	}
 
 	row, err := s.q.DecideApproval(ctx, db.DecideApprovalParams{
 		ID:        uid,
@@ -291,6 +358,8 @@ func (s *Store) DecideApproval(ctx context.Context, id string, out ApprovalOutco
 		Message:   out.Message,
 		DecidedBy: decidedBy,
 		Answer:    answerColumn(out.Answer),
+		Scope:     string(scope),
+		Reviewer:  out.Reviewer,
 	})
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Either it does not exist or it is no longer pending; tell which.
@@ -424,21 +493,29 @@ func toApproval(row db.Approval) (Approval, error) {
 		MessageID: uuidString(row.MessageID),
 		DecidedBy: uuidString(row.DecidedBy),
 		Reviewer:  row.Reviewer,
+		Similar:   compactJSON(row.SimilarOffer),
+		Scope:     AllowScope(row.Scope),
 		CreatedAt: row.CreatedAt.Time,
 	}
-	if len(row.Answer) > 0 {
-		var compact bytes.Buffer
-		if json.Compact(&compact, row.Answer) == nil {
-			a.Answer = compact.Bytes()
-		} else {
-			a.Answer = row.Answer
-		}
-	}
+	a.Answer = compactJSON(row.Answer)
 	if row.DecidedAt.Valid {
 		decided := row.DecidedAt.Time
 		a.DecidedAt = &decided
 	}
 	return a, nil
+}
+
+// compactJSON is a jsonb column's value without the spaces Postgres puts
+// in, so callers see the same bytes however it was stored; nil for NULL.
+func compactJSON(raw []byte) json.RawMessage {
+	if len(raw) == 0 {
+		return nil
+	}
+	var compact bytes.Buffer
+	if json.Compact(&compact, raw) != nil {
+		return raw
+	}
+	return compact.Bytes()
 }
 
 // approvalSettled is what a decision on an approval that is not pending

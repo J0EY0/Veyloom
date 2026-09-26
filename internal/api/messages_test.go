@@ -58,10 +58,14 @@ type fakeMessages struct {
 	users    *fakeUsers
 	messages []store.Message
 	threads  map[string]store.Thread
+	// work is the pieces of work, by the message that began each.
+	work map[string]store.WorkSummary
+	// read are the messages read in their inbox, by user and message.
+	read map[string]bool
 }
 
 func newFakeMessages(rooms *fakeProjects, users *fakeUsers) *fakeMessages {
-	return &fakeMessages{rooms: rooms, users: users, threads: map[string]store.Thread{}}
+	return &fakeMessages{rooms: rooms, users: users, threads: map[string]store.Thread{}, read: map[string]bool{}}
 }
 
 // fakeChat stands in for the hub: it stores the message and remembers what
@@ -71,8 +75,10 @@ type fakeChat struct {
 	posted     []store.NewMessage
 	running    map[string]bool
 	cancelled  []string
+	continued  []string
 	approvals  fakeApprovals
 	decided    []string
+	untrusted  []string
 	sub        *fakeSub
 	subscribed []string
 }
@@ -83,12 +89,28 @@ func (c *fakeChat) PostUserMessage(ctx context.Context, m store.NewMessage) (sto
 	return c.messages.CreateMessage(ctx, m)
 }
 
+func (c *fakeChat) ContinueRelay(_ context.Context, noteID string) error {
+	if noteID == "gone" {
+		return store.ErrNotFound
+	}
+	c.continued = append(c.continued, noteID)
+	return nil
+}
+
 func (c *fakeChat) CancelTurn(_ context.Context, turnID string) error {
 	if !c.running[turnID] {
 		return fmt.Errorf("%w: %s", hub.ErrUnknownTurn, turnID)
 	}
 	c.cancelled = append(c.cancelled, turnID)
 	return nil
+}
+
+func (c *fakeChat) UntrustTurn(_ context.Context, turnID string) (store.Turn, error) {
+	if !c.running[turnID] {
+		return store.Turn{}, fmt.Errorf("%w: %s", hub.ErrUnknownTurn, turnID)
+	}
+	c.untrusted = append(c.untrusted, turnID)
+	return store.Turn{ID: turnID, Status: store.TurnRunning}, nil
 }
 
 func (f *fakeMessages) CreateMessage(ctx context.Context, m store.NewMessage) (store.Message, error) {
@@ -177,6 +199,29 @@ func (f *fakeMessages) ThreadForMessage(ctx context.Context, messageID string) (
 }
 
 // ListUserMentions filters by the structured mentions, newest first.
+func (f *fakeMessages) CountUnreadMentions(ctx context.Context, userID string) (int, error) {
+	items, err := f.ListUserMentions(ctx, userID, 0, 0)
+	n := 0
+	for _, it := range items {
+		if !it.Read {
+			n++
+		}
+	}
+	return n, err
+}
+
+// MarkInboxRead marks the messages named read; the fake knows no topics.
+func (c *fakeChat) MarkInboxRead(_ context.Context, userID string, read store.InboxRead) (int, error) {
+	n := 0
+	for _, id := range read.MessageIDs {
+		if key := userID + "/" + id; !c.messages.read[key] {
+			c.messages.read[key] = true
+			n++
+		}
+	}
+	return n, nil
+}
+
 func (f *fakeMessages) ListUserMentions(_ context.Context, userID string, before int64, limit int) ([]store.InboxItem, error) {
 	if _, ok := f.users.users[userID]; !ok {
 		return nil, fmt.Errorf("user %s: %w", userID, store.ErrNotFound)
@@ -189,7 +234,7 @@ func (f *fakeMessages) ListUserMentions(_ context.Context, userID string, before
 		}
 		for _, mention := range m.Mentions {
 			if mention.Kind == store.MentionUser && mention.ID == userID {
-				out = append(out, store.InboxItem{Message: m, RoomName: "main", SenderName: "someone"})
+				out = append(out, store.InboxItem{Message: m, RoomName: "main", SenderName: "someone", Read: f.read[userID+"/"+m.ID]})
 				break
 			}
 		}
@@ -223,6 +268,14 @@ func (f *fakeMessages) ThreadSummaries(_ context.Context, rootMessageIDs []strin
 		}
 	}
 	return out, nil
+}
+
+func (f *fakeMessages) ChainWork(_ context.Context, chain string) (store.WorkSummary, error) {
+	work, ok := f.work[chain]
+	if !ok {
+		return store.WorkSummary{}, store.ErrNotFound
+	}
+	return work, nil
 }
 
 func (f *fakeMessages) GetThread(_ context.Context, id string) (store.Thread, error) {
@@ -427,5 +480,46 @@ func TestUserInbox(t *testing.T) {
 	}
 	if rec := do(t, handler, http.MethodGet, "/api/v1/users/u404/inbox", "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("unknown user: status = %d, want 404", rec.Code)
+	}
+
+	// Read, one of the two leaves one unread.
+	do(t, handler, http.MethodGet, "/api/v1/users/"+alice.ID+"/inbox", "", &inbox)
+	if inbox.Unread != 2 {
+		t.Errorf("unread at first: %d", inbox.Unread)
+	}
+	var read InboxReadResponse
+	body := fmt.Sprintf(`{"message_ids":[%q]}`, inbox.Items[0].ID)
+	if rec := do(t, handler, http.MethodPost, "/api/v1/users/"+alice.ID+"/inbox/read", body, &read); rec.Code != http.StatusOK || read.Marked != 1 || read.Unread != 1 {
+		t.Errorf("read: status = %d, %+v", rec.Code, read)
+	}
+	do(t, handler, http.MethodGet, "/api/v1/users/"+alice.ID+"/inbox", "", &inbox)
+	if inbox.Unread != 1 || !inbox.Items[0].Read || inbox.Items[1].Read {
+		t.Errorf("after reading one: %d unread, %+v", inbox.Unread, inbox.Items)
+	}
+	if rec := do(t, handler, http.MethodPost, "/api/v1/users/"+alice.ID+"/inbox/read", `{`, nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("a bad body: status = %d", rec.Code)
+	}
+}
+
+// A topic comes with the piece of work its latest turn is part of, begun
+// in it or in another topic; a topic whose turns are part of none has none.
+func TestGetThread_TheWorkItIsPartOf(t *testing.T) {
+	projects := newFakeProjects()
+	users := newFakeUsers()
+	messages := newFakeMessages(projects, users)
+	messages.messages = []store.Message{{ID: "m1", Room: "r1", SenderKind: store.SenderAgent}, {ID: "m2", Room: "r1", SenderKind: store.SenderAgent}}
+	messages.threads["th1"] = store.Thread{ID: "th1", RoomID: "r1", RootMessageID: "m1", Number: 4}
+	messages.threads["th2"] = store.Thread{ID: "th2", RoomID: "r1", RootMessageID: "m2", Number: 5}
+	messages.work = map[string]store.WorkSummary{"ask": {ThreadID: "th0", ThreadNumber: 1, Chain: "ask", Turns: 5, Members: []string{"lead", "tester"}}}
+	turns := fakeTurns{"t1": {ID: "t1", ThreadID: "th1", ChainMessageID: "ask"}, "t2": {ID: "t2", ThreadID: "th2"}}
+	handler := NewHandler(Deps{Projects: projects, Users: users, Messages: messages, Turns: turns})
+
+	var thread ThreadResponse
+	if rec := do(t, handler, http.MethodGet, "/api/v1/threads/th1", "", &thread); rec.Code != http.StatusOK || thread.Work == nil || thread.Work.ThreadNumber != 1 || thread.Work.Turns != 5 || len(thread.Work.Members) != 2 {
+		t.Errorf("a member's topic: %d %+v", rec.Code, thread.Work)
+	}
+	thread = ThreadResponse{}
+	if rec := do(t, handler, http.MethodGet, "/api/v1/threads/th2", "", &thread); rec.Code != http.StatusOK || thread.Work != nil {
+		t.Errorf("a topic with no piece of work: %d %+v", rec.Code, thread.Work)
 	}
 }

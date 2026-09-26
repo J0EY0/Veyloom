@@ -69,10 +69,12 @@ func (c PiConfig) withDefaults() PiConfig {
 
 // piToolSets maps the permission presets onto pi's --tools allowlist. Pi
 // has no approval prompts, so edit_with_approval becomes "edit but never
-// run commands"; full_auto leaves the default of every tool enabled.
+// run commands", and so does auto_review, pi having no reviewer either;
+// full_auto leaves the default of every tool enabled.
 var piToolSets = map[string][]string{
 	PermissionReadOnly:         {"read", "grep", "find", "ls"},
 	PermissionEditWithApproval: {"read", "grep", "find", "ls", "edit", "write"},
+	PermissionAutoReview:       {"read", "grep", "find", "ls", "edit", "write"},
 }
 
 // piEditTools are the tools whose use means a file changed.
@@ -130,7 +132,7 @@ func (r *PiRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error) {
 
 	// Startup update checks are noise for a turn; PI_OFFLINE turns only
 	// those off, not model calls.
-	env := []string{"PI_OFFLINE=1"}
+	env := append([]string{"PI_OFFLINE=1"}, spec.Env...)
 	release := func() {}
 	if spec.Host != nil {
 		// The room tools: the extension registers them, the endpoint whose

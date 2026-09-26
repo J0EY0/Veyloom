@@ -23,11 +23,12 @@ type PermissionPreset string
 const (
 	PermissionReadOnly         PermissionPreset = runtime.PermissionReadOnly
 	PermissionEditWithApproval PermissionPreset = runtime.PermissionEditWithApproval
+	PermissionAutoReview       PermissionPreset = runtime.PermissionAutoReview
 	PermissionFullAuto         PermissionPreset = runtime.PermissionFullAuto
 )
 
 // PermissionPresets lists every valid preset, for validation and UIs.
-var PermissionPresets = []PermissionPreset{PermissionReadOnly, PermissionEditWithApproval, PermissionFullAuto}
+var PermissionPresets = []PermissionPreset{PermissionReadOnly, PermissionEditWithApproval, PermissionAutoReview, PermissionFullAuto}
 
 // BranchMode says how a member works in the repository.
 type BranchMode string
@@ -94,6 +95,17 @@ type Member struct {
 	PermissionPreset PermissionPreset `json:"permission_preset"`
 	Enabled          bool             `json:"enabled"`
 	CreatedAt        time.Time        `json:"created_at"`
+	// WorktreeDir is the member's git worktree once made (docs/design.md
+	// 5.21), WorkDir where in it the member works and Branch the branch
+	// checked out there; PreparedAt is when it was got ready for work, nil
+	// until then. All empty for a member working in the checkout itself.
+	WorktreeDir string     `json:"worktree_dir,omitempty"`
+	WorkDir     string     `json:"work_dir,omitempty"`
+	Branch      string     `json:"branch,omitempty"`
+	PreparedAt  *time.Time `json:"prepared_at,omitempty"`
+	// OverlapsNoted are the files of its work the chat was told another
+	// member's work changed too.
+	OverlapsNoted []string `json:"-"`
 	// RemovedAt is when the member was taken out of its project. The row
 	// stays so its history keeps a name; AgentID is empty once the
 	// agent it came from is deleted.
@@ -409,7 +421,7 @@ func (s *Store) removeMember(ctx context.Context, id pgtype.UUID) (db.Member, er
 	if _, err := q.EndOpenSession(ctx, db.EndOpenSessionParams{MemberID: id, EndReason: string(SessionMemberRemoved)}); err != nil {
 		return db.Member{}, err
 	}
-	if err := q.ClearWikiMaintainer(ctx, id); err != nil {
+	if err := q.ClearMemberRoles(ctx, id); err != nil {
 		return db.Member{}, err
 	}
 	if err := tx.Commit(ctx); err != nil {
@@ -586,6 +598,14 @@ func toMember(row db.Member) Member {
 		PermissionPreset: PermissionPreset(row.PermissionPreset),
 		Enabled:          row.Enabled,
 		CreatedAt:        row.CreatedAt.Time,
+		WorktreeDir:      row.WorktreeDir,
+		WorkDir:          row.WorkDir,
+		Branch:           row.Branch,
+		OverlapsNoted:    row.OverlapsNoted,
+	}
+	if row.PreparedAt.Valid {
+		prepared := row.PreparedAt.Time
+		a.PreparedAt = &prepared
 	}
 	if row.RemovedAt.Valid {
 		removed := row.RemovedAt.Time

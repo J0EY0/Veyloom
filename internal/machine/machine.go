@@ -66,6 +66,8 @@ func (w *Machine) Run(ctx context.Context, conn protocol.Conn) error {
 	}
 	turns := newTurnRunner(w.runners, conn, w.cfg.EventFlushInterval, skillRoot)
 	defer turns.shutdown()
+	spaces := newWorkspaces(ctx, w.cfg, conn)
+	defer spaces.shutdown()
 
 	// Recv blocks, so it runs in its own goroutine and feeds the select
 	// below. The goroutine ends when the connection or ctx ends.
@@ -103,7 +105,7 @@ func (w *Machine) Run(ctx context.Context, conn protocol.Conn) error {
 				return fmt.Errorf("send heartbeat: %w", err)
 			}
 		case m := <-inbound:
-			if err := w.handle(ctx, conn, turns, m); err != nil {
+			if err := w.handle(ctx, conn, turns, spaces, m); err != nil {
 				return err
 			}
 		}
@@ -133,8 +135,8 @@ func awaitWelcome(ctx context.Context, conn protocol.Conn, timeout time.Duration
 // Discovery runs inline, which pauses heartbeats for its duration. That is
 // well within any sensible heartbeat timeout; it can move to a goroutine if
 // discovery ever grows slower. Turns never block the loop: the runner puts
-// each one on its own goroutine.
-func (w *Machine) handle(ctx context.Context, conn protocol.Conn, turns *turnRunner, m protocol.Message) error {
+// each one on its own goroutine, and the work on worktrees likewise.
+func (w *Machine) handle(ctx context.Context, conn protocol.Conn, turns *turnRunner, spaces *workspaces, m protocol.Message) error {
 	switch m := m.(type) {
 	case protocol.Probe:
 		report := protocol.RuntimesReport{Runtimes: w.discovery.Run(ctx)}
@@ -149,6 +151,8 @@ func (w *Machine) handle(ctx context.Context, conn protocol.Conn, turns *turnRun
 		turns.answer(m.TurnID, m.ApprovalID, m.Decision)
 	case protocol.RoomResult:
 		turns.roomResult(m)
+	case protocol.WorkspaceRequest:
+		spaces.start(m)
 	}
 	return nil
 }
