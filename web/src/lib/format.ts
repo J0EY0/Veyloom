@@ -84,6 +84,22 @@ export function formatSpan(ms: number): string {
   return rest === 0 ? t('duration.minutes', { n: minutes }) : t('duration.both', { m: minutes, s: rest })
 }
 
+// formatLongSpan says a span of days, hours and minutes, to the minute:
+// "2 天 4 小时", "3h 20m".
+export function formatLongSpan(ms: number): string {
+  const minutes = Math.max(0, Math.round(ms / 60_000))
+  const days = Math.floor(minutes / 1440)
+  const hours = Math.floor((minutes % 1440) / 60)
+  const rest = minutes % 60
+  return [
+    days > 0 ? t('duration.days', { n: days }) : '',
+    hours > 0 ? t('duration.hours', { n: hours }) : '',
+    rest > 0 || minutes < 60 ? t('duration.minutes', { n: rest }) : '',
+  ]
+    .filter(Boolean)
+    .join(' ')
+}
+
 // formatElapsed is a running clock, minutes and seconds: how long a turn
 // has been going.
 export function formatElapsed(startIso: string, now: number): string {

@@ -1,5 +1,9 @@
 import type { MessageKey } from '@/i18n/zh-CN'
+import { formatLongSpan, formatTime } from '@/lib/format'
 import type { t as translate } from '@/lib/i18n'
+import { runtimeName } from '@/lib/runtimes'
+import { draftText } from './draftNote'
+import { turnText } from './turnNote'
 
 type T = typeof translate
 
@@ -37,14 +41,98 @@ const overlapNote = /^(.+) (?:both|all) changed (.+?)(?: and (\d+) more)?: which
 const holdNote =
   /^(?:@\S+ )?(.+) mentioned (.+), but (?:agents have woken (\d+) turns in this piece of work since a person last spoke|the last (\d+) turns agents woke in this piece of work only talked); it waits for a person now\.$/
 
+// A member's reminder to itself (docs/design.md 5.23.4): set, due at an
+// RFC 3339 time; come due, late by the hub's span when the hub or the
+// machine was away; and its wake held back, as a wake by another's
+// message is, or since only people wake members in the project.
+const reminderSetNote = /^(.+?) set a reminder for (\S+?): ([\s\S]*)$/
+const reminderDueNote = /^(.+?)'s reminder, due (\S+?)(?: \((\S+) late\))?: ([\s\S]*)$/
+const reminderHoldNote =
+  /^(?:@\S+ )?(.+)'s reminder came due, but (?:agents have woken (\d+) turns in this piece of work since a person last spoke|the last (\d+) turns agents woke in this piece of work only talked|only people wake members in this project); it waits for a person now\.$/
+
 // isHoldNote says a system note tells of a wake a limit held back.
 export function isHoldNote(body: string): boolean {
-  return holdNote.test(body)
+  return holdNote.test(body) || reminderHoldNote.test(body)
+}
+
+// isReminderNote says a system note tells of a member setting a reminder.
+export function isReminderNote(body: string): boolean {
+  return reminderSetNote.test(body)
+}
+
+// spanMs reads the hub's span, "2d4h" or "45m", as milliseconds; one it
+// does not know is none.
+export function spanMs(span: string): number {
+  const parts = /^(?:(\d+)d)?(?:(\d+)h)?(?:(\d+)m)?$/.exec(span)
+  if (!parts || span === '') return 0
+  return ((Number(parts[1] ?? 0) * 24 + Number(parts[2] ?? 0)) * 60 + Number(parts[3] ?? 0)) * 60_000
+}
+
+// reminderText is a note of a reminder in the UI's words, or undefined
+// for any other note.
+function reminderText(t: T, body: string): Note | undefined {
+  const set = reminderSetNote.exec(body)
+  if (set) return { kind: 'reminder', text: t('reminder.setNote', { who: set[1], time: formatTime(set[2]), note: set[3] }), who: [set[1]] }
+  const due = reminderDueNote.exec(body)
+  if (due) {
+    const [, who, , late, note] = due
+    const text = late ? t('reminder.dueLateNote', { who, note, late: formatLongSpan(spanMs(late)) }) : t('reminder.dueNote', { who, note })
+    return { kind: 'reminderDue', text, who: [who] }
+  }
+  const held = reminderHoldNote.exec(body)
+  if (held) {
+    const [, who, woken, idle] = held
+    const text =
+      woken !== undefined
+        ? t('relay.reminderLimitNote', { who, n: woken })
+        : idle !== undefined
+          ? t('relay.reminderIdleNote', { who, n: idle })
+          : t('relay.reminderPeopleNote', { who })
+    return { kind: 'hold', text, who: [who] }
+  }
+  return undefined
 }
 
 // The work a member handed on is done, and goes back to it (docs/design.md
 // 5.22); the hub's first wording said it sums it up.
 const sumUpNote = /^The work (.+) handed on is done \((.+)\); (?:back to \1|\1 sums it up)\.$/
+
+// What keeps a member from answering (docs/design.md 5.23.3): its
+// account's usage limit reached, signed out, too many requests, its
+// provider failing, or its own turns failing; the times as RFC 3339.
+const quotaUntilNote = /^(.+) waits for (\S+)'s usage limit on (.+) to reset at (\S+)\.$/
+const quotaNote = /^(.+) waits: (\S+)'s usage limit on (.+) is reached; resume it once the account has more\.$/
+const authNote = /^(.+) waits: (\S+) is signed out on (.+); sign it in again there, then resume it\.$/
+const rateLimitNote = /^(.+) waits: (\S+) on (.+) was turned down for too many requests; it tries again at (\S+)\.$/
+const serverNote = /^(.+) waits: (\S+)'s service failed on (.+); it tries again at (\S+)\.$/
+const failingNote = /^(.+) waits: its last (\d+) turns failed; resume it once what failed is seen to\.$/
+
+// pauseText is a note of a pause in the UI's words, or undefined for any
+// other note.
+function pauseText(t: T, body: string): Note | undefined {
+  const quotaUntil = quotaUntilNote.exec(body)
+  if (quotaUntil) {
+    const [, who, runtime, machine, at] = quotaUntil
+    return { kind: 'paused', text: t('pause.note.quotaUntil', { who, runtime: runtimeName(runtime), machine, time: formatTime(at) }), who: [who] }
+  }
+  const quota = quotaNote.exec(body)
+  if (quota) return { kind: 'paused', text: t('pause.note.quota', { who: quota[1], runtime: runtimeName(quota[2]), machine: quota[3] }), who: [quota[1]] }
+  const auth = authNote.exec(body)
+  if (auth) return { kind: 'paused', text: t('pause.note.auth', { who: auth[1], runtime: runtimeName(auth[2]), machine: auth[3] }), who: [auth[1]] }
+  const limited = rateLimitNote.exec(body)
+  if (limited) {
+    const [, who, runtime, machine, at] = limited
+    return { kind: 'paused', text: t('pause.note.rateLimit', { who, runtime: runtimeName(runtime), machine, time: formatTime(at) }), who: [who] }
+  }
+  const server = serverNote.exec(body)
+  if (server) {
+    const [, who, runtime, machine, at] = server
+    return { kind: 'paused', text: t('pause.note.server', { who, runtime: runtimeName(runtime), machine, time: formatTime(at) }), who: [who] }
+  }
+  const failing = failingNote.exec(body)
+  if (failing) return { kind: 'paused', text: t('pause.note.failing', { who: failing[1], n: failing[2] }), who: [failing[1]] }
+  return undefined
+}
 
 // A merge a member left under way, seen to as its turn ended: committed
 // for it, or still with conflicts in the files named.
@@ -93,7 +181,27 @@ const setAsideNote = /^Set aside (.+)'s work, kept in git as (\S+): its worktree
 
 // What a system note is about: it picks the note's mark and colour.
 export type NoteKind =
-  'setup' | 'steps' | 'merged' | 'committed' | 'setAside' | 'overlap' | 'hold' | 'sumUp' | 'concluded' | 'unresolved' | 'failed' | 'upkeep' | 'other'
+  | 'setup'
+  | 'steps'
+  | 'merged'
+  | 'committed'
+  | 'setAside'
+  | 'overlap'
+  | 'hold'
+  | 'sumUp'
+  | 'concluded'
+  | 'unresolved'
+  | 'failed'
+  | 'upkeep'
+  | 'paused'
+  | 'reminder'
+  | 'reminderDue'
+  | 'draft'
+  | 'installed'
+  | 'silent'
+  | 'session'
+  | 'cancelled'
+  | 'other'
 
 // A system note in the UI's words: what it is about, and who it is about,
 // the names the line brings forward.
@@ -154,6 +262,14 @@ export function systemNote(t: T, body: string): Note {
   }
   const failed = prepareFailed.exec(body.split('\n')[0])
   if (failed) return { kind: 'failed', text: t('setup.prepareFailed', { leader: failed[1], member: failed[2], error: failed[3] }), who: [] }
+  const paused = pauseText(t, body)
+  if (paused) return paused
+  const reminder = reminderText(t, body)
+  if (reminder) return reminder
+  const draft = draftText(t, body)
+  if (draft) return draft
+  const turn = turnText(t, body)
+  if (turn) return turn
   const upkeep = upkeepNote.exec(body)
   if (upkeep) {
     const note = t('upkeep.note', { who: upkeep[1], reason: t(upkeepReasons[upkeep[2]]), own: upkeep[3], uses: upkeep[4] })

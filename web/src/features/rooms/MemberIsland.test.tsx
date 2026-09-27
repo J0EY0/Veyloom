@@ -86,7 +86,57 @@ describe('MemberIsland', () => {
   })
 })
 
+describe('MemberIsland quiet', () => {
+  // A turn that showed no sign of life for a while goes before the others
+  // at work, and a person may cancel it, with a new session or without
+  // (docs/design.md 5.23.8).
+  it('puts a quiet turn first, with cancel and cancel with a new session', async () => {
+    const bodies: unknown[] = []
+    stubApi({ '/turns/x2/cancel': async (req: Request) => (bodies.push(await req.json()), new Response(null, { status: 202 })) })
+    const quiet = new Date(Date.now() - 12 * 60_000 - 5_000).toISOString()
+    renderWithProviders(
+      <MemberIsland
+        states={[
+          { member: member('a1', 'Busy'), status: 'working', turn: turn('x1', 't1', { status: 'running', ended_at: undefined }) },
+          { member: member('a2', 'Stuck'), status: 'working', turn: turn('x2', 't2', { status: 'running', ended_at: undefined, quiet_since: quiet }) },
+        ]}
+        onOpenThread={vi.fn()}
+        onOpenMembers={vi.fn()}
+      />,
+    )
+    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent('Stuck · 12 分钟没有动静')
+    expect(screen.getByRole('button', { name: /Stuck · 可能卡住/ })).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '取消' }))
+    await userEvent.click(screen.getByRole('button', { name: '取消并开新会话' }))
+    await waitFor(() => expect(bodies).toEqual([{}, { new_session: true }]))
+  })
+})
+
 describe('MemberIsland waiting', () => {
+  it('says why a paused member waits, and resumes it', async () => {
+    const at = new Date(Date.now() + 3_600_000)
+    let lifted = ''
+    stubApi({ '/pauses/p1': (req: Request) => ((lifted = req.method), new Response(null, { status: 204 })) })
+    renderWithProviders(
+      <MemberIsland
+        states={[
+          {
+            member: member('a1', 'Slow'),
+            status: 'paused',
+            pause: { id: 'p1', machine_id: 'w1', runtime: 'claude', reason: 'quota', detail: '', ends_at: at.toISOString(), created_at: '' },
+          },
+          { member: member('a2', 'Pi Tester'), status: 'idle' },
+        ]}
+        onOpenThread={vi.fn()}
+        onOpenMembers={vi.fn()}
+      />,
+    )
+    const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
+    expect(screen.getByRole('status')).toHaveTextContent(`Slow · 额度用完 · ${hhmm} 恢复`)
+    await userEvent.click(screen.getByRole('button', { name: '继续' }))
+    await waitFor(() => expect(lifted).toBe('DELETE'))
+  })
+
   it('puts the waiting member first with the two buttons', async () => {
     setCurrentUser({ id: 'u1', name: 'alice' })
     let posted: unknown

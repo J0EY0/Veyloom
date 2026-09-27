@@ -99,7 +99,7 @@ export function Composer({ roomId, roomName, threadId, hint, compact }: Composer
       await post.mutateAsync({
         user_id: user.id,
         body,
-        mentions: detectMentions(body, targets.all),
+        mentions: detectMentions(body, targets.all, targets.names.values()),
         ...(attachmentIds.length > 0 ? { attachment_ids: attachmentIds } : {}),
         ...(threadId ? { thread_id: threadId } : {}),
       })

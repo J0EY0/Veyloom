@@ -13,8 +13,9 @@ export interface RelayHold {
   thread_id: string
   trigger_message_id: string
   // idle: the last turns agents woke only talked; limit: the project's
-  // relay limit.
-  reason: 'idle' | 'limit'
+  // relay limit; people: only people wake members in the project, and a
+  // member's reminder came due.
+  reason: 'idle' | 'limit' | 'people'
   created_at: string
   continued_at?: string
 }

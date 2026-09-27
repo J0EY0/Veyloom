@@ -1,5 +1,5 @@
 import { useTurnApprovals } from '@/api/approvals'
-import { useTranscript } from '@/api/transcript'
+import { useTranscript, useTranscriptSoFar } from '@/api/transcript'
 import { useCancelTurn } from '@/api/turns'
 import type { Message, Turn } from '@/api/types'
 import { Shimmer } from '@/components/ai-elements/shimmer'
@@ -43,6 +43,9 @@ export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, 
   const approvals = useTurnApprovals(turn.id)
   const approvalByNote = new Map((approvals.data ?? []).flatMap((a) => (a.message_id ? [[a.message_id, a] as const] : [])))
   const live = useLiveTurn(running ? turn.id : undefined)
+  // What the turn did before the page listened is read in under the live
+  // events, so its steps are all counted.
+  useTranscriptSoFar(turn.id, first && running)
   const transcript = useTranscript(turn.id, first && !running)
   const cancel = useCancelTurn()
   const activity = running ? withApprovals(activityFromEvents(live?.events ?? []), approvals.data ?? []) : activityFromTranscript(transcript.data ?? [])
@@ -83,7 +86,7 @@ export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, 
           <Button
             variant="ghost"
             size="xs"
-            onClick={() => cancel.mutate(turn.id)}
+            onClick={() => cancel.mutate({ turnId: turn.id })}
             disabled={cancel.isPending}
             className="-mr-1.5 flex-none text-subtle hover:text-foreground"
           >

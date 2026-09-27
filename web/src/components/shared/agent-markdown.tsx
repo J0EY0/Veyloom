@@ -31,18 +31,21 @@ export function withMentionTags(text: string, mentions: Mention[] | null, names:
   })
   if (known.length === 0) return text
   const byName = new Map(known.map((m) => [m.name, m]))
-  // Longest first so "Codex Implementer B" is not eaten by "Codex Implementer".
+  // Every name competes for an @, longest first, so "Codex Implementer B"
+  // is not eaten by "Codex Implementer" even when only the latter is
+  // mentioned; a name the message does not mention stays text.
   const pattern = new RegExp(
-    `@(${[...byName.keys()]
+    `@(${[...new Set([...byName.keys(), ...names.values()])]
+      .filter((name) => name !== '')
       .sort((a, b) => b.length - a.length)
       .map(escape)
       .join('|')})`,
     'g',
   )
   return outsideCode(text, (prose) =>
-    prose.replace(pattern, (_match, name: string) => {
-      const m = byName.get(name) as Mention & { name: string }
-      return `<mention kind="${m.kind}" id="${m.id}">@${name}</mention>`
+    prose.replace(pattern, (match, name: string) => {
+      const m = byName.get(name)
+      return m ? `<mention kind="${m.kind}" id="${m.id}">@${name}</mention>` : match
     }),
   )
 }

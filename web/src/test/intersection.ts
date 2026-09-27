@@ -1,5 +1,6 @@
 // A controllable IntersectionObserver for jsdom, which has none. Tests
-// call intersectAll() to pretend every observed element scrolled into view.
+// call intersectAll() to pretend every observed element scrolled into view,
+// leaveAll() out of it.
 
 const instances = new Set<FakeIntersectionObserver>()
 
@@ -33,8 +34,8 @@ class FakeIntersectionObserver implements IntersectionObserver {
     return []
   }
 
-  fire() {
-    const entries = [...this.targets].map((target) => ({ target, isIntersecting: true }) as IntersectionObserverEntry)
+  fire(isIntersecting = true) {
+    const entries = [...this.targets].map((target) => ({ target, isIntersecting }) as IntersectionObserverEntry)
     if (entries.length > 0) {
       this.callback(entries, this)
     }
@@ -47,4 +48,9 @@ export function installIntersectionObserver() {
 
 export function intersectAll() {
   instances.forEach((observer) => observer.fire())
+}
+
+// leaveAll pretends every observed element scrolled far out of view.
+export function leaveAll() {
+  instances.forEach((observer) => observer.fire(false))
 }

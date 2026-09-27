@@ -1,4 +1,5 @@
 import { useDecideApproval } from '@/api/approvals'
+import { useLiftPause } from '@/api/pauses'
 import { AgentAvatar } from '@/components/shared/agent-avatar'
 import { StatusDot } from '@/components/shared/status-dot'
 import { UserAvatar } from '@/components/shared/user-avatar'
@@ -13,7 +14,8 @@ import { formatElapsed } from '@/lib/format'
 import { useLiveTurn } from '@/lib/liveTurns'
 import { useNow } from '@/lib/useNow'
 import { cn } from '@/lib/utils'
-import { statusLabelKey, statusTone } from './memberStatus'
+import { isQuiet, pauseLabel, statusLabel, toneOf } from './memberStatus'
+import { QuietLead } from './QuietLead'
 import type { MemberState } from './useMemberStates'
 import { useT } from '@/lib/i18n'
 import { toast } from 'sonner'
@@ -33,7 +35,12 @@ export interface MemberIslandProps {
 export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIslandProps) {
   const waiting = states.find((s) => s.status === 'waiting')
   const working = states.filter((s) => s.status === 'working')
-  const lead = working[0]
+  // One whose turn went quiet first: it may be stuck, and a person decides
+  // (docs/design.md 5.23.8).
+  const lead = working.find(isQuiet) ?? working[0]
+  const quiet = lead !== undefined && isQuiet(lead)
+  const paused = states.find((s) => s.status === 'paused')
+  const lift = useLiftPause()
   const now = useNow(lead !== undefined && waiting === undefined)
   const live = useLiveTurn(lead?.turn?.id)
   const user = useCurrentUser()
@@ -47,7 +54,7 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
       aria-label={t('island.label')}
       className={cn(
         'flex h-8 max-w-[min(34rem,50vw)] min-w-0 items-center gap-2.5 rounded-full border px-1 text-[0.78125rem] whitespace-nowrap',
-        waiting ? 'border-status-wait/40 bg-status-wait/8' : 'border-border',
+        waiting || quiet ? 'border-status-wait/40 bg-status-wait/8' : 'border-border',
       )}
     >
       <HoverCard openDelay={200} closeDelay={100}>
@@ -104,6 +111,8 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
             {t('common.allow')}
           </Button>
         </>
+      ) : quiet ? (
+        <QuietLead state={lead} now={now} />
       ) : lead?.turn ? (
         <span className="min-w-0 truncate pr-2 text-muted-foreground">
           <b className="font-medium text-foreground">{lead.member.display_name}</b>
@@ -121,6 +130,23 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
           <span className="tabular-nums">{formatElapsed(lead.turn.started_at, now)}</span>
           {working.length > 1 ? t('island.moreBusy', { n: working.length - 1 }) : ''}
         </span>
+      ) : paused?.pause ? (
+        // Held up by a pause (docs/design.md 5.23.3): why, until when, and
+        // the way on once a person has seen to it.
+        <>
+          <span className="min-w-0 truncate text-muted-foreground">
+            <b className="font-medium text-foreground">{paused.member.display_name}</b> · {pauseLabel(t, paused.pause)}
+          </span>
+          <Button
+            size="xs"
+            variant="outline"
+            className="mr-1 rounded-full px-3"
+            disabled={lift.isPending}
+            onClick={() => lift.mutate(paused.pause!.id, { onError: (err) => toast.error(errorText(err)) })}
+          >
+            {t('pause.resume')}
+          </Button>
+        </>
       ) : (
         <Button
           variant="ghost"
@@ -138,14 +164,15 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
 
 function Face({ state, first, onOpenThread }: { state: MemberState; first: boolean; onOpenThread: (id: string) => void }) {
   const t = useT()
-  const label = `${state.member.display_name} · ${t(statusLabelKey(state))}`
+  const label = `${state.member.display_name} · ${statusLabel(t, state)}`
+  const quiet = isQuiet(state)
   const ring =
-    state.status === 'working'
+    state.status === 'working' && !quiet
       ? 'shadow-[0_0_0_2px_var(--background),0_0_0_3.5px_var(--status-run)]'
-      : state.status === 'waiting'
+      : state.status === 'waiting' || state.status === 'paused' || quiet
         ? 'shadow-[0_0_0_2px_var(--background),0_0_0_3.5px_var(--status-wait)]'
         : 'shadow-[0_0_0_2px_var(--background)]'
-  const dim = state.status === 'idle' ? 'opacity-45' : state.status === 'working' || state.status === 'waiting' ? '' : 'opacity-30'
+  const dim = state.status === 'idle' ? 'opacity-45' : state.status === 'working' || state.status === 'waiting' || state.status === 'paused' ? '' : 'opacity-30'
   const avatar = (
     <span className={cn('relative inline-flex', !first && '-ml-1.5')}>
       {state.look ? (
@@ -153,7 +180,7 @@ function Face({ state, first, onOpenThread }: { state: MemberState; first: boole
       ) : (
         <UserAvatar name={state.member.display_name} className={cn(ring, dim)} />
       )}
-      {state.status === 'working' ? (
+      {state.status === 'working' && !quiet ? (
         <span aria-hidden="true" className="absolute -inset-1.5 animate-ripple rounded-full border-[1.5px] border-status-run" />
       ) : null}
     </span>
@@ -198,8 +225,8 @@ function MemberRow({ state, onOpenThread }: { state: MemberState; onOpenThread: 
           </span>
         ) : null}
         <span className="inline-flex flex-none items-center gap-1.5 text-xs text-muted-foreground">
-          <StatusDot tone={statusTone[state.status]} />
-          {t(statusLabelKey(state))}
+          <StatusDot tone={toneOf(state)} />
+          {statusLabel(t, state)}
         </span>
       </ItemActions>
     </>

@@ -53,16 +53,31 @@ export function useMentionTargets(roomId: string): MentionTargets {
 }
 
 // detectMentions finds every target whose "@Name" appears in body, so
-// what is sent as structure always matches what was typed.
-export function detectMentions(body: string, targets: MentionTarget[]): Mention[] {
+// what is sent as structure always matches what was typed. At each @ the
+// longest name that follows is the one meant, as the hub reads agents: with
+// Coder and Coder2 in the room "@Coder2" names Coder2 alone. names are the
+// others an @ may mean, such as a member taken out of the project.
+export function detectMentions(body: string, targets: MentionTarget[], names: Iterable<string> = []): Mention[] {
+  const meant = namedAt(body, [...targets.map((target) => target.name), ...names])
   const seen = new Set<string>()
   const out: Mention[] = []
   for (const target of targets) {
     const key = `${target.mention.kind}:${target.mention.id}`
-    if (!seen.has(key) && body.includes(`@${target.name}`)) {
+    if (!seen.has(key) && meant.has(target.name)) {
       seen.add(key)
       out.push(target.mention)
     }
   }
   return out
+}
+
+// namedAt is the names text @-mentions, the longest one after each @.
+export function namedAt(text: string, names: string[]): Set<string> {
+  const longest = [...new Set(names)].filter((name) => name !== '').sort((a, b) => b.length - a.length)
+  const meant = new Set<string>()
+  for (let at = text.indexOf('@'); at >= 0; at = text.indexOf('@', at + 1)) {
+    const name = longest.find((n) => text.startsWith(n, at + 1))
+    if (name !== undefined) meant.add(name)
+  }
+  return meant
 }

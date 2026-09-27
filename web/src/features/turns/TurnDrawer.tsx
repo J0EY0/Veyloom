@@ -1,7 +1,6 @@
 import { useRoomMembers } from '@/api/agents'
-import { useTranscript } from '@/api/transcript'
+import { useTranscript, useTranscriptSoFar } from '@/api/transcript'
 import { useCancelTurn, useTurn } from '@/api/turns'
-import type { TranscriptLine } from '@/api/types'
 import { StatusDot, type StatusTone } from '@/components/shared/status-dot'
 import { TokenCount } from '@/components/shared/token-count'
 import { Button } from '@/components/ui/button'
@@ -11,7 +10,11 @@ import { Spinner } from '@/components/ui/spinner'
 import { formatDuration, formatFullTime } from '@/lib/format'
 import { useLiveTurn } from '@/lib/liveTurns'
 import { totalTokens } from '@/lib/tokens'
+import { useNow } from '@/lib/useNow'
+import { toast } from 'sonner'
+import { quietFor } from './quiet'
 import { TurnEventRow } from './TurnEventRow'
+import { drawerLines, withLive } from './lines'
 import { useT } from '@/lib/i18n'
 import type { MessageKey } from '@/i18n/zh-CN'
 import { errorText } from '@/api/errorText'
@@ -32,8 +35,9 @@ const statusKey = {
 } as const satisfies Record<string, { tone: StatusTone; key: MessageKey }>
 
 // Everything one turn did, event by event, in a sheet over the room
-// (docs/webui.md §4.6). A running turn shows what has arrived since the
-// room was opened; a finished one reads its transcript.
+// (docs/webui.md §4.6). A running turn shows its transcript as far as it
+// is written, and what arrives after it live; a finished one reads its
+// transcript whole.
 export function TurnDrawer({ roomId, turnId, onClose }: TurnDrawerProps) {
   const t = useT()
   return (
@@ -51,8 +55,10 @@ function DrawerBody({ roomId, turnId }: { roomId: string; turnId: string }) {
   const live = useLiveTurn(turnId)
   const running = turn.data?.status === 'running'
   const transcript = useTranscript(turnId, turn.data !== undefined && !running)
+  const soFar = useTranscriptSoFar(turnId, running)
   const cancel = useCancelTurn()
   const t = useT()
+  const now = useNow(running && turn.data?.quiet_since !== undefined, 30_000)
 
   if (turn.isPending) {
     return (
@@ -84,10 +90,7 @@ function DrawerBody({ roomId, turnId }: { roomId: string; turnId: string }) {
   const member = members.data?.find((m) => m.id === record.member_id)
   const known = record.status in statusKey ? statusKey[record.status as keyof typeof statusKey] : undefined
   const status = { tone: known?.tone ?? ('idle' as StatusTone), text: known ? t(known.key) : record.status }
-  // The session a run used says nothing to a person reading the record.
-  const lines: TranscriptLine[] = (
-    running ? (live?.events ?? []).map((event) => ({ kind: 'event' as const, at: event.at, event })) : (transcript.data ?? [])
-  ).filter((line) => line.event?.kind !== 'session')
+  const lines = drawerLines(running ? withLive(soFar.data ?? [], live?.events ?? []) : (transcript.data ?? []))
 
   return (
     <>
@@ -103,11 +106,24 @@ function DrawerBody({ roomId, turnId }: { roomId: string; turnId: string }) {
         <span>{t('drawer.startedAt', { time: formatFullTime(record.started_at) })}</span>
         {record.ended_at ? <span>{t('drawer.took', { duration: formatDuration(record.started_at, record.ended_at) })}</span> : null}
         {totalTokens(record.usage) > 0 ? <TokenCount usage={record.usage} /> : null}
+        {running && record.quiet_since ? <span className="text-status-wait">{quietFor(t, record.quiet_since, now)}</span> : null}
         <span className="grow" />
         {running ? (
-          <Button variant="outline" size="xs" onClick={() => cancel.mutate(turnId)} disabled={cancel.isPending}>
-            {cancel.isPending ? t('turn.cancelling') : t('drawer.cancel')}
-          </Button>
+          <>
+            <Button variant="outline" size="xs" onClick={() => cancel.mutate({ turnId })} disabled={cancel.isPending}>
+              {cancel.isPending ? t('turn.cancelling') : t('drawer.cancel')}
+            </Button>
+            <Button
+              variant="outline"
+              size="xs"
+              disabled={cancel.isPending}
+              onClick={() =>
+                cancel.mutate({ turnId, newSession: true }, { onSuccess: () => toast(t('member.newSessionDone', { name: member?.display_name ?? 'agent' })) })
+              }
+            >
+              {t('turn.cancelFresh')}
+            </Button>
+          </>
         ) : null}
       </div>
       {record.error ? <p className="px-4 pb-2 text-[0.78125rem] text-status-fail">{turnErrorText(record.error)}</p> : null}

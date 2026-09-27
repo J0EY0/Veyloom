@@ -2,7 +2,12 @@
 // structs in internal/store and internal/api; change both together.
 
 import type { FormAnswer, QuestionAnswers } from './types.approvals'
+import type { Pause } from './types.agents'
+import type { TurnEvent } from './types.turns'
+import type { Attachment } from './types.attachments'
 import type { Project } from './types.projects'
+import type { Reminder } from './reminders'
+import type { Draft } from './drafts'
 
 export type RoomKind = 'main' | 'topic'
 
@@ -71,21 +76,6 @@ export type MentionKind = 'user' | 'agent'
 export interface Mention {
   kind: MentionKind
   id: string
-}
-
-// A file attached to a message. The bytes are at attachmentUrl(id).
-export interface Attachment {
-  id: string
-  room_id: string
-  message_id?: string
-  filename: string
-  media_type: string
-  size: number
-  created_at: string
-}
-
-export interface AttachmentResponse {
-  attachment: Attachment
 }
 
 export interface Message {
@@ -173,6 +163,9 @@ export interface Turn {
   trusted_at?: string
   started_at: string
   ended_at?: string
+  // A running turn that showed no sign of life for a while, waiting on no
+  // person: since when (docs/design.md 5.23.8). The hub's to say.
+  quiet_since?: string
 }
 
 // setup: the project's leader setting it up for worktrees (docs/design.md 5.21).
@@ -265,34 +258,6 @@ export interface ThreadResponse {
   work?: WorkSummary
 }
 
-// 'session' is only in transcripts: the hub keeps it to itself instead of
-// sending it to the room.
-export type TurnEventKind =
-  'status' | 'text' | 'tool_call' | 'tool_result' | 'file_changed' | 'error' | 'approval_request' | 'notice' | 'session' | 'compaction'
-
-// One runtime event of a running turn; the fields present depend on kind.
-export interface TurnEvent {
-  kind: TurnEventKind
-  at?: string
-  text?: string
-  tool?: string
-  input?: string
-  path?: string
-  session_ref?: string
-  // On 'compaction': 'start', 'end' or 'failed'.
-  phase?: string
-  approval_id?: string
-  // On 'approval_request': what is asked beyond permission ('question',
-  // 'form', 'link'), and for a request the runtime settled itself, who
-  // decided, the verdict and the reviewer's findings; text says why.
-  approval_kind?: string
-  reviewer?: string
-  verdict?: string
-  detail?: unknown
-  // On 'notice': 'info', 'warning' or 'error'.
-  level?: string
-}
-
 export interface TranscriptApproval {
   id: string
   request_id: string
@@ -304,8 +269,10 @@ export interface TranscriptApproval {
 // One line of a turn's JSONL transcript (internal/hub/transcript.go).
 export interface TranscriptLine {
   // 'restart': the session would not resume and the turn was run again in a
-  // new one; error is what the first run failed with.
-  kind: 'start' | 'restart' | 'event' | 'approval_request' | 'approval_decision' | 'done'
+  // new one; error is what the first run failed with. 'reply_asked': the
+  // turn said nothing in the chat and was asked for its reply, in the same
+  // session (docs/design.md 5.24).
+  kind: 'start' | 'restart' | 'reply_asked' | 'event' | 'approval_request' | 'approval_decision' | 'done'
   at?: string
   turn_id?: string
   runtime?: string
@@ -313,9 +280,11 @@ export interface TranscriptLine {
   approval?: TranscriptApproval
   result?: { output: string; session_ref?: string; usage?: TokenUsage; failure?: string }
   error?: string
-  // On start and restart: the run's spec, prompt being the brief the hub
-  // composed for it.
-  spec?: { prompt?: string }
+  // On start, restart and reply_asked: the run's spec, prompt being the
+  // brief the hub composed for it (or what it was asked) and system_prompt
+  // what the run was given as its system prompt: the role card and, for a
+  // runtime that takes one with every run, the standing instructions.
+  spec?: { prompt?: string; system_prompt?: string }
 }
 
 export interface TurnResponse {
@@ -338,6 +307,16 @@ export type RoomEvent =
   | (EventBase & { kind: 'wiki_changed'; project_id?: string; scope?: 'project' | 'library' })
   // The person read some of their inbox, here or in another tab.
   | (EventBase & { kind: 'inbox_read'; user_id: string })
+  // A pause came into effect, or was lifted (docs/design.md 5.23.3).
+  | (EventBase & { kind: 'pause'; pause: Pause; lifted?: boolean; user_id?: string })
+  // A member's reminder was set, came due, or was taken back (5.23.4).
+  | (EventBase & { kind: 'reminder'; reminder: Reminder })
+  // A draft for a person to run was drafted, run, turned down or replaced
+  // (5.23.5).
+  | (EventBase & { kind: 'draft'; draft: Draft })
+  // A running turn went quiet, since quiet_since, or stirred again, without
+  // it (5.23.8).
+  | (EventBase & { kind: 'turn_quiet'; turn_id: string; quiet_since?: string })
 
 export type ApprovalStatus = 'pending' | 'allowed' | 'denied' | 'expired' | 'cancelled'
 
@@ -421,9 +400,11 @@ export interface DecideApprovalRequest {
 }
 
 export * from './types.agents'
+export * from './types.attachments'
 export * from './types.inbox'
 export * from './types.projects'
 export * from './types.branches'
 export * from './types.approvals'
 export * from './types.work'
 export * from './types.wiki'
+export * from './types.turns'

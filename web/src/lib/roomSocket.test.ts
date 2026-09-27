@@ -50,6 +50,42 @@ describe('connectRoomEvents', () => {
     expect(onStatus).toHaveBeenLastCalledWith('open')
   })
 
+  // A stream that died without closing says nothing, not even the hub's
+  // heartbeat: after a minute it is dropped and opened again (docs/design.md
+  // 5.23.9).
+  it('drops a stream that says nothing for a minute, and opens it again', () => {
+    const onStatus = vi.fn()
+    const onResync = vi.fn()
+    connectRoomEvents('r1', { onEvent: vi.fn(), onResync, onStatus })
+    const dead = FakeWebSocket.last()
+    dead.open()
+    vi.advanceTimersByTime(59_000)
+    expect(dead.closed).toBe(false)
+    vi.advanceTimersByTime(1_000)
+    expect(dead.closed).toBe(true)
+    expect(onStatus).toHaveBeenLastCalledWith('reconnecting')
+    // Its close coming late changes nothing.
+    dead.drop()
+    vi.advanceTimersByTime(1_000)
+    expect(FakeWebSocket.instances).toHaveLength(2)
+    FakeWebSocket.last().open()
+    expect(onResync).toHaveBeenCalledTimes(2)
+  })
+
+  it('keeps a stream the heartbeats say is alive, and tells no one of them', () => {
+    const onEvent = vi.fn()
+    connectRoomEvents('r1', { onEvent, onResync: vi.fn() })
+    const ws = FakeWebSocket.last()
+    ws.open()
+    for (let i = 0; i < 8; i++) {
+      vi.advanceTimersByTime(25_000)
+      ws.frame({ kind: 'heartbeat', at: '' })
+    }
+    expect(ws.closed).toBe(false)
+    expect(FakeWebSocket.instances).toHaveLength(1)
+    expect(onEvent).not.toHaveBeenCalled()
+  })
+
   it('stays closed once closed', () => {
     const socket = connectRoomEvents('r1', { onEvent: vi.fn(), onResync: vi.fn() })
     const ws = FakeWebSocket.last()

@@ -2,10 +2,10 @@ import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 import { setCurrentUser } from '@/lib/currentUser'
-import { branches, renderView, stub } from './branchesTesting'
+import { branches, renderView, rowOf, stub } from './branchesTesting'
 
 // The project's checkout, and merges it stops (docs/design.md 5.21).
-describe('the checkout in the branch tab', () => {
+describe('the checkout in the chat’s info', () => {
   beforeEach(() => setCurrentUser({ id: 'u1', name: 'alice' }))
   afterEach(() => setCurrentUser(null))
 
@@ -19,7 +19,8 @@ describe('the checkout in the branch tab', () => {
     })
     const user = userEvent.setup()
     renderView()
-    await user.click(await screen.findByRole('button', { name: '提交…' }))
+    const checkout = await screen.findByRole('region', { name: '仓库目录里有 1 个文件没提交' })
+    await user.click(within(checkout).getByRole('button', { name: '提交…' }))
     const dialog = await screen.findByRole('dialog', { name: '提交仓库目录的改动' })
     expect(within(dialog).getByRole('checkbox', { name: /notes\.md/ })).toBeChecked()
     await user.click(within(dialog).getByRole('button', { name: '提交' }))
@@ -29,7 +30,16 @@ describe('the checkout in the branch tab', () => {
     await waitFor(() => expect(committed).toEqual({ message: 'Write the notes down', paths: ['notes.md'] }))
   })
 
-  it('says why a merge was refused apart from its message, and what to do', async () => {
+  it('reads what the checkout changed', async () => {
+    stub({ '/projects/p1/checkout/diff': { patch: '--- a/notes.md\n+++ b/notes.md\n' } })
+    const user = userEvent.setup()
+    renderView()
+    const checkout = await screen.findByRole('region', { name: '仓库目录里有 1 个文件没提交' })
+    await user.click(within(checkout).getByRole('button', { name: '看改动' }))
+    expect(await screen.findByRole('dialog', { name: '仓库目录里没提交的改动' })).toBeInTheDocument()
+  })
+
+  it('says why a merge was refused apart from its message, and goes on to commit what is in the way', async () => {
     stub({
       '/members/m1/merge': () =>
         new Response(JSON.stringify({ error: 'changes in the way', code: 'checkoutChanged', params: { files: 'notes.md\nsrc/api.ts' } }), {
@@ -39,8 +49,7 @@ describe('the checkout in the branch tab', () => {
     })
     const user = userEvent.setup()
     renderView()
-    const coder = (await screen.findByText('Coder')).closest('[data-slot="item"]') as HTMLElement
-    await user.click(within(coder).getByRole('button', { name: '合并到主线' }))
+    await user.click(await within(await rowOf('Coder')).findByRole('button', { name: '合并' }))
     const dialog = await screen.findByRole('dialog', { name: '把 Coder 的改动合并到 main' })
     await user.click(within(dialog).getByRole('button', { name: '合并到主线' }))
     const alert = await within(dialog).findByRole('alert')
@@ -49,10 +58,12 @@ describe('the checkout in the branch tab', () => {
     // The message was not what was wrong: its field is not marked.
     expect(within(dialog).getByLabelText('提交说明').closest('[data-slot="field"]')).not.toHaveAttribute('data-invalid')
     await user.click(within(alert).getByRole('button', { name: '提交仓库目录的改动…' }))
+    // One dialog at a time: the merge closes, the commit opens.
     expect(await screen.findByRole('dialog', { name: '提交仓库目录的改动' })).toBeInTheDocument()
+    expect(screen.queryByRole('dialog', { name: '把 Coder 的改动合并到 main' })).toBeNull()
   })
 
-  it("shows each branch's own commits, and whose work it has in full", async () => {
+  it('says whose work a branch has in full, and drafts the merge from its commits', async () => {
     const [coder, tester] = branches.members
     stub(
       {},
@@ -66,6 +77,7 @@ describe('the checkout in the branch tab', () => {
             ...tester,
             busy: false,
             contains: ['m1'],
+            draft: 'Add comprehensive tests for priority feature',
             status: {
               ...tester.status!,
               commits: [
@@ -77,15 +89,13 @@ describe('the checkout in the branch tab', () => {
         ],
       },
     )
+    const user = userEvent.setup()
     renderView()
-    const rows = await screen.findByRole('region', { name: '员工的分支' })
-    const second = within(rows).getByText('Tester').closest('[data-slot="item"]') as HTMLElement
-    // The latest first.
-    expect(
-      within(second)
-        .getAllByRole('listitem')
-        .map((item) => item.textContent),
-    ).toEqual(['f36ace9Add comprehensive tests for priority feature', '823b7f5Add priority to todo items'])
-    expect(second).toHaveTextContent('已包含 Coder 的改动，先合并哪个都不会冲突')
+    const second = await rowOf('Tester')
+    await waitFor(() => expect(second).toHaveTextContent('已包含 Coder 的改动，先合并哪个都不会冲突'))
+    await user.click(within(second).getByRole('button', { name: '合并' }))
+    const dialog = await screen.findByRole('dialog', { name: '把 Tester 的改动合并到 main' })
+    expect(within(dialog).getByLabelText('提交说明')).toHaveValue('Add comprehensive tests for priority feature')
+    expect(within(dialog).getByText('取自 Tester 的提交说明，可以改')).toBeInTheDocument()
   })
 })

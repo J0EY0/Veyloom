@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { api } from './client'
 import { refresh } from './refresh'
+import { noWikiReadOnly, type RuntimeTraits } from './runtimes'
 import type { Agent, Member, UpkeepResponse, UpkeepStatus } from './types'
 
 // A project's wiki maintainer (docs/design.md 5.12): how its upkeep
@@ -42,11 +43,11 @@ export function invalidateUpkeep(client: QueryClient) {
   refresh(client, { queryKey: upkeepKeys.all })
 }
 
-// readOnlyCodex says a member would keep no wiki: Codex in a read-only
-// sandbox reads the turns but writes nothing it is not told to in so many
-// words (docs/design.md 5.12, tried 2026-09-22).
-export function readOnlyCodex(member: Member | undefined, agents: Agent[] | undefined): boolean {
+// keepsNoWiki says a member would keep no wiki, its runtime writing
+// nothing read-only it is not told to in so many words (docs/design.md
+// 5.12): the runtime's name then, for saying so.
+export function keepsNoWiki(member: Member | undefined, agents: Agent[] | undefined, traits: Record<string, RuntimeTraits> | undefined): string | undefined {
   const agent = agents?.find((a) => a.id === member?.agent_id)
-  if (!member || !agent) return false
-  return agent.runtime === 'codex' && (member.permission_preset || agent.permission_preset) === 'read_only'
+  if (!member || !agent) return undefined
+  return noWikiReadOnly(traits, agent.runtime, member.permission_preset || agent.permission_preset) ? agent.runtime : undefined
 }

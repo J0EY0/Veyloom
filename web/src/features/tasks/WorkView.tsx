@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import { ArrowLeftIcon, GitMergeIcon, MessageCircleIcon, RotateCcwIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import { useRoomMembers } from '@/api/agents'
@@ -6,13 +6,14 @@ import { errorText } from '@/api/errorText'
 import { useProject } from '@/api/projects'
 import { useRoom } from '@/api/rooms'
 import type { Work, WorkEvent } from '@/api/types'
-import { useWork } from '@/api/work'
+import { useRoomTasks, useWork } from '@/api/work'
 import { AgentAvatar } from '@/components/shared/agent-avatar'
 import { StatusMark } from '@/components/shared/status-mark'
 import { UserAvatar } from '@/components/shared/user-avatar'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
+import { BranchDialog, type BranchDialogState } from '@/features/branches/BranchDialog'
 import { useMentionTargets } from '@/features/rooms/useMentionTargets'
 import { formatCompactCount, formatDay, formatHour, formatSpan } from '@/lib/format'
 import { useT } from '@/lib/i18n'
@@ -29,12 +30,17 @@ export interface WorkViewProps {
 
 // WorkView is a piece of work's page (docs/webui.md 4.20): what was asked,
 // a row of figures, and its turns as a waterfall, with what became of the
-// branches it changed below.
+// branches it changed below. Work still waiting on a member's branch is
+// merged from here too (docs/design.md 5.21).
 export function WorkView({ roomId, chain, onOpenThread }: WorkViewProps) {
   const t = useT()
   const work = useWork(chain)
   const { names, looks } = useMentionTargets(roomId)
   const now = useNow(work.data?.running ?? false)
+  const tasks = useRoomTasks(roomId)
+  const [dialog, setDialog] = useState<BranchDialogState>()
+  // The members whose branches hold some of this work, not merged yet.
+  const toMerge = [...new Set((tasks.data ?? []).filter((task) => task.chain === chain && task.state === 'merge').map((task) => task.member_id))]
   if (work.isPending) {
     return (
       <div role="status" aria-label={t('common.loading')} className="flex flex-col gap-4 px-6 pt-4">
@@ -68,6 +74,15 @@ export function WorkView({ roomId, chain, onOpenThread }: WorkViewProps) {
             <span className="font-mono">#{w.thread_number}</span>
           </nav>
           <span className="grow" />
+          {toMerge.map((memberId) => {
+            const name = names.get(memberId) ?? memberId
+            return (
+              <Button key={memberId} variant="outline" size="sm" onClick={() => setDialog({ kind: 'merge', memberId, name })}>
+                <GitMergeIcon aria-hidden="true" className="text-status-merge" />
+                {t('work.mergeOf', { name })}
+              </Button>
+            )
+          })}
           <Button variant="outline" size="sm" onClick={() => onOpenThread(w.thread_id)} data-opens-panel>
             <MessageCircleIcon aria-hidden="true" className="text-subtle" />
             {t('work.openTopic', { n: w.thread_number })}
@@ -94,6 +109,7 @@ export function WorkView({ roomId, chain, onOpenThread }: WorkViewProps) {
           ) : null}
         </section>
       </div>
+      <BranchDialog roomId={roomId} state={dialog} onChange={setDialog} />
     </div>
   )
 }

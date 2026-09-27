@@ -1,5 +1,6 @@
 import { useCallback } from 'react'
 import { useReactFlow, useStore, useStoreApi, type FitViewOptions } from '@xyflow/react'
+import { rootRem } from '@/lib/rem'
 
 // Where the card about the node in focus goes (docs/webui.md 4.14): on the
 // right of the canvas, 20rem and its margins, when the canvas is wide
@@ -8,12 +9,6 @@ import { useReactFlow, useStore, useStoreApi, type FitViewOptions } from '@xyflo
 const cardRem = 23
 const sideCardFrom = 44
 const underCard = 0.5
-
-// rootRem is the size of a rem in pixels: the interface size setting sets
-// it.
-export function rootRem(): number {
-  return parseFloat(getComputedStyle(document.documentElement).fontSize) || 16
-}
 
 function narrowCanvas(width: number): boolean {
   return width < sideCardFrom * rootRem()

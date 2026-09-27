@@ -3,7 +3,9 @@ import { toast } from 'sonner'
 import { useAgents, useRoomMembers } from '@/api/agents'
 import { errorText } from '@/api/errorText'
 import { useProject, useUpdateProject } from '@/api/projects'
-import { readOnlyCodex } from '@/api/upkeep'
+import { keepsNoWiki } from '@/api/upkeep'
+import { useRuntimeTraits } from '@/api/runtimes'
+import { runtimeName } from '@/lib/runtimes'
 import { Button } from '@/components/ui/button'
 import { byLeader, KeeperSelect } from '@/features/projects/MaintainerFields'
 import { useT } from '@/lib/i18n'
@@ -17,11 +19,13 @@ export function OfferControls({ projectId, roomId }: { projectId: string; roomId
   const project = useProject(projectId)
   const members = useRoomMembers(roomId)
   const agents = useAgents()
+  const traits = useRuntimeTraits()
   const update = useUpdateProject(projectId)
   const [picked, setPicked] = useState(byLeader)
   const candidates = (members.data ?? []).filter((member) => member.enabled)
   const leader = (members.data ?? []).find((member) => member.id === project?.leader_id)
   const keeper = picked === byLeader ? leader : candidates.find((m) => m.id === picked)
+  const noWiki = keepsNoWiki(keeper, agents.data, traits.data)
 
   function enable() {
     if (!keeper) return
@@ -57,7 +61,7 @@ export function OfferControls({ projectId, roomId }: { projectId: string; roomId
           {t('maintainer.decline')}
         </Button>
       </div>
-      {readOnlyCodex(keeper, agents.data) ? <p className="text-xs text-status-wait">{t('maintainer.readOnlyCodex')}</p> : null}
+      {noWiki ? <p className="text-xs text-status-wait">{t('maintainer.readOnlyNoWiki', { runtime: runtimeName(noWiki) })}</p> : null}
     </>
   )
 }

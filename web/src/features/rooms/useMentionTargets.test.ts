@@ -22,6 +22,26 @@ describe('detectMentions', () => {
   it('ignores names without an @', () => {
     expect(detectMentions('Pi Tester 说得对', targets)).toEqual([])
   })
+
+  it('takes the longest name after each @', () => {
+    const coders: MentionTarget[] = [
+      { mention: { kind: 'agent', id: 'c1' }, name: 'Coder' },
+      { mention: { kind: 'agent', id: 'c2' }, name: 'Coder2' },
+    ]
+    expect(detectMentions('@Coder2 看一下', coders)).toEqual([{ kind: 'agent', id: 'c2' }])
+    expect(detectMentions('@Coder2 和 @Coder', coders)).toEqual([
+      { kind: 'agent', id: 'c1' },
+      { kind: 'agent', id: 'c2' },
+    ])
+    // A name runs on into the words after it.
+    expect(detectMentions('@Coder请看', coders)).toEqual([{ kind: 'agent', id: 'c1' }])
+  })
+
+  it('leaves a name to its owner though no one can mention them', () => {
+    const coder: MentionTarget[] = [{ mention: { kind: 'agent', id: 'c1' }, name: 'Coder' }]
+    expect(detectMentions('@Coder2 看一下', coder, ['Coder', 'Coder2'])).toEqual([])
+    expect(detectMentions('@Coder2 看一下', coder)).toEqual([{ kind: 'agent', id: 'c1' }])
+  })
 })
 
 describe('useMentionTargets', () => {

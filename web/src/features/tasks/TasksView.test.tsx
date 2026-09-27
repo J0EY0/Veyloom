@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { Member, Task } from '@/api/types'
 import { stubApi } from '@/test/fetch'
-import { user } from '@/test/fixtures'
+import { project, room, user } from '@/test/fixtures'
 import { renderWithProviders } from '@/test/render'
 import { TasksView } from './TasksView'
 
@@ -71,6 +71,25 @@ function stub(list: Task[] = tasks) {
     '/rooms/r1/members': { members: [member('lead', 'Lead'), member('coder', 'Coder'), member('tester', 'Tester')] },
     '/users': { users: [user('u1', 'alice')] },
     '/agents': { agents: [] },
+    '/rooms/r1': { room: room('r1', 'p1', 'main') },
+    '/projects': { projects: [project('p1', 'App', '/src/app')] },
+    '/projects/p1/branches': {
+      branches: {
+        main: { repo_path: '/src/app', git: true, branch: 'main' },
+        members: [
+          {
+            member_id: 'tester',
+            name: 'Tester',
+            branch: 'veyloom/tester',
+            dir: '/wt/app/tester',
+            prepared: true,
+            busy: false,
+            draft: 'Test the tags',
+            status: { branch: 'veyloom/tester', ahead: 1, behind: 0, uncommitted: 0, files: [{ path: 'tags_test.go', status: 'A', added: 20, deleted: 0 }] },
+          },
+        ],
+      },
+    },
   })
 }
 
@@ -104,11 +123,15 @@ describe('TasksView', () => {
     const part = within(running).getByRole('link', { name: 'Add the tag table' }).closest('article')!
     expect(part).toHaveTextContent('属于Add tags')
 
-    // A request waiting on a person opens its topic; work to merge goes to
-    // the branches.
+    // A request waiting on a person opens its topic; work to merge is
+    // merged right there, the work on the branch named.
     await userEvent.click(within(running).getByRole('button', { name: '待审批' }))
     expect(onOpenThread).toHaveBeenCalledWith('t-w1')
-    expect(within(merge).getByRole('link', { name: '合并' })).toHaveAttribute('href', '/rooms/r1/branches')
+    await userEvent.click(within(merge).getByRole('button', { name: '合并' }))
+    const dialog = await screen.findByRole('dialog', { name: '把 Tester 的改动合并到 main' })
+    expect(within(dialog).getByText('veyloom/tester 上是这 1 件事的改动，合并时压成一个提交')).toBeInTheDocument()
+    expect(within(dialog).getByText('Test the tags', { selector: 'li span' })).toBeInTheDocument()
+    await userEvent.keyboard('{Escape}')
 
     // Done cards say what came of them: a commit, an archive, a page.
     expect(within(done).getByRole('link', { name: 'Merged work' }).closest('article')).toHaveTextContent('abcdef1')

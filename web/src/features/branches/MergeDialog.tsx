@@ -1,19 +1,22 @@
 import { useId, useRef, useState, type FormEvent } from 'react'
-import { CircleAlertIcon } from 'lucide-react'
+import { CircleAlertIcon, TriangleAlertIcon } from 'lucide-react'
 import { toast } from 'sonner'
-import { useMergeMember } from '@/api/branches'
 import { ApiError } from '@/api/client'
 import { errorText } from '@/api/errorText'
-import type { MemberBranch } from '@/api/types'
+import type { MemberBranch, Task } from '@/api/types'
+import { StatusMark } from '@/components/shared/status-mark'
 import { Button } from '@/components/ui/button'
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Textarea } from '@/components/ui/textarea'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { useT } from '@/lib/i18n'
 import { Conflicts } from './Conflicts'
+import { DiffDialog } from './DiffDialog'
+import { useLandWork } from './landWork'
 import { leftOutAtFirst, MergeFiles } from './MergeFiles'
+import type { MemberOverlap } from './overlaps'
 
 export interface MergeDialogProps {
   roomId: string
@@ -25,6 +28,14 @@ export interface MergeDialogProps {
   // the way: read them, or commit them.
   onCheckoutDiff?: () => void
   onCommitCheckout?: () => void
+  // The pieces of work waiting on the branch: a worktree is a member's, so
+  // one branch can hold several.
+  works?: Task[]
+  // Files other members changed too.
+  overlaps?: MemberOverlap[]
+  // The draft a member made of the merge (docs/design.md 5.23.5): its
+  // message comes first, and merging runs it.
+  draft?: { id: string; message: string; by: string }
 }
 
 // MergeDialog puts a member's work on the main line as one commit
@@ -34,10 +45,12 @@ export interface MergeDialogProps {
 // that conflicts with the main line changes nothing; the conflicts are
 // listed and handed to the member. A merge refused says why in words and
 // what to do, apart from the message, which was not what was wrong.
-export function MergeDialog({ roomId, member, branch, onClose, onCheckoutDiff, onCommitCheckout }: MergeDialogProps) {
+export function MergeDialog({ roomId, member, branch, onClose, onCheckoutDiff, onCommitCheckout, works = [], overlaps = [], draft }: MergeDialogProps) {
   const t = useT()
   const id = useId()
-  const merge = useMergeMember()
+  const merge = useLandWork(draft?.id)
+  // The patch, read over the dialog without losing the message.
+  const [diffing, setDiffing] = useState(false)
   const [error, setError] = useState<string>()
   const [refused, setRefused] = useState<{ text: string; inTheWay: boolean }>()
   const [conflicts, setConflicts] = useState<string[]>()
@@ -68,7 +81,7 @@ export function MergeDialog({ roomId, member, branch, onClose, onCheckoutDiff, o
     }
     setError(undefined)
     setRefused(undefined)
-    merge.mutate(
+    merge.land(
       { memberId: member.member_id, message, leave: [...leave] },
       {
         onSuccess: (result) => {
@@ -100,7 +113,25 @@ export function MergeDialog({ roomId, member, branch, onClose, onCheckoutDiff, o
       >
         <DialogHeader>
           <DialogTitle>{t('branches.mergeTitle', { name: member.name, branch })}</DialogTitle>
+          {works.length > 0 ? <DialogDescription>{t('branches.works', { branch: member.branch ?? '', n: works.length })}</DialogDescription> : null}
         </DialogHeader>
+        {works.length > 0 ? (
+          <ul className="flex flex-col gap-1.5 rounded-lg bg-muted px-3 py-2.5">
+            {works.map((work) => (
+              <li key={`${work.chain}/${work.thread_id}`} className="flex min-w-0 items-center gap-2 text-[0.8125rem]">
+                <StatusMark kind="merge" className="size-3" />
+                <span className="flex-none font-mono text-xs text-subtle">#{work.thread_number}</span>
+                <span className="min-w-0 truncate">{work.title || t('tasks.untitled', { n: work.thread_number })}</span>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {overlaps.map((o) => (
+          <p key={o.names.join()} className="flex items-start gap-2 text-[0.8125rem] text-status-wait">
+            <TriangleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 flex-none" />
+            <span>{t('branches.overlapAlso', { names: o.names.join(t('common.listSeparator')), files: o.files.join('、') })}</span>
+          </p>
+        ))}
         {conflicts ? (
           <div className="my-4">
             <Conflicts roomId={roomId} memberId={member.member_id} name={member.name} branch={branch} files={conflicts} onDone={onClose} />
@@ -126,13 +157,15 @@ export function MergeDialog({ roomId, member, branch, onClose, onCheckoutDiff, o
                 <Textarea
                   id={`${id}-message`}
                   name="message"
-                  rows={fromCommits ? 6 : 3}
-                  defaultValue={member.draft || member.name}
+                  rows={fromCommits || draft?.message.includes('\n') ? 6 : 3}
+                  defaultValue={draft?.message || member.draft || member.name}
                   autoFocus
                   className="font-mono text-[0.8125rem]"
                 />
                 {error ? (
                   <FieldError className="wrap-anywhere">{error}</FieldError>
+                ) : draft ? (
+                  <FieldDescription>{t('branches.draftFromDraft', { name: draft.by })}</FieldDescription>
                 ) : fromCommits ? (
                   <FieldDescription>{t('branches.draftFromCommits', { name: member.name })}</FieldDescription>
                 ) : null}
@@ -161,30 +194,36 @@ export function MergeDialog({ roomId, member, branch, onClose, onCheckoutDiff, o
                 </Alert>
               ) : null}
             </FieldGroup>
-            <DialogFooter>
-              <Button type="button" variant="ghost" onClick={onClose}>
-                {t('common.cancel')}
+            <DialogFooter className="sm:justify-between">
+              <Button type="button" variant="ghost" onClick={() => setDiffing(true)}>
+                {t('branches.diff')}
               </Button>
-              {nothingLeft ? (
-                // Every file left out: nothing would go on the main line.
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span tabIndex={0}>
-                      <Button type="submit" disabled>
-                        {t('branches.merge')}
-                      </Button>
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{t('branches.allLeftOut', { name: member.name })}</TooltipContent>
-                </Tooltip>
-              ) : (
-                <Button type="submit" disabled={merge.isPending}>
-                  {merge.isPending ? t('branches.mergingNow') : t('branches.merge')}
+              <span className="flex flex-col-reverse gap-2 sm:flex-row">
+                <Button type="button" variant="ghost" onClick={onClose}>
+                  {t('common.cancel')}
                 </Button>
-              )}
+                {nothingLeft ? (
+                  // Every file left out: nothing would go on the main line.
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <span tabIndex={0}>
+                        <Button type="submit" disabled>
+                          {t('branches.merge')}
+                        </Button>
+                      </span>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">{t('branches.allLeftOut', { name: member.name })}</TooltipContent>
+                  </Tooltip>
+                ) : (
+                  <Button type="submit" disabled={merge.isPending}>
+                    {merge.isPending ? t('branches.mergingNow') : t('branches.merge')}
+                  </Button>
+                )}
+              </span>
             </DialogFooter>
           </form>
         )}
+        {diffing ? <DiffDialog memberId={member.member_id} name={member.name} onClose={() => setDiffing(false)} /> : null}
       </DialogContent>
     </Dialog>
   )

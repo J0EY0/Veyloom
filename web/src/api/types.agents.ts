@@ -142,6 +142,43 @@ export interface Machine {
   last_seen: string
   // When the runtimes were last discovered; moves once a probe is answered.
   probed_at: string
+  // How each runtime's account stands against its usage limits, by
+  // runtime, as its turns last reported (docs/design.md 5.23.3).
+  quotas?: Record<string, Quota>
+}
+
+// How a runtime's account stands against its usage limits: the limit
+// nearest to being reached, or the one reached.
+export interface Quota {
+  limited?: boolean
+  // The limit by its span: "5h", "7d", "7d opus".
+  window?: string
+  used_percent?: number
+  resets_at?: string
+}
+
+// Why a pause keeps turns from starting: an account signed out, its usage
+// limit reached, too many requests, its provider failing; or a member
+// whose turns keep failing.
+export type PauseReason = 'auth' | 'quota' | 'rate_limit' | 'server' | 'failing'
+
+// What keeps turns from starting that would only fail (docs/design.md
+// 5.23.3): an account's, its machine and runtime set, or a member's.
+export interface Pause {
+  id: string
+  machine_id?: string
+  runtime?: string
+  member_id?: string
+  reason: PauseReason
+  // What the runtime said, the last time it failed.
+  detail: string
+  // When it runs out; absent: when a person resumes.
+  ends_at?: string
+  created_at: string
+}
+
+export interface PausesResponse {
+  pauses: Pause[]
 }
 
 // A current member a machine runs, with the project it is in and what it

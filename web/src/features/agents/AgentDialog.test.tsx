@@ -7,6 +7,7 @@ import { renderWithProviders } from '@/test/render'
 import { pickOption } from '@/test/select'
 import { claude, codex, laptop, pi } from '@/test/machines'
 import { AgentDialog } from './AgentDialog'
+import { runtimeTraits } from '@/test/fixtures'
 
 // jsdom cannot draw: the square is taken as given.
 vi.mock('@/lib/avatarImage', async (importOriginal) => ({
@@ -86,6 +87,7 @@ describe('AgentDialog', () => {
     stubApi({
       '/machines': machines,
       '/library': { wiki: library },
+      '/skills/builtin': { skills: [{ name: 'team-practices', description: 'How members work together.' }] },
       '/agents': async (req) => {
         if (req.method === 'POST') {
           posted = await req.json()
@@ -107,8 +109,12 @@ describe('AgentDialog', () => {
     await pickOption('权限', '完全信任')
     await userEvent.type(screen.getByLabelText('角色卡'), 'Review carefully.')
     await userEvent.type(screen.getByLabelText('运行时选项'), '{{"approval": true}')
-    // Pi is offered the skills for every runtime, not the retired one.
+    // Pi is offered the skills for every runtime, not the retired one;
+    // Veyloom's own are named apart, with nothing to install.
     await waitFor(() => expect(skillBoxes()).toEqual(['Go table tests']))
+    expect(screen.getByText('Veyloom 自带、每个 agent 都有，不用装：')).toBeInTheDocument()
+    expect(screen.getByText('team-practices')).toBeInTheDocument()
+    expect(screen.queryByRole('checkbox', { name: /team-practices/ })).toBeNull()
     await userEvent.click(screen.getByRole('checkbox', { name: /Go table tests/ }))
     await userEvent.click(screen.getByRole('button', { name: '创建 Agent' }))
 
@@ -210,6 +216,27 @@ describe('AgentDialog', () => {
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(onClose).toHaveBeenCalled())
     expect(put).toMatchObject({ name: 'Fake Reviewer', machine_id: 'w1', runtime: 'fake', role_card: 'Be brief.', runtime_options: { tool: true } })
+  })
+
+  it("says a Codex agent's members start a new session once its role card changes", async () => {
+    stubApi({ '/machines': machines, '/runtime-traits': runtimeTraits })
+    renderWithProviders(<AgentDialog agent={{ ...existing, runtime: 'codex' }} onClose={vi.fn()} />)
+    const hint = '改角色卡后，Codex 成员下一轮会从新会话开始。'
+    const roleCard = await screen.findByLabelText('角色卡')
+    expect(screen.queryByText(hint)).not.toBeInTheDocument()
+    await userEvent.type(roleCard, ' Always.')
+    expect(screen.getByText(hint)).toBeInTheDocument()
+    // Written back as it was, there is nothing to start over for.
+    await userEvent.clear(roleCard)
+    await userEvent.type(roleCard, 'Be brief.')
+    expect(screen.queryByText(hint)).not.toBeInTheDocument()
+  })
+
+  it('says nothing of sessions for a runtime told its role card with every run', async () => {
+    stubApi({ '/machines': machines, '/runtime-traits': runtimeTraits })
+    renderWithProviders(<AgentDialog agent={existing} onClose={vi.fn()} />)
+    await userEvent.type(await screen.findByLabelText('角色卡'), ' Always.')
+    expect(screen.queryByText(/新会话/)).not.toBeInTheDocument()
   })
 
   it('keeps an agent that is in a project on its machine, and says why', async () => {

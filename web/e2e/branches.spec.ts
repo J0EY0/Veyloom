@@ -7,10 +7,10 @@ import { expect, test, type APIRequestContext } from '@playwright/test'
 // Members in worktrees of their own, as a person meets them (docs/design.md
 // 5.21): the first time a member is asked for something, the project's
 // leader sets the project up, then the member works in its worktree; its
-// work shows in the Branches tab and goes onto the main line as one commit
-// with the message the person confirms. Two members changing the same file
-// are told about in the chat, and marked on both rows. The fake runtime
-// plays the agents, writing the files for real.
+// work shows on its row in the chat's info and goes onto the main line as
+// one commit with the message the person confirms. Two members changing the
+// same file are told about in the chat, and marked on both rows. The fake
+// runtime plays the agents, writing the files for real.
 
 const api = '/api/v1'
 
@@ -92,26 +92,33 @@ test('a member works in its worktree, and its work is merged onto the main line'
   expect(member.branch).toMatch(/^veyloom\/coder/)
   await ask('Tester', 'test the login page', 3)
 
+  // The old address of the Branches tab opens the chat's info, where the
+  // branches are now.
   await page.goto(`/rooms/${roomId}/branches`)
-  // A member's row, by its title: the rows name each other in their overlaps.
-  const rowOf = (who: string) => page.locator('[data-slot="item"]').filter({ has: page.locator('[data-slot="item-title"]', { hasText: `${who} ${stamp}` }) })
+  await expect(page).toHaveURL(new RegExp(`/rooms/${roomId}\\?panel=members$`))
+  const info = page.getByRole('complementary', { name: '群聊信息' })
+  await expect(info.getByRole('region', { name: '新工作区的准备步骤' })).toContainText('复制 .env')
+  // A member's row, by its name: the rows name each other in their overlaps.
+  const rowOf = (who: string) => info.getByRole('listitem').filter({ has: page.locator('[data-slot="item-title"]', { hasText: `${who} ${stamp}` }) })
   const row = rowOf('Coder')
   await expect(row).toContainText('改了 2 个文件（2 个没提交）')
   await expect(row).toContainText(`和 Tester ${stamp} 都改了 README.md`)
   await expect(rowOf('Tester')).toContainText(`和 Coder ${stamp} 都改了 README.md`)
-  await row.getByRole('button', { name: '合并到主线' }).click()
+  await expect(rowOf('Lead')).toContainText('在项目目录里干活')
+  await row.getByRole('button', { name: '合并' }).click()
   const dialog = page.getByRole('dialog', { name: `把 Coder ${stamp} 的改动合并到 main` })
   await expect(dialog.getByLabel('提交说明')).toHaveValue('add the login page')
   await dialog.getByLabel('提交说明').fill('Add the login page')
   await dialog.getByRole('button', { name: '合并到主线' }).click()
   await expect(page.getByText(/已合并到 main（[0-9a-f]{7}）/)).toBeVisible()
   await expect(row).toContainText('没有改动')
+  await expect(row.getByRole('button', { name: '合并' })).toHaveCount(0)
 
   // The main line has it as one commit; the chat says so, and told of the
   // overlap before.
   expect(git(repo, 'log', '-1', '--format=%s')).toBe('Add the login page')
   expect(git(repo, 'show', '--name-only', '--format=', 'HEAD').split('\n')).toEqual(['README.md', 'login.go'])
-  await page.getByRole('link', { name: '聊天' }).click()
+  await page.getByRole('button', { name: '关闭群聊信息' }).click()
   await expect(page.getByText(`Tester ${stamp}、Coder ${stamp} 都改了 README.md，后合并的那个可能会冲突`)).toBeVisible()
   await expect(page.getByText(new RegExp(`Coder ${stamp} 的改动已合并到主线（[0-9a-f]{7}）：Add the login page`))).toBeVisible()
   await expect(page.getByText('初始化项目', { exact: true })).toBeVisible()

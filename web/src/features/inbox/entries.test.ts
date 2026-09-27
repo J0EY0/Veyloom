@@ -33,8 +33,8 @@ describe('toEntries', () => {
 
   it('names the files of a mention that has no words', () => {
     const files = [
-      { id: 'f1', room_id: 'r1', filename: 'shot.png', media_type: 'image/png', size: 1, created_at: '' },
-      { id: 'f2', room_id: 'r1', filename: 'log.txt', media_type: 'text/plain', size: 1, created_at: '' },
+      { id: 'f1', room_id: 'r1', filename: 'shot.png', media_type: 'image/png', kind: 'image' as const, size: 1, created_at: '' },
+      { id: 'f2', room_id: 'r1', filename: 'log.txt', media_type: 'text/plain', kind: 'text' as const, size: 1, created_at: '' },
     ]
     const [entry] = toEntries([], [mention('m1', 1, { body: '@alice', attachments: files })], 'alice', t)
     expect(entry.excerpt).toBe('shot.png、log.txt')

@@ -1,4 +1,4 @@
-import { screen, within } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import { stubApi } from '@/test/fetch'
@@ -53,6 +53,21 @@ describe('MachineDetail', () => {
     expect(within(rows[1]).queryByRole('button')).toBeNull()
     expect(screen.queryByText('Codex')).toBeNull()
     expect(screen.queryByText('fake')).toBeNull()
+  })
+
+  it('says how each runtime’s account stands, and resumes one a pause holds up', async () => {
+    const resets = new Date(Date.now() + 3_600_000).toISOString()
+    let lifted = ''
+    open({
+      '/machines': { machines: [{ ...laptop(), quotas: { pi: { window: '5h', used_percent: 85, resets_at: resets } } }] },
+      '/pauses': { pauses: [{ id: 'p1', machine_id: 'w1', runtime: 'pi', reason: 'auth', detail: '401', created_at: '' }] },
+      '/pauses/p1': (req: Request) => ((lifted = req.method), new Response(null, { status: 204 })),
+    })
+    const pi = (await within(await screen.findByRole('region', { name: '运行时' })).findAllByRole('listitem'))[1]
+    expect(pi).toHaveTextContent(/5 小时额度已用 85% · .+ 重置/)
+    expect(await within(pi).findByText('登录失效')).toBeInTheDocument()
+    await userEvent.click(within(pi).getByRole('button', { name: '继续' }))
+    await waitFor(() => expect(lifted).toBe('DELETE'))
   })
 
   it('puts the last day above the runtimes and the agents below them', async () => {

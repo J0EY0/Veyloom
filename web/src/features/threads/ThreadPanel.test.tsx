@@ -117,7 +117,15 @@ describe('ThreadPanel', () => {
   })
 
   it('titles a topic a person opened for two agents with the ask, each agent under its own face', async () => {
-    const shot = { id: 'f1', room_id: 'r1', filename: 'shot.png', media_type: 'image/png', size: 10, created_at: '2026-09-14T02:00:00Z' }
+    const shot = {
+      id: 'f1',
+      room_id: 'r1',
+      filename: 'shot.png',
+      media_type: 'image/png',
+      kind: 'image' as const,
+      size: 10,
+      created_at: '2026-09-14T02:00:00Z',
+    }
     const ask = message('m1', 1, {
       body: '一起看看这个。',
       attachments: [shot],
@@ -158,9 +166,9 @@ describe('ThreadPanel', () => {
     // Without an @, the agent that spoke last answers.
     expect(screen.getByText('不带 @ 时由 Claude Architect 回复')).toBeInTheDocument()
 
-    expect(screen.queryByRole('link', { name: '打开附件 shot.png' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '预览 shot.png' })).not.toBeInTheDocument()
     await userEvent.click(title)
-    expect(screen.getByRole('link', { name: '打开附件 shot.png' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: '预览 shot.png' })).toBeInTheDocument()
     expect(screen.getByText('alice')).toBeInTheDocument()
   })
 

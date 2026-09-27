@@ -38,6 +38,42 @@ describe('useMemberStates', () => {
     expect(result.current[2].approval?.id).toBe('ap3')
   })
 
+  it('derives paused from a pause of the member, or of its account, which one run out no longer holds', async () => {
+    const later = new Date(Date.now() + 3_600_000).toISOString()
+    const earlier = new Date(Date.now() - 60_000).toISOString()
+    stubApi({
+      '/rooms/r1/members': {
+        members: [
+          { id: 'a1', display_name: 'A', agent_id: 'claude-agent', machine_id: 'w1', enabled: true },
+          { id: 'a2', display_name: 'B', agent_id: 'codex-agent', machine_id: 'w1', enabled: true },
+          { id: 'a3', display_name: 'C', agent_id: 'codex-agent', machine_id: 'w1', enabled: true },
+          { id: 'a4', display_name: 'D', agent_id: 'pi-agent', machine_id: 'w1', enabled: true },
+        ],
+      },
+      '/rooms/r1/turns': { turns: [turn('x3', 't3', { member_id: 'a3', status: 'running', ended_at: undefined })] },
+      '/rooms/r1/approvals': { approvals: [] },
+      '/machines': { machines: [{ id: 'w1', name: 'laptop', runtimes: [] }] },
+      '/agents': {
+        agents: [
+          { id: 'claude-agent', runtime: 'claude' },
+          { id: 'codex-agent', runtime: 'codex' },
+          { id: 'pi-agent', runtime: 'pi' },
+        ],
+      },
+      '/pauses': {
+        pauses: [
+          { id: 'p1', member_id: 'a1', reason: 'failing', detail: '', created_at: earlier },
+          { id: 'p2', machine_id: 'w1', runtime: 'codex', reason: 'quota', detail: '', ends_at: later, created_at: earlier },
+          { id: 'p3', machine_id: 'w1', runtime: 'pi', reason: 'server', detail: '', ends_at: earlier, created_at: earlier },
+        ],
+      },
+    })
+    const { result } = renderHook(() => useMemberStates('r1'), { wrapper })
+    // A's own, B's account's; C works through it; D's ran out.
+    await waitFor(() => expect(result.current.map((s) => s.status)).toEqual(['paused', 'paused', 'working', 'idle']))
+    expect(result.current.map((s) => s.pause?.id)).toEqual(['p1', 'p2', 'p2', undefined])
+  })
+
   it('leaves out members taken out of the project', async () => {
     stubApi({
       '/rooms/r1/members': {

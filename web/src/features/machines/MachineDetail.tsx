@@ -14,6 +14,7 @@ import { formatAgoParts } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { CommandButton } from './CommandButton'
+import { accountPause, usePauses } from '@/api/pauses'
 import { RuntimeItem } from './RuntimeItem'
 import { MachineAgents } from './MachineAgents'
 import { RecheckButton } from './RecheckButton'
@@ -42,6 +43,7 @@ export function MachineDetail({ machine, now, className }: MachineDetailProps) {
   const mine = agents.data?.filter((agent) => agent.machine_id === machine.id)
   const members = useMachineMembers(machine.id)
   const activity = useMachineActivity(machine.id)
+  const pauses = usePauses()
   const runtimes = detectedRuntimes(machine)
   const at = new Date(now)
 
@@ -96,7 +98,12 @@ export function MachineDetail({ machine, now, className }: MachineDetailProps) {
           ) : (
             <Rows>
               {runtimes.map((runtime) => (
-                <RuntimeItem key={runtime.info.name} runtime={runtime} />
+                <RuntimeItem
+                  key={runtime.info.name}
+                  runtime={runtime}
+                  quota={machine.quotas?.[runtime.info.name]}
+                  pause={accountPause(pauses.data, machine.id, runtime.info.name)}
+                />
               ))}
             </Rows>
           )}

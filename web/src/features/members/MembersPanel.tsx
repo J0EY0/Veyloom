@@ -1,7 +1,8 @@
 import { useState } from 'react'
-import { BotIcon, ChevronRightIcon, PlusIcon, SearchIcon } from 'lucide-react'
+import { BotIcon, ChevronRightIcon, GitBranchIcon, PlusIcon, SearchIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { useRoomMembers } from '@/api/agents'
+import { useBranches } from '@/api/branches'
 import { useProject, useUpdateProject } from '@/api/projects'
 import { useRoom } from '@/api/rooms'
 import type { Member, Project } from '@/api/types'
@@ -13,6 +14,9 @@ import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/in
 import { Item, ItemContent, ItemDescription, ItemGroup, ItemMedia, ItemTitle } from '@/components/ui/item'
 import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import { BranchDialog, type BranchDialogState } from '@/features/branches/BranchDialog'
+import { overlapsOf } from '@/features/branches/overlaps'
+import { ProjectBranch } from '@/features/branches/ProjectBranch'
 import { EditProjectDialog } from '@/features/projects/EditProjectDialog'
 import { byStatus } from '@/features/rooms/memberStatus'
 import { useMemberStates } from '@/features/rooms/useMemberStates'
@@ -37,8 +41,9 @@ export interface MembersPanelProps {
 // The chat's info (2026-09-17), after Feishu's group settings: the project
 // the chat belongs to, then who is in it, beside the chat instead of on a
 // page of its own. Each member row says what it is doing right now, and
-// what you do to it: edit, switch off, take out. The team's files and
-// wikis are to come here as entries.
+// what you do to it: edit, switch off, take out. The project's branches
+// live here too (docs/design.md 5.21): the main line and the checkout on
+// the project's card, each member's worktree on its row.
 export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: MembersPanelProps) {
   const t = useT()
   const project = useProject(useRoom(roomId).data?.project_id ?? '')
@@ -51,6 +56,13 @@ export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: Member
   const [editing, setEditing] = useState<Member>()
   const [removing, setRemoving] = useState<Member>()
   const [editingProject, setEditingProject] = useState(false)
+  const [branchDialog, setBranchDialog] = useState<BranchDialogState>()
+  // Only a project with a directory can have worktrees; the machine reads
+  // git to answer, so a project without one is not asked.
+  const branches = useBranches(project?.repo_path ? project.id : '')
+  const main = branches.data?.main
+  const byMember = new Map(branches.data?.members.map((m) => [m.member_id, m]))
+  const names = new Map(branches.data?.members.map((m) => [m.member_id, m.name]))
   const [query, setQuery] = useState('')
   const sorted = [...states].sort((a, b) => byStatus(a.status, b.status))
   const needle = query.trim().toLowerCase()
@@ -70,14 +82,19 @@ export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: Member
     <SidePanel
       label={t('room.info')}
       header={<h2 className="text-sm font-semibold">{t('room.info')}</h2>}
-      narrow
+      narrow={!project?.repo_path}
       onClose={onClose}
       closeLabel={t('room.infoClose')}
     >
       {/* At least as tall as the panel, so a note in place of the members
           takes the rest of it and sits in the middle. */}
       <div className="flex min-h-full flex-col gap-5">
-        {project ? <ProjectCard project={project} onEdit={() => setEditingProject(true)} /> : null}
+        {project ? (
+          <div className="flex flex-col gap-3">
+            <ProjectCard project={project} branch={main?.git ? main.branch : undefined} onEdit={() => setEditingProject(true)} />
+            {main?.git ? <ProjectBranch project={project} main={main} onBranch={setBranchDialog} onOpenThread={onOpenThread} /> : null}
+          </div>
+        ) : null}
         <section aria-label={t('members.title')} className="flex flex-1 flex-col gap-1.5">
           <div className="flex h-7 items-center gap-1.5">
             <h3 className="text-xs font-medium text-subtle">{t('members.title')}</h3>
@@ -143,18 +160,26 @@ export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: Member
             <p className="py-6 text-center text-xs text-subtle">{t('members.noMatch')}</p>
           ) : (
             <ItemGroup className="-mx-1">
-              {shown.map((state) => (
-                <MemberRow
-                  key={state.member.id}
-                  roomId={roomId}
-                  state={state}
-                  leader={state.member.id === project?.leader_id}
-                  onEdit={setEditing}
-                  onMakeLeader={makeLeader}
-                  onRemove={setRemoving}
-                  onOpenThread={onOpenThread}
-                />
-              ))}
+              {shown.map((state) => {
+                const branch = byMember.get(state.member.id)
+                return (
+                  <MemberRow
+                    key={state.member.id}
+                    roomId={roomId}
+                    state={state}
+                    leader={state.member.id === project?.leader_id}
+                    branch={branch}
+                    overlaps={overlapsOf(state.member.id, branches.data?.overlaps ?? [], names)}
+                    holds={(branch?.contains ?? []).flatMap((held) => names.get(held) ?? [])}
+                    inCheckout={Boolean(main?.git)}
+                    onEdit={setEditing}
+                    onMakeLeader={makeLeader}
+                    onRemove={setRemoving}
+                    onOpenThread={onOpenThread}
+                    onBranch={setBranchDialog}
+                  />
+                )
+              })}
             </ItemGroup>
           )}
         </section>
@@ -163,14 +188,16 @@ export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: Member
       {editing ? <EditMemberDialog roomId={roomId} member={editing} onClose={() => setEditing(undefined)} /> : null}
       {editingProject && project ? <EditProjectDialog project={project} onClose={() => setEditingProject(false)} /> : null}
       {removing ? <RemoveMemberDialog roomId={roomId} roomName={roomName} member={removing} onClose={() => setRemoving(undefined)} /> : null}
+      <BranchDialog roomId={roomId} state={branchDialog} onChange={setBranchDialog} />
     </SidePanel>
   )
 }
 
 // The project this chat belongs to: its mark, its name and where it is
-// checked out, which is where its members work. The card opens the
-// project for editing, the way a member's row opens the member.
-function ProjectCard({ project, onEdit }: { project: Project; onEdit: () => void }) {
+// checked out, which is where its members work, on the branch that is its
+// main line. The card opens the project for editing, the way a member's
+// row opens the member.
+function ProjectCard({ project, branch, onEdit }: { project: Project; branch?: string; onEdit: () => void }) {
   const t = useT()
   return (
     <Item asChild size="sm" className="-mx-1 w-[calc(100%+0.5rem)] flex-nowrap gap-3 rounded-lg border-0 px-1 py-1 text-left hover:bg-muted">
@@ -184,6 +211,13 @@ function ProjectCard({ project, onEdit }: { project: Project; onEdit: () => void
             <ItemDescription className="font-mono text-[0.71875rem] leading-snug break-all text-subtle" translate="no">
               {project.repo_path}
             </ItemDescription>
+          ) : null}
+          {branch ? (
+            <span className="flex items-center gap-1 font-mono text-[0.71875rem] text-subtle" translate="no">
+              <GitBranchIcon aria-hidden="true" className="size-3 flex-none" />
+              <span className="sr-only">{t('branches.main')} </span>
+              {branch}
+            </span>
           ) : null}
         </ItemContent>
         <ChevronRightIcon aria-hidden="true" className="size-4 flex-none text-subtle" />

@@ -3,7 +3,7 @@ import { useCreateAgent, useUpdateAgent, useMachines } from '@/api/agents'
 import type { Agent, PermissionPreset, Machine } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog'
-import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
+import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Textarea } from '@/components/ui/textarea'
@@ -11,6 +11,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { presetLabel, presets } from '@/features/members/presets'
 import { detectedRuntimes } from '@/features/machines/machines'
 import { runtimeName, runtimeRank } from '@/lib/runtimes'
+import { fixesRoleCard, useRuntimeTraits } from '@/api/runtimes'
 import { useT } from '@/lib/i18n'
 import { AvatarField } from './AvatarField'
 import { projectsInUse } from './inUse'
@@ -38,6 +39,8 @@ export function AgentDialog({ agent, onClose }: AgentDialogProps) {
   const [pickedRuntime, setPickedRuntime] = useState(agent?.runtime ?? '')
   const [avatar, setAvatar] = useState(agent?.avatar ?? '')
   const [skills, setSkills] = useState<string[]>(agent?.skills ?? [])
+  const [roleCard, setRoleCard] = useState(agent?.role_card ?? '')
+  const traits = useRuntimeTraits()
   const [uploading, setUploading] = useState(false)
   const pending = create.isPending || update.isPending
   const id = useId()
@@ -198,11 +201,17 @@ export function AgentDialog({ agent, onClose }: AgentDialogProps) {
                 id={`${id}-role`}
                 name="role_card"
                 rows={8}
-                defaultValue={agent?.role_card ?? ''}
+                value={roleCard}
+                onChange={(event) => setRoleCard(event.target.value)}
                 placeholder={t('agent.roleCardPlaceholder')}
                 spellCheck={false}
                 className="min-h-40 leading-[1.55]"
               />
+              {/* Codex fixed the role card its members' sessions started
+                  with: a new one reaches them in a new session. */}
+              {agent && fixesRoleCard(traits.data, runtime) && roleCard !== agent.role_card ? (
+                <FieldDescription>{t('agent.roleCardNewSession', { runtime: runtimeName(runtime) })}</FieldDescription>
+              ) : null}
             </Field>
             <SkillsField runtime={runtime} value={skills} onChange={setSkills} />
             <Field data-invalid={optionsError ? true : undefined}>

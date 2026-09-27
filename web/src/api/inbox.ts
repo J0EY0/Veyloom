@@ -1,3 +1,5 @@
+import { pauseKeys } from './pauses'
+import { machineKeys } from './agents'
 import { useEffect } from 'react'
 import { useInfiniteQuery, useMutation, useQueryClient, type InfiniteData, type QueryClient } from '@tanstack/react-query'
 import { connectEvents } from '@/lib/roomSocket'
@@ -86,6 +88,12 @@ export function applyInboxEvent(client: QueryClient, userId: string, event: Room
     case 'approval_requested':
     case 'approval_decided':
       applyApproval(client, event.approval)
+      break
+    case 'pause':
+      // A pause of an account came with how the account stands, which the
+      // machines tell.
+      refresh(client, { queryKey: pauseKeys.all })
+      refresh(client, { queryKey: machineKeys.all })
       break
     default:
       break

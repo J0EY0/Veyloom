@@ -26,6 +26,13 @@ describe('withMentionTags', () => {
     expect(withMentionTags('plain @nobody', null, names)).toBe('plain @nobody')
   })
 
+  it('keeps a longer name whole though only the shorter is mentioned', () => {
+    const wide = new Map([...names, ['a2', 'Codex Implementer B']])
+    expect(withMentionTags('@Codex Implementer B 和 @Codex Implementer', [{ kind: 'agent', id: 'a1' }], wide)).toBe(
+      '@Codex Implementer B 和 <mention kind="agent" id="a1">@Codex Implementer</mention>',
+    )
+  })
+
   it('leaves names in code as written', () => {
     const mentioned = [{ kind: 'user' as const, id: 'u1' }]
     expect(withMentionTags('写 `@alice` 就能叫到，@alice 你看下', mentioned, names)).toBe(

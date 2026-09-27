@@ -3,6 +3,8 @@ import { Field, FieldContent, FieldDescription, FieldLabel } from '@/components/
 import { Switch } from '@/components/ui/switch'
 import { useT } from '@/lib/i18n'
 import { byLeader, KeeperSelect } from './MaintainerFields'
+import { noWikiReadOnly, useRuntimeTraits } from '@/api/runtimes'
+import { runtimeName } from '@/lib/runtimes'
 
 export interface NewProjectMaintainerProps {
   id: string
@@ -23,6 +25,7 @@ export interface NewProjectMaintainerProps {
 export function NewProjectMaintainer({ id, agents, upkeep, value, onUpkeep, onChange }: NewProjectMaintainerProps) {
   const t = useT()
   const chosen = agents.find((agent) => agent.id === value) ?? (value === byLeader ? agents[0] : undefined)
+  const traits = useRuntimeTraits()
   const candidates = agents.map((agent) => ({ id: agent.id, display_name: agent.name }))
   return (
     <>
@@ -43,8 +46,8 @@ export function NewProjectMaintainer({ id, agents, upkeep, value, onUpkeep, onCh
             candidates={candidates}
             onChange={onChange}
           />
-          {chosen?.runtime === 'codex' && chosen.permission_preset === 'read_only' ? (
-            <FieldDescription className="text-status-wait">{t('maintainer.readOnlyCodex')}</FieldDescription>
+          {chosen && noWikiReadOnly(traits.data, chosen.runtime, chosen.permission_preset) ? (
+            <FieldDescription className="text-status-wait">{t('maintainer.readOnlyNoWiki', { runtime: runtimeName(chosen.runtime) })}</FieldDescription>
           ) : null}
         </Field>
       ) : null}

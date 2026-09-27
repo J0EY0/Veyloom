@@ -1,6 +1,8 @@
 import { useAgents, useRoomMembers } from '@/api/agents'
 import type { Member, Project, UpkeepTrigger } from '@/api/types'
-import { readOnlyCodex, useUpkeepStatus } from '@/api/upkeep'
+import { keepsNoWiki, useUpkeepStatus } from '@/api/upkeep'
+import { useRuntimeTraits } from '@/api/runtimes'
+import { runtimeName } from '@/lib/runtimes'
 import { Field, FieldContent, FieldDescription, FieldLabel } from '@/components/ui/field'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Switch } from '@/components/ui/switch'
@@ -34,11 +36,13 @@ export function MaintainerFields({ project, id, upkeep, member, trigger, onUpkee
   const t = useT()
   const members = useRoomMembers(project.main_room_id)
   const agents = useAgents()
+  const traits = useRuntimeTraits()
   const status = useUpkeepStatus(project.id)
   const minutes = status.data?.idle_minutes ?? 30
   const candidates = (members.data ?? []).filter((m) => m.enabled || m.id === member)
   const leader = (members.data ?? []).find((m) => m.id === project.leader_id)
   const keeper = member === byLeader ? leader : candidates.find((m) => m.id === member)
+  const noWiki = keepsNoWiki(keeper, agents.data, traits.data)
   return (
     <>
       <Field orientation="horizontal">
@@ -53,7 +57,9 @@ export function MaintainerFields({ project, id, upkeep, member, trigger, onUpkee
           <Field>
             <FieldLabel htmlFor={`${id}-maintainer`}>{t('maintainer.who')}</FieldLabel>
             <KeeperSelect id={`${id}-maintainer`} value={member} leader={leader} candidates={candidates} onChange={onMember} />
-            {readOnlyCodex(keeper, agents.data) ? <FieldDescription className="text-status-wait">{t('maintainer.readOnlyCodex')}</FieldDescription> : null}
+            {noWiki ? (
+              <FieldDescription className="text-status-wait">{t('maintainer.readOnlyNoWiki', { runtime: runtimeName(noWiki) })}</FieldDescription>
+            ) : null}
           </Field>
           <Field>
             <FieldLabel htmlFor={`${id}-trigger`}>{t('maintainer.trigger')}</FieldLabel>

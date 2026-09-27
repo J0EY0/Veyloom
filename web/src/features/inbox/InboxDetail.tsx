@@ -5,7 +5,7 @@ import { useRoomEvents } from '@/api/events'
 import { useTurn } from '@/api/turns'
 import { SidePanel } from '@/components/layout/SidePanel'
 import { AgentAvatar } from '@/components/shared/agent-avatar'
-import { AttachmentList } from '@/components/shared/attachment-list'
+import { MessageAttachments } from '@/features/attachments/MessageAttachments'
 import { UserAvatar } from '@/components/shared/user-avatar'
 import { Button } from '@/components/ui/button'
 import { Empty, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
@@ -154,7 +154,7 @@ function MessageAlone({ entry, onClose, actions }: { entry: InboxEntry; onClose:
                 className="text-[0.90625rem] leading-[1.6] break-words whitespace-pre-wrap text-body"
               />
             )}
-            <AttachmentList attachments={message.attachments} className="mt-2" />
+            <MessageAttachments attachments={message.attachments} roomId={message.room_id} threadId={message.thread_id} className="mt-2" />
           </div>
         </MemberLooks.Provider>
       ) : null}

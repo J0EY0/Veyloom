@@ -7,6 +7,7 @@ import { useCurrentUser } from '@/lib/currentUser'
 import { useT } from '@/lib/i18n'
 import { AppSidebar } from './AppSidebar'
 import { CommandPalette } from './CommandPalette'
+import { AttachmentViewer } from '@/features/attachments/AttachmentViewer'
 import { ErrorBoundary } from './ErrorBoundary'
 
 // Window layout: the sidebar sits on the canvas, pages render as a card
@@ -37,6 +38,7 @@ export function AppShell() {
           </ErrorBoundary>
         </SidebarInset>
         <CommandPalette />
+        <AttachmentViewer />
         <Toaster position="bottom-right" />
       </SidebarProvider>
     </TooltipProvider>

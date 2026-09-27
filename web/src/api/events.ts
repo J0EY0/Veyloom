@@ -5,23 +5,30 @@ import { applyTurnEvent, clearLiveTurn } from '@/lib/liveTurns'
 import { connectRoomEvents } from '@/lib/roomSocket'
 import { applyApproval } from './approvals'
 import { refreshBranches } from './branches'
+import { attachmentKeys } from './attachments'
 import { applyRoomMessage, applyTurn } from './messages'
 import { topicKeys } from './topics'
-import { applyRunningTurn } from './turns'
+import { applyQuiet, applyRunningTurn } from './turns'
 import type { RoomEvent } from './types'
 import { projectKeys } from './projects'
 import { refresh } from './refresh'
 import { invalidateUpkeep } from './upkeep'
 import { refreshRelayHolds } from './relays'
+import { applyReminder } from './reminders'
+import { applyDraft } from './drafts'
 import { invalidateWiki } from './wiki'
 import { workKeys } from './work'
+
+// The events that move neither the task board nor the pieces of work: what
+// a draft or a reminder did there comes as a note of its own.
+const quiet = new Set<RoomEvent['kind']>(['turn_event', 'turn_quiet', 'wiki_changed', 'inbox_read', 'reminder', 'draft'])
 
 // applyRoomEvent writes one live event into the query cache, which is the
 // only store the UI reads (docs/webui.md §5.2).
 export function applyRoomEvent(client: QueryClient, event: RoomEvent) {
   // The task board and the pieces of work move with the room's turns, its
   // requests, and the notes of merges and resets.
-  if (event.kind !== 'turn_event' && event.kind !== 'wiki_changed' && event.kind !== 'inbox_read') {
+  if (!quiet.has(event.kind)) {
     if (event.kind !== 'message' || event.message.sender_kind === 'system') {
       refresh(client, { queryKey: workKeys.tasks(event.room_id) })
       refresh(client, { queryKey: workKeys.all })
@@ -30,6 +37,8 @@ export function applyRoomEvent(client: QueryClient, event: RoomEvent) {
   switch (event.kind) {
     case 'message':
       applyRoomMessage(client, event.message, event.thread)
+      // Files it brought join the attachments tab and the viewer's walk.
+      if (event.message.attachments?.length) refresh(client, { queryKey: attachmentKeys.room(event.room_id) })
       // A note of the system's may be one the project now names: its wiki
       // or setup topic, its offer of a wiki maintainer (docs/design.md
       // 5.16), the setup steps waiting for a person (5.21).
@@ -64,12 +73,21 @@ export function applyRoomEvent(client: QueryClient, event: RoomEvent) {
     case 'turn_event':
       applyTurnEvent(event.turn_id, event.turn_event)
       break
+    case 'turn_quiet':
+      applyQuiet(client, event.room_id, event.turn_id, event.quiet_since)
+      break
     case 'approval_requested':
     case 'approval_decided':
       applyApproval(client, event.approval)
       break
     case 'wiki_changed':
       invalidateWiki(client, event.scope === 'library' ? '' : (event.project_id ?? ''))
+      break
+    case 'reminder':
+      applyReminder(client, event.reminder)
+      break
+    case 'draft':
+      applyDraft(client, event.draft)
       break
     default:
       break

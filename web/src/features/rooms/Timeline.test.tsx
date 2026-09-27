@@ -1,5 +1,5 @@
 import { screen, waitFor, within } from '@testing-library/react'
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import { agentKeys } from '@/api/agents'
 import { stubApi } from '@/test/fetch'
 import { message, summary, user } from '@/test/fixtures'
@@ -146,6 +146,39 @@ describe('Timeline', () => {
     stubApi({ '/users': { users: [] }, '/rooms/r1/members': { members: [] }, '/rooms/r1/messages': { messages: [] } })
     renderWithProviders(<Timeline roomId="r1" />)
     expect(await screen.findByText('还没有消息。')).toBeInTheDocument()
+  })
+
+  // "Show in chat" from the attachment viewer (docs/webui.md 4.21).
+  it('pages back to the message the address names, brings it into view and lights it', async () => {
+    const latest = Array.from({ length: 50 }, (_, i) => message(`m${51 + i}`, 51 + i, { body: `msg ${51 + i}` }))
+    const calls = stubApi({
+      '/users': { users: [user('u1', 'alice')] },
+      '/rooms/r1/members': { members: [] },
+      '/rooms/r1/messages': (req) => ({
+        messages: new URL(req.url).searchParams.get('before') === '0' ? latest : [message('m50', 50, { body: 'the one asked for' })],
+      }),
+    })
+    const scrolled = vi.spyOn(Element.prototype, 'scrollIntoView')
+    const { router } = renderWithProviders(<Timeline roomId="r1" />, { route: '/rooms/r1?message=m50&thread=t9' })
+    const row = (await screen.findByText('the one asked for')).closest('li')
+    expect(calls).toContain('GET /rooms/r1/messages?before=51&limit=50')
+    await waitFor(() => expect(row).toHaveClass('bg-selection'))
+    await waitFor(() => expect(scrolled.mock.contexts).toContain(row))
+    // Found, the address forgets it and keeps the rest.
+    expect(router.state.location.search).toBe('?thread=t9')
+    scrolled.mockRestore()
+  })
+
+  it('forgets a message it cannot find once there is nothing older', async () => {
+    stubApi({
+      '/users': { users: [] },
+      '/rooms/r1/members': { members: [] },
+      '/rooms/r1/messages': { messages: [message('m1', 1, { body: 'the only one' })] },
+    })
+    const { router } = renderWithProviders(<Timeline roomId="r1" />, { route: '/rooms/r1?message=gone' })
+    expect(await screen.findByText('the only one')).toBeInTheDocument()
+    await waitFor(() => expect(router.state.location.search).toBe(''))
+    expect(document.querySelector('li.bg-selection')).toBeNull()
   })
 })
 

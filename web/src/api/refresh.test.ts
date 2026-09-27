@@ -1,6 +1,6 @@
 import { QueryClient, QueryObserver } from '@tanstack/react-query'
 import { describe, expect, it } from 'vitest'
-import { refresh } from './refresh'
+import { refresh, settledMeta } from './refresh'
 
 // A query on screen whose first read is still on its way, answered from
 // before a change, and read again after it.
@@ -31,5 +31,21 @@ describe('refresh', () => {
     answers[1]('a turn waits')
     await expect.poll(() => observer.getCurrentResult().data).toBe('a turn waits')
     unsubscribe()
+  })
+
+  it('leaves be what cannot change, and keeps to the filters given', async () => {
+    const client = new QueryClient()
+    await client.fetchQuery({ queryKey: ['rooms', 'r1'], queryFn: () => 'room' })
+    await client.fetchQuery({ queryKey: ['tasks', 'r1'], queryFn: () => 'tasks' })
+    await client.fetchQuery({ queryKey: ['pdf', '/api/v1/attachments/a'], queryFn: () => 'doc', meta: settledMeta })
+    const invalidated = (key: string[]) => client.getQueryState(key)?.isInvalidated
+
+    refresh(client, { queryKey: ['rooms'] })
+    await expect.poll(() => invalidated(['rooms', 'r1'])).toBe(true)
+    expect(invalidated(['tasks', 'r1'])).toBe(false)
+
+    refresh(client)
+    await expect.poll(() => invalidated(['tasks', 'r1'])).toBe(true)
+    expect(invalidated(['pdf', '/api/v1/attachments/a'])).toBe(false)
   })
 })

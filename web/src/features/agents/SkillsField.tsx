@@ -1,4 +1,5 @@
 import { useId } from 'react'
+import { useBuiltinSkills } from '@/api/builtinSkills'
 import { errorText } from '@/api/errorText'
 import { librarySpace, useWikiCatalog } from '@/api/wiki'
 import { Badge } from '@/components/ui/badge'
@@ -19,10 +20,12 @@ export interface SkillsFieldProps {
 
 // The skills of the library installed for an agent (docs/design.md 5.15):
 // the ones for its runtime to pick from, and any it has that it is given
-// no longer, to take off.
+// no longer, to take off. Veyloom's own, which every agent has (5.23.6),
+// are named apart: there is nothing to install of them.
 export function SkillsField({ runtime, value, onChange }: SkillsFieldProps) {
   const t = useT()
   const id = useId()
+  const builtin = useBuiltinSkills()
   const catalog = useWikiCatalog(librarySpace)
   const choices = skillChoices(catalog.data, runtime, value)
 
@@ -44,6 +47,14 @@ export function SkillsField({ runtime, value, onChange }: SkillsFieldProps) {
         {t('agent.skills')}
       </FieldLegend>
       <FieldDescription>{t('agent.skillsHint')}</FieldDescription>
+      {builtin.data && builtin.data.length > 0 ? (
+        <p className="text-xs text-subtle">
+          {t('agent.builtinSkills')}{' '}
+          <span className="font-mono" translate="no">
+            {builtin.data.map((skill) => skill.name).join('、')}
+          </span>
+        </p>
+      ) : null}
       {catalog.isPending ? (
         <p role="status" className="flex items-center gap-2 py-1 text-xs text-subtle">
           <Spinner className="size-3" />

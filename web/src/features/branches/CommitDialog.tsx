@@ -1,5 +1,4 @@
 import { useId, useState, type FormEvent } from 'react'
-import { TriangleAlertIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { useCommitCheckout } from '@/api/branches'
 import { errorText } from '@/api/errorText'
@@ -10,57 +9,6 @@ import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '
 import { Field, FieldError, FieldGroup, FieldLabel } from '@/components/ui/field'
 import { Textarea } from '@/components/ui/textarea'
 import { useT } from '@/lib/i18n'
-
-// filesShown caps the files the card names; the rest are counted.
-const filesShown = 5
-
-export interface CheckoutChangesProps {
-  changed: WorktreeChange[]
-  onDiff: () => void
-  onCommit: () => void
-}
-
-// CheckoutChanges is what was changed in the project's checkout and not
-// committed (docs/design.md 5.21): the members' worktrees lack it, and a
-// merge that changes the same files is refused, so a person sees the files
-// and reads or commits them from here.
-export function CheckoutChanges({ changed, onDiff, onCommit }: CheckoutChangesProps) {
-  const t = useT()
-  const shown = changed.slice(0, filesShown)
-  return (
-    <section
-      aria-label={t('branches.uncommittedTitle', { n: changed.length })}
-      className="flex gap-3 rounded-xl border border-status-wait/35 bg-status-wait/6 px-4 py-3.5"
-    >
-      <TriangleAlertIcon aria-hidden="true" className="mt-0.5 size-4 flex-none text-status-wait" />
-      <div className="flex min-w-0 flex-1 flex-col gap-2">
-        <div className="flex flex-col gap-0.5">
-          <h2 className="text-[0.84375rem] font-semibold">{t('branches.uncommittedTitle', { n: changed.length })}</h2>
-          <p className="text-[0.8125rem] text-muted-foreground">{t('branches.uncommittedHint')}</p>
-        </div>
-        <ul className="flex flex-col gap-0.5 font-mono text-[0.78125rem]" translate="no">
-          {shown.map((file) => (
-            <li key={file.path} className="flex min-w-0 gap-2">
-              <span className="w-3 flex-none text-status-wait">{file.status}</span>
-              <span className="min-w-0 break-all text-foreground">{file.path}</span>
-            </li>
-          ))}
-          {changed.length > shown.length ? (
-            <li className="pl-5 font-sans text-xs text-subtle">{t('branches.moreFiles', { n: changed.length - shown.length })}</li>
-          ) : null}
-        </ul>
-      </div>
-      <div className="flex flex-none items-start gap-2">
-        <Button size="sm" variant="outline" onClick={onDiff}>
-          {t('branches.diff')}
-        </Button>
-        <Button size="sm" onClick={onCommit}>
-          {t('branches.commit')}
-        </Button>
-      </div>
-    </section>
-  )
-}
 
 export interface CommitDialogProps {
   projectId: string

@@ -1,9 +1,11 @@
+import { useState } from 'react'
 import { ArchiveIcon, BookOpenIcon, ChevronRightIcon, CornerDownRightIcon, GitMergeIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import type { Task } from '@/api/types'
 import { AgentAvatar } from '@/components/shared/agent-avatar'
 import { StatusMark } from '@/components/shared/status-mark'
 import { UserAvatar } from '@/components/shared/user-avatar'
+import { BranchDialog, type BranchDialogState } from '@/features/branches/BranchDialog'
 import { wikiHref } from '@/features/wiki/links'
 import type { AgentLook } from '@/lib/agentLooks'
 import { formatAgo, formatElapsed } from '@/lib/format'
@@ -28,7 +30,7 @@ export interface TaskCardProps {
 // long it has been going; what was asked, two lines at most; the work it
 // is part of, or how many of its parts are done; who does it and one
 // state. The card opens the piece of work; a request waiting opens its
-// topic; work to merge, the branches.
+// topic; work to merge, the merge itself (docs/design.md 5.21).
 export function TaskCard({ task, roomId, name, look, byMember, now, onOpenThread }: TaskCardProps) {
   const t = useT()
   const title = task.title || t('tasks.untitled', { n: task.thread_number })
@@ -73,7 +75,7 @@ export function TaskCard({ task, roomId, name, look, byMember, now, onOpenThread
             <span className="grow" />
           </>
         )}
-        <Corner task={task} roomId={roomId} onOpenThread={onOpenThread} />
+        <Corner task={task} roomId={roomId} name={name} onOpenThread={onOpenThread} />
       </div>
     </article>
   )
@@ -98,8 +100,9 @@ function Parts({ done, total }: { done: number; total: number }) {
 // Corner is the one state a card ends with: a request waiting on a
 // person, work to merge, the commit it was merged in, its work archived,
 // or the wiki page it wrote.
-function Corner({ task, roomId, onOpenThread }: { task: Task; roomId: string; onOpenThread: (threadId: string) => void }) {
+function Corner({ task, roomId, name, onOpenThread }: { task: Task; roomId: string; name: string; onOpenThread: (threadId: string) => void }) {
   const t = useT()
+  const [dialog, setDialog] = useState<BranchDialogState>()
   const chip = 'relative z-10 flex h-6 flex-none items-center gap-1.25 rounded-[0.4375rem] text-xs'
   if (task.waiting) {
     return (
@@ -116,10 +119,17 @@ function Corner({ task, roomId, onOpenThread }: { task: Task; roomId: string; on
   }
   if (task.state === 'merge') {
     return (
-      <Link to={`/rooms/${roomId}/branches`} className={cn(chip, 'border px-2 text-foreground hover:bg-muted')}>
-        <GitMergeIcon aria-hidden="true" className="size-3.25 text-status-merge" />
-        {t('tasks.merge')}
-      </Link>
+      <>
+        <button
+          type="button"
+          onClick={() => setDialog({ kind: 'merge', memberId: task.member_id, name })}
+          className={cn(chip, 'border px-2 text-foreground hover:bg-muted')}
+        >
+          <GitMergeIcon aria-hidden="true" className="size-3.25 text-status-merge" />
+          {t('tasks.merge')}
+        </button>
+        <BranchDialog roomId={roomId} state={dialog} onChange={setDialog} />
+      </>
     )
   }
   const outcome = task.outcome

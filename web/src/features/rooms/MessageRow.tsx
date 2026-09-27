@@ -3,7 +3,7 @@ import { BookHeartIcon, GitBranchIcon, LibraryBigIcon } from 'lucide-react'
 import type { Approval, RoomMessage } from '@/api/types'
 import { Shimmer } from '@/components/ai-elements/shimmer'
 import { AgentAvatar } from '@/components/shared/agent-avatar'
-import { AttachmentList } from '@/components/shared/attachment-list'
+import { MessageAttachments } from '@/features/attachments/MessageAttachments'
 import { NoteLine } from '@/components/shared/note-line'
 import { UserAvatar } from '@/components/shared/user-avatar'
 import { approvalCommand } from '@/features/approvals/describe'
@@ -43,6 +43,9 @@ export interface MessageRowProps {
   leader?: boolean
   // The member whose turns the topic has, when not whoever said the root.
   worker?: string
+  // The message the address asked to see, lit up a moment (docs/webui.md
+  // 4.21).
+  lit?: boolean
 }
 
 const bodyClass = 'text-[0.90625rem] leading-[1.65] break-words text-body'
@@ -53,7 +56,7 @@ const bodyClass = 'text-[0.90625rem] leading-[1.65] break-words text-body'
 // are a line with their mark. Rows are memoised so a new message at the
 // bottom does not re-render the fifty above it.
 export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
-  const { message, sender, names, approval, systemTopic, offerProjectId, onOpenThread, continued, selected, leader, worker } = props
+  const { message, sender, names, approval, systemTopic, offerProjectId, onOpenThread, continued, selected, leader, worker, lit } = props
   const thread = message.thread
   const runningTurnId = thread?.last_turn?.status === 'running' ? thread.last_turn.id : undefined
   const live = useLiveTurn(runningTurnId)
@@ -62,7 +65,10 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
     // waits in it for a person is read there.
     const Icon = systemTopic === 'setup' ? GitBranchIcon : LibraryBigIcon
     return (
-      <li className="mx-auto grid max-w-215 grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3 px-6 py-[0.6875rem] [contain-intrinsic-size:auto_4rem] [content-visibility:auto]">
+      <li
+        data-message-id={message.id}
+        className="mx-auto grid max-w-215 grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3 px-6 py-[0.6875rem] [contain-intrinsic-size:auto_4rem] [content-visibility:auto]"
+      >
         <span className="flex size-7 items-center justify-center rounded-[28%] border text-muted-foreground">
           <Icon className="size-3.5" aria-hidden="true" />
         </span>
@@ -74,14 +80,14 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
             </time>
           </div>
           {systemTopic ? <p className="mt-1 text-[0.8125rem] text-muted-foreground">{t(`${systemTopic}Topic.hint`)}</p> : null}
-          <TopicFooter summary={thread} selected={selected} onOpen={() => onOpenThread(thread.id)} />
+          <TopicFooter summary={thread} roomId={message.room_id} selected={selected} onOpen={() => onOpenThread(thread.id)} />
         </div>
       </li>
     )
   }
   if (message.sender_kind === 'system' && offerProjectId) {
     return (
-      <li className="mx-auto grid max-w-215 grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3 px-6 py-[0.6875rem]">
+      <li data-message-id={message.id} className="mx-auto grid max-w-215 grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3 px-6 py-[0.6875rem]">
         <span className="flex size-7 items-center justify-center rounded-[28%] border text-muted-foreground">
           <BookHeartIcon className="size-3.5" aria-hidden="true" />
         </span>
@@ -91,16 +97,18 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
   }
   if (message.sender_kind === 'system') {
     return (
-      <li className="mx-auto max-w-215 px-6 py-2 [contain-intrinsic-size:auto_2rem] [content-visibility:auto]">
+      <li data-message-id={message.id} className="mx-auto max-w-215 px-6 py-2 [contain-intrinsic-size:auto_2rem] [content-visibility:auto]">
         <NoteLine note={systemNote(t, message.body)} time={message.created_at} />
       </li>
     )
   }
   return (
     <li
+      data-message-id={message.id}
       className={cn(
-        'group/row mx-auto max-w-215 px-6 [contain-intrinsic-size:auto_4rem] [content-visibility:auto]',
+        'group/row mx-auto max-w-215 rounded-xl px-6 transition-colors duration-1000 [contain-intrinsic-size:auto_4rem] [content-visibility:auto]',
         continued ? 'pt-0.5 pb-[0.6875rem]' : 'py-[0.6875rem]',
+        lit && 'bg-selection duration-200',
       )}
     >
       <div
@@ -132,10 +140,11 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
             </div>
           )}
           <Body message={message} names={names} liveText={live?.text} waiting={approval} />
-          <AttachmentList attachments={message.attachments} />
+          <MessageAttachments attachments={message.attachments} roomId={message.room_id} threadId={message.thread_id} />
           {thread && onOpenThread ? (
             <TopicFooter
               summary={thread}
+              roomId={message.room_id}
               liveTool={live?.tool}
               compacting={live?.compacting}
               waiting={approval ? { what: approvalCommand(approval), kind: askKind(approval.kind) } : undefined}
@@ -197,6 +206,7 @@ function areEqual(prev: MessageRowProps, next: MessageRowProps) {
     prev.continued === next.continued &&
     prev.selected === next.selected &&
     prev.leader === next.leader &&
-    prev.worker === next.worker
+    prev.worker === next.worker &&
+    prev.lit === next.lit
   )
 }

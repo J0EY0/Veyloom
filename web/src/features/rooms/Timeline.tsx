@@ -1,5 +1,6 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { ArrowDownIcon, MessageSquareDashedIcon } from 'lucide-react'
+import { useSearchParams } from 'react-router'
 import { useStickToBottomContext } from 'use-stick-to-bottom'
 import { usePendingApprovals } from '@/api/approvals'
 import type { Approval, RoomMessage } from '@/api/types'
@@ -37,6 +38,11 @@ export interface TimelineProps {
 // face.
 const GROUP_MS = 5 * 60_000
 
+// How long the message the address asked for stays lit, and how long the
+// chat takes to settle around it.
+const LIT_MS = 2500
+const SETTLE_MS = 400
+
 // continues says the message follows on from the one before it: said by
 // the same person or member a moment later, neither a note of the system's.
 export function continues(previous: RoomMessage | undefined, message: RoomMessage): boolean {
@@ -64,6 +70,13 @@ export function Timeline({ roomId, onOpenThread, wikiThreadId, setupThreadId, pr
   }, [pending.data])
   const list = useMemo(() => messages.data?.pages.flat() ?? [], [messages.data])
   const nothing = messages.isError || (messages.isSuccess && list.length === 0)
+  // The message the address asked to see, lit up a moment once found.
+  const [lit, setLit] = useState('')
+  useEffect(() => {
+    if (lit === '') return
+    const timer = setTimeout(() => setLit(''), LIT_MS)
+    return () => clearTimeout(timer)
+  }, [lit])
 
   const topSentinel = useTopSentinel(() => {
     if (messages.hasPreviousPage && !messages.isFetchingPreviousPage) {
@@ -130,6 +143,7 @@ export function Timeline({ roomId, onOpenThread, wikiThreadId, setupThreadId, pr
                     }
                     offerProjectId={offerMessageId !== undefined && message.id === offerMessageId ? projectId : undefined}
                     onOpenThread={onOpenThread}
+                    lit={message.id === lit}
                   />
                 ))}
               </ol>
@@ -138,6 +152,7 @@ export function Timeline({ roomId, onOpenThread, wikiThreadId, setupThreadId, pr
         )}
       </ConversationContent>
       <ScrollDown lastId={list[list.length - 1]?.id ?? ''} />
+      <MessageJump messages={messages} loaded={list} onFound={setLit} />
     </Conversation>
   )
 }
@@ -171,4 +186,43 @@ function ScrollDown({ lastId }: { lastId: string }) {
       {unseen ? t('timeline.newMessages') : t('timeline.toBottom')}
     </Button>
   )
+}
+
+// MessageJump brings the message the address names (?message=<id>, from
+// the attachment viewer's "show in chat") into view: it pages back until
+// the message is loaded, scrolls to it and has it lit. The address forgets
+// it once it is found, or once there is nothing older to look in.
+function MessageJump({ messages, loaded, onFound }: { messages: ReturnType<typeof useRoomMessages>; loaded: RoomMessage[]; onFound: (id: string) => void }) {
+  const [params, setParams] = useSearchParams()
+  const target = params.get('message') ?? ''
+  const { stopScroll } = useStickToBottomContext()
+  const found = target !== '' && loaded.some((message) => message.id === target)
+  const { isSuccess, hasPreviousPage, isFetchingPreviousPage, fetchPreviousPage } = messages
+  useEffect(() => {
+    if (target === '' || !isSuccess) return
+    const forget = () =>
+      setParams(
+        (current) => {
+          const next = new URLSearchParams(current)
+          next.delete('message')
+          return next
+        },
+        { replace: true },
+      )
+    if (found) {
+      // Out of the hold that keeps the chat at its newest message, then to
+      // the message once the chat is laid out, and again once pictures
+      // and rows drawn late have moved it.
+      stopScroll()
+      const bring = () => document.querySelector(`[data-message-id="${target}"]`)?.scrollIntoView({ block: 'center' })
+      requestAnimationFrame(bring)
+      setTimeout(bring, SETTLE_MS)
+      onFound(target)
+      forget()
+    } else if (!isFetchingPreviousPage) {
+      if (hasPreviousPage) void fetchPreviousPage()
+      else forget()
+    }
+  }, [target, found, isSuccess, hasPreviousPage, isFetchingPreviousPage, fetchPreviousPage, setParams, stopScroll, onFound])
+  return null
 }

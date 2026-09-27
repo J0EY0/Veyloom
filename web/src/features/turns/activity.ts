@@ -1,8 +1,10 @@
+import { eventsOf } from '@/api/transcript'
 import type { Approval, TranscriptLine, TurnEvent } from '@/api/types'
 import { type AskKind, askKind } from '@/features/approvals/kinds'
 import { confirmationOf, planTitle } from '@/features/approvals/plans'
 import { noticeText } from '@/features/threads/systemNote'
 import { t } from '@/lib/i18n'
+import { talkCall } from './talkCalls'
 
 // What a turn did, in the units people read: tools run, files changed,
 // permissions asked. Built from live events while the turn runs and from
@@ -12,7 +14,8 @@ export type NoticeLevel = 'info' | 'warning' | 'error'
 
 export type ActivityItem =
   // A call waiting is held up by a request for a person's permission.
-  | { kind: 'tool'; tool: string; input: string; result?: string; status: 'running' | 'waiting' | 'done' | 'failed' }
+  // callId is the runtime's id for the call, when it gives one.
+  | { kind: 'tool'; tool: string; input: string; result?: string; status: 'running' | 'waiting' | 'done' | 'failed'; callId?: string }
   | { kind: 'file'; path: string }
   // id is the runtime's id for the request, which its decision names;
   // reviewer is set when the runtime's own reviewer settled it.
@@ -20,6 +23,9 @@ export type ActivityItem =
   | { kind: 'error'; text: string }
   // What the runtime told people: shown as it is, never folded away.
   | { kind: 'notice'; level: NoticeLevel; text: string }
+  // What people said in the turn's topic that it was passed as it ran:
+  // who said the last of it, and that, on one line.
+  | { kind: 'steer'; who: string; text: string }
 
 export type Notice = Extract<ActivityItem, { kind: 'notice' }>
 
@@ -35,12 +41,24 @@ export function activityFromEvents(events: TurnEvent[], ended = false): Activity
   for (const [index, event] of events.entries()) {
     switch (event.kind) {
       case 'tool_call':
-        items.push({ kind: 'tool', tool: event.tool ?? '', input: event.input ?? '', status: 'running' })
+        items.push({
+          kind: 'tool',
+          tool: event.tool ?? '',
+          input: event.input ?? '',
+          status: 'running',
+          ...(event.call_id ? { callId: event.call_id } : {}),
+        })
         break
       case 'tool_result': {
+        // A result names its call when the runtime gives calls ids: calls
+        // made at once, two reads say, end in any order. Without one it is
+        // the latest call of its tool still going.
         const open = findLast(
           items,
-          (item) => item.kind === 'tool' && (item.status === 'running' || item.status === 'waiting') && item.tool === (event.tool ?? item.tool),
+          (item) =>
+            item.kind === 'tool' &&
+            (item.status === 'running' || item.status === 'waiting') &&
+            (event.call_id ? item.callId === event.call_id : item.tool === (event.tool ?? item.tool)),
         )
         if (open && open.kind === 'tool') {
           open.result = event.text
@@ -73,11 +91,26 @@ export function activityFromEvents(events: TurnEvent[], ended = false): Activity
       case 'error':
         items.push({ kind: 'error', text: event.text ?? '' })
         break
+      case 'steer':
+        items.push({ kind: 'steer', ...steered(event.text ?? '') })
+        break
       default:
         break
     }
   }
   return items
+}
+
+// steered is who a steer is from and what they said, on one line: the last
+// of the messages it marks for the turn to answer, as the hub writes them
+// (">> [name] body", internal/hub/steer.go).
+export function steered(text: string): { who: string; text: string } {
+  let found = { who: '', text: '' }
+  for (const line of text.split('\n')) {
+    const match = /^>> \[([^\]]*)\] ?(.*)$/.exec(line)
+    if (match) found = { who: match[1], text: match[2] }
+  }
+  return found
 }
 
 // withApprovals brings a running turn's steps up to date from the requests
@@ -117,8 +150,7 @@ function commandOf(input: unknown): string | undefined {
 }
 
 export function activityFromTranscript(lines: TranscriptLine[]): ActivityItem[] {
-  const events = lines.flatMap((line) => (line.kind === 'event' && line.event ? [line.event] : []))
-  const items = activityFromEvents(events, true)
+  const items = activityFromEvents(eventsOf(lines), true)
   // Decisions come as their own lines, naming the request they settle; one
   // without a name settles the oldest request still pending.
   for (const line of lines) {
@@ -134,7 +166,7 @@ export function activityFromTranscript(lines: TranscriptLine[]): ActivityItem[] 
 
 // What a tool is for, whichever runtime's spelling it has: what a summary
 // counts it as. Reaching for a tool (Claude Code's ToolSearch) is none.
-type ToolSort = 'wiki' | 'room' | 'read' | 'search' | 'command' | 'edit' | 'send' | 'memory' | 'reach' | 'other'
+type ToolSort = 'wiki' | 'room' | 'read' | 'search' | 'command' | 'edit' | 'send' | 'remind' | 'unremind' | 'draft' | 'memory' | 'reach' | 'other'
 
 const sorts: Record<string, ToolSort> = {
   Bash: 'command',
@@ -169,8 +201,12 @@ const sorts: Record<string, ToolSort> = {
   read_topic: 'room',
   read_turn: 'room',
   read_room: 'room',
+  read_message: 'room',
   search_messages: 'room',
   send_message: 'send',
+  set_reminder: 'remind',
+  cancel_reminder: 'unremind',
+  draft_action: 'draft',
   remember: 'memory',
   forget: 'memory',
   ToolSearch: 'reach',
@@ -188,6 +224,7 @@ export function summarize(items: ActivityItem[]): string {
   const files = items.filter((item) => item.kind === 'file').length
   const failed = items.filter((item) => item.kind === 'tool' && item.status === 'failed').length
   const asked = (kind: AskKind) => items.filter((item) => item.kind === 'approval' && (item.asks ?? 'tool_use') === kind).length
+  const steers = items.filter((item) => item.kind === 'steer').length
   const n = {
     wiki: count('wiki'),
     room: count('room'),
@@ -195,6 +232,9 @@ export function summarize(items: ActivityItem[]): string {
     search: count('search'),
     command: count('command'),
     send: count('send'),
+    remind: count('remind'),
+    unremind: count('unremind'),
+    draft: count('draft'),
     memory: count('memory'),
     other: count('other'),
   }
@@ -206,12 +246,16 @@ export function summarize(items: ActivityItem[]): string {
     n.command > 0 ? t('activity.commands', { n: n.command }) : '',
     files > 0 ? t('activity.files', { n: files }) : '',
     n.send > 0 ? t('activity.sent', { n: n.send }) : '',
+    n.remind > 0 ? t('activity.reminders', { n: n.remind }) : '',
+    n.unremind > 0 ? t('activity.unreminded', { n: n.unremind }) : '',
+    n.draft > 0 ? t('activity.drafts', { n: n.draft }) : '',
     n.memory > 0 ? t('activity.memories', { n: n.memory }) : '',
     n.other > 0 ? t('activity.tools', { n: n.other }) : '',
     failed > 0 ? t('activity.failures', { n: failed }) : '',
     asked('tool_use') > 0 ? t('activity.approvals', { n: asked('tool_use') }) : '',
     asked('question') > 0 ? t('activity.questions', { n: asked('question') }) : '',
     asked('form') + asked('link') > 0 ? t('activity.asks', { n: asked('form') + asked('link') }) : '',
+    steers > 0 ? t('activity.steers', { n: steers }) : '',
   ].filter(Boolean)
   return parts.length > 0 ? parts.join(t('common.listSeparator')) : t('activity.none')
 }
@@ -244,6 +288,8 @@ export function describeTool(tool: string, input: string): string {
   }
   // Records of old, and some tests, can lack either.
   const name = (tool ?? '').replace(/^mcp__veyloom__/, '')
+  const talk = talkCall(name.replace(/^veyloom[./]/, ''), input ?? '')
+  if (talk !== undefined) return talk
   const subject = subjectOf(input ?? '')
   return subject ? `${name} ${subject}` : name
 }

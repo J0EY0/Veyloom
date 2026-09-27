@@ -78,8 +78,9 @@ const work: Work = {
   ],
 }
 
-function stub(found: Work | Response = work) {
+function stub(found: Work | Response = work, extra: Record<string, unknown> = {}) {
   return stubApi({
+    ...extra,
     '/works/c1': found instanceof Response ? found : { work: found },
     '/rooms/r1': { room: room('r1', 'p1', 'main') },
     '/projects': { projects: [{ ...project('p1', 'Linkkeeper'), leader_id: 'lead' }] },
@@ -141,6 +142,45 @@ describe('WorkView', () => {
     expect(merged).toHaveTextContent('合并进主线abcdef1，带着 Coder 的改动')
     const reset = (await screen.findByText('重置到主线')).closest('li')!
     expect(reset).toHaveTextContent('veyloom/tester重置到主线，原内容归档为refs/veyloom/archive/tester/1')
+  })
+
+  it('merges the work still waiting on a member’s branch', async () => {
+    stub(work, {
+      '/rooms/r1/tasks': {
+        tasks: [
+          {
+            chain: 'c1',
+            thread_id: 't2',
+            thread_number: 2,
+            member_id: 'coder',
+            title: 'Add the tag table',
+            state: 'merge',
+            started_at: '2026-09-26T09:00:00Z',
+            turns: 1,
+          },
+        ],
+      },
+      '/projects/p1/branches': {
+        branches: {
+          main: { repo_path: '/src/app', git: true, branch: 'main' },
+          members: [
+            {
+              member_id: 'coder',
+              name: 'Coder',
+              branch: 'veyloom/coder',
+              dir: '/wt/coder',
+              prepared: true,
+              busy: false,
+              status: { branch: 'veyloom/coder', ahead: 1, behind: 0, uncommitted: 0, files: [{ path: 'tags.go', status: 'A', added: 9, deleted: 0 }] },
+            },
+          ],
+        },
+      },
+    })
+    open()
+    await userEvent.click(await screen.findByRole('button', { name: '合并 Coder 的改动' }))
+    const dialog = await screen.findByRole('dialog', { name: '把 Coder 的改动合并到 main' })
+    expect(within(dialog).getByText('Add the tag table', { selector: 'li span' })).toBeInTheDocument()
   })
 
   it('says so when the work cannot be read', async () => {

@@ -1,4 +1,4 @@
-import type { Approval, Message, Project, Room, RoomKind, ThreadSummary, Turn, User } from '@/api/types'
+import type { Approval, Attachment, AttachmentKind, Message, Project, Room, RoomAttachment, RoomKind, ThreadSummary, Turn, User } from '@/api/types'
 
 export function project(id: string, name: string, repo_path = '', main_room_id = `${id}-main`): Project {
   return { id, name, repo_path, main_room_id, created_at: '2026-09-14T00:00:00Z' }
@@ -61,4 +61,35 @@ export function approval(id: string, overrides: Partial<Approval> = {}): Approva
     created_at: '2026-09-14T02:00:05Z',
     ...overrides,
   }
+}
+
+export function attachment(id: string, filename: string, kind: AttachmentKind, overrides: Partial<Attachment> = {}): Attachment {
+  return {
+    id,
+    room_id: 'r1',
+    message_id: `m-${id}`,
+    filename,
+    media_type: 'application/octet-stream',
+    kind,
+    size: 2048,
+    created_at: '2026-09-14T02:00:00Z',
+    ...overrides,
+  }
+}
+
+// An attachment as the room's list has it: sent by the person u1 in the
+// room itself, unless overrides say otherwise.
+export function roomAttachment(id: string, filename: string, kind: AttachmentKind, overrides: Partial<RoomAttachment> = {}): RoomAttachment {
+  return { ...attachment(id, filename, kind), sender_kind: 'user', user_id: 'u1', sender_name: 'Alice', message_seq: 1, ...overrides }
+}
+
+// runtimeTraits is the hub's table of how each runtime takes its turns
+// (docs/design.md 5.23.9), as GET /runtime-traits answers.
+export const runtimeTraits = {
+  traits: {
+    claude: { system_prompt_each_run: true, steer: true, wiki_when_read_only: true },
+    codex: { system_prompt_each_run: false, steer: true, wiki_when_read_only: false },
+    pi: { system_prompt_each_run: true, steer: true, wiki_when_read_only: true },
+    fake: { system_prompt_each_run: true, steer: true, wiki_when_read_only: true },
+  },
 }

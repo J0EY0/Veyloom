@@ -33,8 +33,11 @@ export const router = createBrowserRouter([
           { path: 'rooms/:roomId/tasks/*', Component: RoomPage },
           // The chat's Wiki tab: the overview, a page at its own path, the changes.
           { path: 'rooms/:roomId/wiki/*', Component: RoomPage },
-          // The chat's Branches tab: the main line and each member's worktree.
-          { path: 'rooms/:roomId/branches', Component: RoomPage },
+          // The chat's Branches tab moved into its info (2026-09-27): the old
+          // address opens that.
+          { path: 'rooms/:roomId/branches', loader: ({ params }) => redirect(`/rooms/${params.roomId}?panel=members`) },
+          // The chat's Attachments tab: every file its messages brought.
+          { path: 'rooms/:roomId/attachments', Component: RoomPage },
           // Members used to be a page of their own; they are a panel of the
           // chat now (2026-09-16), and the old URL opens it.
           { path: 'rooms/:roomId/agents', loader: ({ params }) => redirect(`/rooms/${params.roomId}?panel=members`) },

@@ -74,6 +74,15 @@
   --chart-track: #eeeff1;
   --work-bar: #5e6a82;
   --wait-bar: #cf7424;
+  /* The attachment viewer is dark in both themes, a lightbox round the
+     picture, and a page of a PDF is paper white (docs/webui.md 4.21). */
+  --viewer: #08090b;
+  --viewer-foreground: #e4e6ea;
+  --viewer-muted: #8a8f98;
+  --viewer-control: rgba(28, 29, 33, 0.92);
+  --viewer-line: rgba(255, 255, 255, 0.1);
+  --viewer-hover: rgba(255, 255, 255, 0.1);
+  --paper: #ffffff;
   /* A runtime's own colour: the filled disc behind its mark, plus the
      wash and ink of the name pill that echoes it. The only hue in the UI
      besides the four status colours (docs/webui.md §0). */
@@ -205,6 +214,13 @@
   --color-chart-track: var(--chart-track);
   --color-work-bar: var(--work-bar);
   --color-wait-bar: var(--wait-bar);
+  --color-viewer: var(--viewer);
+  --color-viewer-foreground: var(--viewer-foreground);
+  --color-viewer-muted: var(--viewer-muted);
+  --color-viewer-control: var(--viewer-control);
+  --color-viewer-line: var(--viewer-line);
+  --color-viewer-hover: var(--viewer-hover);
+  --color-paper: var(--paper);
   --color-runtime-claude: var(--runtime-claude);
   --color-runtime-claude-wash: var(--runtime-claude-wash);
   --color-runtime-claude-ink: var(--runtime-claude-ink);

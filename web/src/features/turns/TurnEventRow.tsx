@@ -10,6 +10,7 @@ import { useT } from '@/lib/i18n'
 import { decisionNote } from '@/features/approvals/describe'
 import { turnErrorText } from './turnError'
 import { BriefFold } from './BriefFold'
+import { quotaText } from '@/features/machines/quota'
 
 // One line of a turn's record. Long tool output is folded to three lines
 // until asked for.
@@ -32,6 +33,7 @@ function Detail({ line }: { line: TranscriptLine }) {
         <div className="min-w-0">
           <span className="text-muted-foreground">{t('event.start', { runtime: line.runtime ? runtimeName(line.runtime) : '' })}</span>
           {line.spec?.prompt ? <BriefFold prompt={line.spec.prompt} /> : null}
+          {line.spec?.system_prompt ? <BriefFold prompt={line.spec.system_prompt} kind="system" /> : null}
         </div>
       )
     case 'restart':
@@ -41,6 +43,15 @@ function Detail({ line }: { line: TranscriptLine }) {
         <div className="min-w-0">
           <span className="text-muted-foreground">{t('event.restart', { error: turnErrorText(line.error ?? '') })}</span>
           {line.spec?.prompt ? <BriefFold prompt={line.spec.prompt} /> : null}
+        </div>
+      )
+    case 'reply_asked':
+      // It said nothing in the chat: asked, in the session it ran in, for
+      // the reply it did not give.
+      return (
+        <div className="min-w-0">
+          <span className="text-muted-foreground">{t('event.replyAsked')}</span>
+          {line.spec?.prompt ? <BriefFold prompt={line.spec.prompt} kind="ask" /> : null}
         </div>
       )
     case 'done':
@@ -86,6 +97,20 @@ function Detail({ line }: { line: TranscriptLine }) {
           {t('activity.requests')} <span className="font-mono">{describeTool(event.tool ?? '', event.input ?? '')}</span>
         </span>
       )
+    case 'steer':
+      // What people said in the topic, passed to the turn as it ran.
+      return (
+        <div className="min-w-0">
+          <span className="text-muted-foreground">{t('event.steer')}</span>
+          <BriefFold prompt={event.text ?? ''} kind="steer" />
+        </div>
+      )
+    case 'steer_dropped':
+      return <span className="text-subtle">{t('event.steerDropped')}</span>
+    case 'quota':
+      // How the account stands against its usage limits, as the runtime
+      // told (docs/design.md 5.23.3).
+      return event.quota ? <span className="text-subtle">{quotaText(t, event.quota)}</span> : null
     default:
       return <span className="text-status-fail">{event.text}</span>
   }

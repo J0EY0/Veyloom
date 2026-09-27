@@ -5,6 +5,8 @@ import { StatusDot, type StatusTone } from '@/components/shared/status-dot'
 import { formatDuration } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { t, useT } from '@/lib/i18n'
+import { useNow } from '@/lib/useNow'
+import { quietFor, useQuietSince } from '@/features/turns/quiet'
 import { turnErrorText } from '@/features/turns/turnError'
 
 export interface TopicFooterProps {
@@ -21,6 +23,9 @@ export interface TopicFooterProps {
   worker?: string
   // The topic is the one open beside the chat.
   selected?: boolean
+  // The room, to find out whether the topic's running turn went quiet
+  // (docs/design.md 5.23.8).
+  roomId?: string
 }
 
 const tones: Record<StatusTone, string> = {
@@ -34,9 +39,14 @@ const tones: Record<StatusTone, string> = {
 // What hangs under a topic root (docs/webui.md §4.1): how its work stands,
 // the whole piece of work where a person's ask began it, and the topic by
 // its number with how much was said. Either opens the topic.
-export function TopicFooter({ summary, onOpen, liveTool, waiting, compacting, worker, selected }: TopicFooterProps) {
+export function TopicFooter({ summary, onOpen, liveTool, waiting, compacting, worker, selected, roomId = '' }: TopicFooterProps) {
   const t = useT()
-  const state = topicState(summary, liveTool, waiting, compacting)
+  const running = summary.last_turn?.status === 'running' ? summary.last_turn.id : undefined
+  const quietSince = useQuietSince(roomId, running)
+  // Minutes are what it says: a clock of its own, the row it hangs under
+  // being drawn again only when its message changes.
+  const now = useNow(quietSince !== undefined, 30_000)
+  const state = topicState(summary, liveTool, waiting, compacting, quietSince ? quietFor(t, quietSince, now) : undefined)
   return (
     <button
       type="button"
@@ -78,15 +88,19 @@ export interface TopicState {
 }
 
 // topicState reads the summary as one phrase; the same words appear in
-// the topic panel's turn headers.
-export function topicState(summary: ThreadSummary, liveTool?: string, waiting?: Waiting, compacting?: boolean): TopicState {
+// the topic panel's turn headers. quiet says for how long a running turn
+// has shown no sign of life, once it went quiet.
+export function topicState(summary: ThreadSummary, liveTool?: string, waiting?: Waiting, compacting?: boolean, quiet?: string): TopicState {
   const turn = summary.last_turn
   if (!turn) return { tone: 'idle', text: t('topic.plain') }
   const work = summary.work
   if (turn.status === 'running') {
     if (waiting) return { tone: 'wait', text: t(waitingKeys[waiting.kind].topic, { what: waiting.what }), ofTurn: true }
+    const doing = liveTool ? t('topic.running', { tool: liveTool }) : t('topic.working')
+    // A compaction that long may be stuck as well.
+    if (quiet) return { tone: 'wait', text: `${compacting ? t('turn.compacting') : doing} · ${quiet}`, ofTurn: true }
     if (compacting) return { tone: 'run', text: t('turn.compacting'), ofTurn: true }
-    return { tone: 'run', text: liveTool ? t('topic.running', { tool: liveTool }) : t('topic.working'), ofTurn: true }
+    return { tone: 'run', text: doing, ofTurn: true }
   }
   // The topic's own turn is over, and others of its piece of work run on.
   if (work?.running) return { tone: 'run', text: t('topic.workRunning', { turns: work.turns }) }

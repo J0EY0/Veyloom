@@ -17,8 +17,8 @@ import { MembersPanel } from '@/features/members/MembersPanel'
 import { ApprovalsPanel } from '@/features/approvals/ApprovalsPanel'
 import { ThreadPanel } from '@/features/threads/ThreadPanel'
 import { WikiView } from '@/features/wiki/WikiView'
-import { BranchesView } from '@/features/branches/BranchesView'
 import { TasksView } from '@/features/tasks/TasksView'
+import { AttachmentsView } from '@/features/attachments/AttachmentsView'
 import { TurnDrawer } from '@/features/turns/TurnDrawer'
 import { useDocumentTitle } from '@/lib/useDocumentTitle'
 import { useEscape } from '@/lib/useEscape'
@@ -48,8 +48,8 @@ export function RoomPage() {
   const pending = usePendingApprovals(roomId)
   // The Wiki tab is this page too: its part of the address picks the page.
   const wikiMatch = useMatch('/rooms/:roomId/wiki/*')
-  const branchesMatch = useMatch('/rooms/:roomId/branches')
   const tasksMatch = useMatch('/rooms/:roomId/tasks/*')
+  const attachmentsMatch = useMatch('/rooms/:roomId/attachments')
   const projectId = room.data?.project_id ?? ''
   const wikiSpace = useMemo<WikiSpace>(() => ({ kind: 'project', projectId, roomId }), [projectId, roomId])
   const pendingCount = pending.data?.length ?? 0
@@ -137,7 +137,8 @@ export function RoomPage() {
   // over the chat and a press anywhere else closes it (see panelLayout).
   // A topic made wide covers the chat by choice.
   const [bodyRef, bodyRem] = useWidthRem()
-  const layout = panelLayout(bodyRem, panel === 'members' ? NARROW_PANEL_REM : PANEL_REM)
+  // The chat's info is narrow, unless it lists branches.
+  const layout = panelLayout(bodyRem, panel === 'members' && !project?.repo_path ? NARROW_PANEL_REM : PANEL_REM)
   const beside = sideOpen && !wide
   const closeSide = useCallback(() => {
     if (panel) closePanel()
@@ -174,7 +175,7 @@ export function RoomPage() {
         actions={
           <>
             <RoomMenu roomId={roomId} />
-            <RoomTabs roomId={roomId} view={wikiMatch ? 'wiki' : branchesMatch ? 'branches' : tasksMatch ? 'tasks' : 'chat'} />
+            <RoomTabs roomId={roomId} view={wikiMatch ? 'wiki' : tasksMatch ? 'tasks' : attachmentsMatch ? 'attachments' : 'chat'} />
           </>
         }
         trailing={
@@ -217,10 +218,10 @@ export function RoomPage() {
         >
           {wikiMatch ? (
             <WikiView space={wikiSpace} rest={wikiMatch.params['*'] ?? ''} onOpenThread={openThread} />
-          ) : branchesMatch ? (
-            <BranchesView projectId={projectId} roomId={roomId} onOpenThread={openThread} />
           ) : tasksMatch ? (
             <TasksView roomId={roomId} chain={tasksMatch.params['*'] ?? ''} onOpenThread={openThread} />
+          ) : attachmentsMatch ? (
+            <AttachmentsView roomId={roomId} />
           ) : (
             <>
               <div className="relative flex min-h-0 flex-1 flex-col">

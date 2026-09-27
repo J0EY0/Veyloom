@@ -13,6 +13,13 @@ describe('errorText', () => {
     expect(errorText(weak)).toBe('A password needs at least 8 characters.')
   })
 
+  it('says when to try again after too many wrong passwords', () => {
+    const held = new ApiError(429, 'too many wrong passwords', { error: '…', code: 'tooManyAttempts', params: { seconds: '61', minutes: '2' } })
+    expect(errorText(held)).toBe('密码错了太多次，请 2 分钟后再试。')
+    setLocale('en')
+    expect(errorText(held)).toBe('Too many wrong passwords; try again in 2 minutes.')
+  })
+
   it('joins a list the server sends as lines the way the language joins one', () => {
     const inTheWay = new ApiError(409, 'changes in the way', { error: '…', code: 'checkoutChanged', params: { files: 'README.md\nstore.go' } })
     expect(errorText(inTheWay)).toBe('仓库目录里的 README.md、store.go 有没提交的改动，这次合并也要改它们：先提交这些改动，再合并。')

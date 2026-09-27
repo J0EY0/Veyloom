@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import type { UpkeepStatus } from '@/api/types'
 import { t } from '@/lib/i18n'
 import { stubApi } from '@/test/fetch'
-import { project, room } from '@/test/fixtures'
+import { project, room, runtimeTraits } from '@/test/fixtures'
 import { renderWithProviders } from '@/test/render'
 import { systemText } from '@/features/threads/systemNote'
 import { MaintainerCard } from './Maintainer'
@@ -145,6 +145,7 @@ describe('MaintainerCard', () => {
           { id: 'a2', runtime: 'claude', permission_preset: 'read_only' },
         ],
       },
+      '/runtime-traits': runtimeTraits,
     })
     const user = userEvent.setup()
     renderWithProviders(<MaintainerCard projectId="p1" roomId="r1" onOpenThread={() => {}} />)
@@ -199,6 +200,7 @@ describe('systemText', () => {
         "Wiki upkeep by Keeper (the last upkeep left turns to go over): 20 turns of this chat, 0 turns of other projects using this team's skills, 1 message from people.",
       ),
     ).toBe('Keeper 开始整理 wiki（上次没看完）：本群 20 轮，其他项目用本团队技能的 0 轮，人的消息 1 条')
-    expect(systemText(t, "Keeper's turn was cancelled")).toBe("Keeper's turn was cancelled")
+    // Notes it has no words of its own for are shown as the hub wrote them.
+    expect(systemText(t, 'Keeper could not start a turn: no machine')).toBe('Keeper could not start a turn: no machine')
   })
 })

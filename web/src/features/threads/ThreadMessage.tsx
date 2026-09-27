@@ -1,5 +1,5 @@
 import type { Approval, Message } from '@/api/types'
-import { AttachmentList } from '@/components/shared/attachment-list'
+import { MessageAttachments } from '@/features/attachments/MessageAttachments'
 import { RequestCard } from '@/features/approvals/RequestCard'
 import { AgentBody } from '@/features/rooms/AgentBody'
 import { MessageBody } from '@/features/rooms/MessageBody'
@@ -44,7 +44,7 @@ export function ThreadMessage({ message, sender, approval, names, target = 'room
   const content = (
     <>
       {words}
-      <AttachmentList attachments={message.attachments} className="mt-1.5" />
+      <MessageAttachments attachments={message.attachments} roomId={message.room_id} threadId={message.thread_id} className="mt-1.5" />
     </>
   )
   if (inTurn) {

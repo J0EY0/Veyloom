@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { formatAgo, formatAgoParts, formatElapsed, formatTime } from './format'
+import { formatAgo, formatAgoParts, formatElapsed, formatLongSpan, formatTime } from './format'
 import { setLocale } from './i18n'
 
 describe('formatTime', () => {
@@ -34,6 +34,16 @@ describe('formats in English', () => {
     const now = new Date('2026-09-14T10:05:00')
     expect(formatTime('2026-09-13T15:19:00', now)).toMatch(/Sep 13/)
     expect(formatAgo('2026-09-14T09:50:00Z', new Date('2026-09-14T10:05:00Z'))).toBe('15m ago')
+  })
+})
+
+describe('formatLongSpan', () => {
+  it('says days, hours and minutes, to the minute', () => {
+    expect(formatLongSpan(0)).toBe('0 分')
+    expect(formatLongSpan(45 * 60_000 + 20_000)).toBe('45 分')
+    expect(formatLongSpan(3 * 3_600_000)).toBe('3 小时')
+    expect(formatLongSpan(3 * 3_600_000 + 20 * 60_000)).toBe('3 小时 20 分')
+    expect(formatLongSpan(52 * 3_600_000)).toBe('2 天 4 小时')
   })
 })
 

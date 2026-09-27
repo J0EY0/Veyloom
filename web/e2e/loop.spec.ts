@@ -77,16 +77,16 @@ test('ask, approve, read the report, find it in the inbox', async ({ page }) => 
   await box.fill('')
 
   // Ask without an @, a file along: picked into the composer, uploaded on
-  // send, shown under the message as a thumbnail that opens.
+  // send, shown under the message as a picture that opens in the viewer.
   await page.setInputFiles('input[type=file]', { name: 'shot.png', mimeType: 'image/png', buffer: png })
   await expect(page.getByText('shot.png')).toBeVisible()
   await box.fill('起个服务做冒烟')
   await page.keyboard.press('Enter')
   // In the chat; the sidebar lists the topic it opens by the same words.
   await expect(page.getByRole('main').getByText('起个服务做冒烟')).toBeVisible()
-  const shot = page.getByRole('link', { name: '打开附件 shot.png' })
+  const shot = page.getByRole('button', { name: '预览 shot.png' })
   await expect(shot).toBeVisible()
-  const served = await request.get((await shot.getAttribute('href')) ?? '')
+  const served = await request.get((await shot.locator('img').getAttribute('src')) ?? '')
   expect(served.ok()).toBeTruthy()
   expect(served.headers()['content-type']).toBe('image/png')
 

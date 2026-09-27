@@ -21,13 +21,15 @@ export interface UnfinishedMergeProps {
   member: MemberBranch
   // The main line's branch, the one the member was merging in.
   branch: string
+  // After handing it back, or giving it up.
+  onDone?: () => void
 }
 
 // UnfinishedMerge is what a person does about a merge a member left under
 // way in its worktree (docs/design.md 5.21): hand it back to the member,
 // naming the files that still have conflict markers, or give the merge up,
 // the worktree as it was before it began.
-export function UnfinishedMerge({ roomId, member, branch }: UnfinishedMergeProps) {
+export function UnfinishedMerge({ roomId, member, branch, onDone }: UnfinishedMergeProps) {
   const t = useT()
   const files = member.status?.conflicts ?? []
   const { handOver, pending } = useHandOver(roomId, member.member_id, member.name)
@@ -44,7 +46,7 @@ export function UnfinishedMerge({ roomId, member, branch }: UnfinishedMergeProps
         variant="outline"
         disabled={pending}
         onClick={() =>
-          handOver(files.length > 0 ? t('branches.handOverUnfinished', { branch, files: files.join('、') }) : t('branches.handOverCommit', { branch }))
+          handOver(files.length > 0 ? t('branches.handOverUnfinished', { branch, files: files.join('、') }) : t('branches.handOverCommit', { branch }), onDone)
         }
       >
         {t('branches.handOverAgain', { name: member.name })}
@@ -68,6 +70,7 @@ export function UnfinishedMerge({ roomId, member, branch }: UnfinishedMergeProps
                     onSuccess: () => {
                       setConfirming(false)
                       toast.success(t('branches.aborted'))
+                      onDone?.()
                     },
                     onError: (err) => toast.error(errorText(err)),
                   })

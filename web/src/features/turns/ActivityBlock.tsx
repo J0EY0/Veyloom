@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronRightIcon, FileTextIcon, ShieldCheckIcon, TerminalIcon } from 'lucide-react'
+import { ChevronRightIcon, FileTextIcon, MessageSquarePlusIcon, ShieldCheckIcon, TerminalIcon } from 'lucide-react'
 import { Task, TaskContent, TaskItem, TaskItemFile, TaskTrigger } from '@/components/ai-elements/task'
 import { StatusDot } from '@/components/shared/status-dot'
 import { Button } from '@/components/ui/button'
@@ -104,6 +104,13 @@ function Row({ item }: { item: ActivityItem }) {
           <span className={cn('ml-auto flex-none text-xs', item.status === 'pending' ? 'text-status-wait' : 'text-subtle')}>
             {(approvalKeys as readonly string[]).includes(item.status) ? t(`activity.${item.status as (typeof approvalKeys)[number]}`) : item.status}
           </span>
+        </>
+      )
+    case 'steer':
+      return (
+        <>
+          <MessageSquarePlusIcon className="size-3.5 flex-none text-subtle" />
+          <span className="min-w-0 truncate">{t('activity.steer', { who: item.who, text: item.text })}</span>
         </>
       )
     default:

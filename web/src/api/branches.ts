@@ -1,4 +1,4 @@
-import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { queryOptions, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { api } from './client'
 import { projectKeys } from './projects'
 import { refresh } from './refresh'
@@ -14,15 +14,19 @@ export const branchKeys = {
   checkoutDiff: (projectId: string) => ['branches', 'checkout-diff', projectId] as const,
 }
 
-// useBranches reads the branches when the tab opens and again as turns end:
-// what the members did changes them. The machine answers with git's view,
-// which is not free, so nothing polls it.
-export function useBranches(projectId: string) {
-  return useQuery({
+// branchesQuery reads a project's branches: the machine answers with
+// git's view, which is not free, so nothing polls it.
+export function branchesQuery(projectId: string) {
+  return queryOptions({
     queryKey: branchKeys.project(projectId),
     queryFn: async () => (await api.get<BranchesResponse>(`/projects/${projectId}/branches`)).branches,
-    enabled: projectId !== '',
   })
+}
+
+// useBranches reads the branches when the tab opens and again as turns end:
+// what the members did changes them.
+export function useBranches(projectId: string) {
+  return useQuery({ ...branchesQuery(projectId), enabled: projectId !== '' })
 }
 
 // useMemberDiff is the patch of a member's worktree, read while open.

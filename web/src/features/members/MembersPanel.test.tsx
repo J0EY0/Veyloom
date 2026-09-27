@@ -113,6 +113,19 @@ describe('MembersPanel', () => {
     expect(names[2]).toContain('Idle one')
   })
 
+  it('says why a member waits under a pause, and resumes it from its menu', async () => {
+    let lifted = ''
+    stubPanel({
+      '/pauses': { pauses: [{ id: 'p1', machine_id: 'w1', runtime: 'codex', reason: 'auth', detail: 'unauthorized', created_at: '' }] },
+      '/pauses/p1': (req: Request) => ((lifted = req.method), new Response(null, { status: 204 })),
+    })
+    renderPanel()
+    expect(await screen.findByText('登录失效')).toBeInTheDocument()
+    await userEvent.click(await screen.findByRole('button', { name: '更多' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: '继续' }))
+    await waitFor(() => expect(lifted).toBe('DELETE'))
+  })
+
   it('switches a member off from its menu', async () => {
     let patched: unknown
     stubPanel({
