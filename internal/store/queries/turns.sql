@@ -24,6 +24,13 @@ RETURNING *;
 -- name: GetTurn :one
 SELECT * FROM turns WHERE id = $1;
 
+-- name: TurnAtSessionEnd :one
+-- The member's latest turn by the time one of its sessions ended: the one
+-- going as the session ended, which may not have got a session yet.
+SELECT t.* FROM turns t JOIN member_sessions s ON s.member_id = t.member_id
+WHERE s.id = sqlc.arg(session_id) AND t.member_id = sqlc.arg(member_id) AND t.started_at <= s.ended_at
+ORDER BY t.started_at DESC LIMIT 1;
+
 -- name: SetTurnSession :execrows
 -- Moves a running turn to another session: the one it started in would not
 -- resume, and the turn was run again in a new one.
@@ -119,3 +126,178 @@ RETURNING *;
 UPDATE turns SET trusted_by = NULL, trusted_at = NULL
 WHERE id = $1
 RETURNING *;
+
+-- name: QueueWake :exec
+-- Keeps what a busy member was asked until its turn starts; asked twice
+-- by one message, it waits once.
+INSERT INTO queued_wakes (member_id, message_id, thread_id, anchor_id)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING;
+
+-- name: UnqueueWakes :exec
+-- A turn started for these messages: they wait no longer.
+DELETE FROM queued_wakes
+WHERE member_id = sqlc.arg(member_id) AND message_id = ANY(sqlc.arg(message_ids)::uuid[]);
+
+-- name: ListQueuedWakes :many
+-- What the members running on a machine were asked and wait for, in the
+-- order they were asked.
+SELECT q.* FROM queued_wakes q
+JOIN members m ON m.id = q.member_id
+WHERE m.machine_id = $1
+ORDER BY q.queued_at, q.message_id;
+
+-- name: PauseAccount :one
+-- Pauses a runtime's account on a machine, or updates why and until when:
+-- it keeps the time it began.
+INSERT INTO pauses (machine_id, runtime, reason, detail, ends_at)
+VALUES (sqlc.arg(machine_id), sqlc.arg(runtime), sqlc.arg(reason), sqlc.arg(detail), sqlc.narg(ends_at))
+ON CONFLICT (machine_id, runtime) WHERE member_id IS NULL DO UPDATE SET
+    reason = EXCLUDED.reason, detail = EXCLUDED.detail, ends_at = EXCLUDED.ends_at
+RETURNING *;
+
+-- name: PauseMember :one
+-- Pauses a member, or updates why and until when.
+INSERT INTO pauses (member_id, reason, detail, ends_at)
+VALUES (sqlc.arg(member_id), sqlc.arg(reason), sqlc.arg(detail), sqlc.narg(ends_at))
+ON CONFLICT (member_id) WHERE member_id IS NOT NULL DO UPDATE SET
+    reason = EXCLUDED.reason, detail = EXCLUDED.detail, ends_at = EXCLUDED.ends_at
+RETURNING *;
+
+-- name: ListPauses :many
+-- The pauses in effect, the oldest first.
+SELECT * FROM pauses ORDER BY created_at, id;
+
+-- name: LiftAccountPause :execrows
+DELETE FROM pauses WHERE member_id IS NULL AND machine_id = sqlc.arg(machine_id) AND runtime = sqlc.arg(runtime);
+
+-- name: LiftMemberPause :execrows
+DELETE FROM pauses WHERE member_id = sqlc.arg(member_id);
+
+-- name: CreateReminder :one
+INSERT INTO reminders (member_id, room_id, thread_id, turn_id, note, due_at)
+VALUES (sqlc.arg(member_id), sqlc.arg(room_id), sqlc.arg(thread_id), sqlc.narg(turn_id), sqlc.arg(note), sqlc.arg(due_at))
+RETURNING *;
+
+-- name: SetReminderMessage :exec
+-- The note that told of a reminder as it was set.
+UPDATE reminders SET set_message_id = sqlc.arg(message_id) WHERE id = sqlc.arg(id);
+
+-- name: GetReminder :one
+SELECT * FROM reminders WHERE id = $1;
+
+-- name: CountPendingReminders :one
+SELECT count(*) FROM reminders WHERE member_id = $1 AND status = 'pending';
+
+-- name: ListPendingReminders :many
+-- The reminders not yet due of the members a machine runs, the soonest
+-- first.
+SELECT r.* FROM reminders r
+JOIN members m ON m.id = r.member_id
+WHERE m.machine_id = $1 AND r.status = 'pending'
+ORDER BY r.due_at, r.id;
+
+-- name: ListMemberPendingReminders :many
+SELECT * FROM reminders WHERE member_id = $1 AND status = 'pending' ORDER BY due_at, id;
+
+-- name: ListThreadReminders :many
+SELECT * FROM reminders WHERE thread_id = $1 ORDER BY created_at, id;
+
+-- name: FireReminder :one
+-- A reminder comes due, once: one fired or cancelled already is left as it
+-- is, and nothing comes back.
+UPDATE reminders SET status = 'fired', settled_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING *;
+
+-- name: SetReminderFired :exec
+-- The message a reminder came due as.
+UPDATE reminders SET fired_message_id = sqlc.arg(message_id) WHERE id = sqlc.arg(id);
+
+-- name: CancelReminder :one
+-- Takes back a reminder not yet due, by a person when cancelled_by is set.
+UPDATE reminders SET status = 'cancelled', cancelled_by = sqlc.narg(cancelled_by), settled_at = now()
+WHERE id = sqlc.arg(id) AND status = 'pending'
+RETURNING *;
+
+-- name: DropReminder :one
+-- A reminder whose member is gone or switched off as it comes due.
+UPDATE reminders SET status = 'dropped', settled_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING *;
+
+-- name: CreateDraft :one
+INSERT INTO drafts (project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note)
+VALUES (sqlc.arg(project_id), sqlc.arg(room_id), sqlc.arg(thread_id), sqlc.arg(member_id), sqlc.narg(turn_id), sqlc.arg(kind),
+        sqlc.narg(target_id), sqlc.arg(subject), sqlc.arg(params), sqlc.arg(then_note))
+RETURNING *;
+
+-- name: LockDraftSubject :exec
+-- Holds a project's drafts about a subject for the transaction: those
+-- drafted at once give way one to another in turn.
+SELECT pg_advisory_xact_lock(hashtextextended(sqlc.arg(project_id)::text || ' ' || sqlc.arg(subject)::text, 0));
+
+-- name: SupersedeDrafts :many
+-- The project's pending drafts about subject give way to a new one.
+UPDATE drafts SET status = 'superseded', settled_at = now()
+WHERE project_id = sqlc.arg(project_id) AND subject = sqlc.arg(subject) AND status = 'pending'
+RETURNING *;
+
+-- name: OpenDraft :one
+-- The project's draft about subject that is not settled yet.
+SELECT * FROM drafts
+WHERE project_id = sqlc.arg(project_id) AND subject = sqlc.arg(subject) AND status IN ('pending', 'running')
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: SetDraftMessage :exec
+-- The card that shows a draft.
+UPDATE drafts SET message_id = sqlc.arg(message_id) WHERE id = sqlc.arg(id);
+
+-- name: GetDraft :one
+SELECT * FROM drafts WHERE id = $1;
+
+-- name: GetDraftByMessage :one
+-- The draft a message is the card or the outcome of.
+SELECT * FROM drafts WHERE message_id = $1 OR result_message_id = $1
+ORDER BY created_at DESC
+LIMIT 1;
+
+-- name: ListThreadDrafts :many
+SELECT * FROM drafts WHERE thread_id = $1 ORDER BY created_at, id;
+
+-- name: CountTurnDrafts :one
+SELECT count(*) FROM drafts WHERE turn_id = $1;
+
+-- name: ClaimDraft :one
+-- A person runs a pending draft: one run at a time, and none once it is
+-- settled.
+UPDATE drafts SET status = 'running' WHERE id = $1 AND status = 'pending'
+RETURNING *;
+
+-- name: ReleaseDraft :one
+-- A run that could not be done for now: the draft waits again.
+UPDATE drafts SET status = 'pending' WHERE id = $1 AND status = 'running'
+RETURNING *;
+
+-- name: ReleaseRunningDrafts :many
+-- Runs a stopped hub left under way wait again; what they did shows when
+-- run again.
+UPDATE drafts SET status = 'pending' WHERE status = 'running'
+RETURNING *;
+
+-- name: SettleDraft :one
+-- What came of a run: done, or conflicted.
+UPDATE drafts SET status = sqlc.arg(status), result = sqlc.arg(result), decided_by = sqlc.narg(decided_by), settled_at = now()
+WHERE id = sqlc.arg(id) AND status = 'running'
+RETURNING *;
+
+-- name: DeclineDraft :one
+-- A person turns a pending draft down.
+UPDATE drafts SET status = 'declined', decided_by = sqlc.narg(decided_by), settled_at = now()
+WHERE id = sqlc.arg(id) AND status = 'pending'
+RETURNING *;
+
+-- name: SetDraftResultMessage :exec
+-- The message that told the member what came of its draft.
+UPDATE drafts SET result_message_id = sqlc.arg(message_id) WHERE id = sqlc.arg(id);

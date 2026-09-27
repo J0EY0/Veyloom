@@ -148,9 +148,9 @@ func TestLoop_AMemberWorksInItsWorktree(t *testing.T) {
 	if coderSpec.WorkDir != want || slices.Contains(coderSpec.ExtraTools, runtime.SetupToolSteps) {
 		t.Errorf("Coder worked in %q with %v", coderSpec.WorkDir, coderSpec.ExtraTools)
 	}
-	if !strings.Contains(coderSpec.Prompt, "You work in a git worktree of your own, "+want+", on the branch veyloom/coder") ||
-		!strings.Contains(coderSpec.Prompt, "Whatever you leave there is merged as your work") {
-		t.Errorf("Coder's brief:\n%s", coderSpec.Prompt)
+	if !strings.Contains(coderSpec.SystemPrompt, "You work in a git worktree of your own, "+want+", on the branch veyloom/coder") ||
+		!strings.Contains(coderSpec.SystemPrompt, "Whatever you leave there is merged as your work") {
+		t.Errorf("Coder's standing instructions:\n%s", coderSpec.SystemPrompt)
 	}
 	transcript := transcriptOf(t, work)
 	for _, say := range []string{"Waiting for the project's leader", "Making Coder's worktree", "Getting the worktree ready"} {
@@ -169,9 +169,9 @@ func TestLoop_AMemberWorksInItsWorktree(t *testing.T) {
 	// The leader's own turns are in the checkout, with the tool.
 	l.say("@Lead look around", "", lead)
 	turns = l.waitTurns(4, store.TurnDone, "the leader's turn")
-	if own := specOf(t, turns[0]); own.WorkDir != repo || !slices.Contains(own.ExtraTools, runtime.SetupToolSteps) || !strings.Contains(own.Prompt, "You are the project's leader") ||
-		!strings.Contains(own.Prompt, "commit the files you changed in the checkout yourself, and only those, before your turn ends") ||
-		!strings.Contains(own.Prompt, "goes on that branch with the work") {
+	if own := specOf(t, turns[0]); own.WorkDir != repo || !slices.Contains(own.ExtraTools, runtime.SetupToolSteps) || !strings.Contains(own.SystemPrompt, "You are the project's leader") ||
+		!strings.Contains(own.SystemPrompt, "commit the files you changed in the checkout yourself, and only those, before your turn ends") ||
+		!strings.Contains(own.SystemPrompt, "goes on that branch with the work") {
 		t.Errorf("the leader's chat turn in %q with %v", own.WorkDir, own.ExtraTools)
 	}
 }
@@ -220,11 +220,20 @@ func TestLoop_SetupStepsWaitForAPerson(t *testing.T) {
 	if running := l.turns(); len(running) != 2 || running[0].Status == store.TurnDone && running[1].Status == store.TurnDone {
 		t.Fatalf("Coder should still wait: %+v", running)
 	}
+	// The card is a draft (design.md 5.23.5), which says it was adopted.
+	drafts := l.drafts(project.SetupThreadID)
+	if len(drafts) != 1 || drafts[0].Kind != store.DraftSetupSteps || drafts[0].MessageID != card.ID || drafts[0].Params.Steps == nil ||
+		drafts[0].Params.Steps.Run != "echo ready > prepared.txt" || drafts[0].Status != store.DraftPending {
+		t.Fatalf("the card's draft: %+v", drafts)
+	}
 
-	if err := l.h.SettleWorkspaceSteps(l.ctx, project.ID, true); err != nil {
+	if err := l.h.SettleWorkspaceSteps(l.ctx, project.ID, l.user.ID, true); err != nil {
 		t.Fatal(err)
 	}
 	l.waitTurns(2, store.TurnDone, "Coder's turn once the steps are adopted")
+	if d, err := l.s.GetDraft(l.ctx, drafts[0].ID); err != nil || d.Status != store.DraftDone || d.DecidedBy != l.user.ID {
+		t.Errorf("the card says it was adopted: %+v %v", d, err)
+	}
 	member, _ := l.s.GetMember(l.ctx, coder.ID)
 	if got, err := os.ReadFile(filepath.Join(member.WorkDir, "prepared.txt")); err != nil || string(got) != "ready\n" {
 		t.Errorf("the adopted command ran: %q %v", got, err)
@@ -242,13 +251,22 @@ func TestLoop_SetupStepsTurnedDown(t *testing.T) {
 		p, _ := l.s.GetProject(l.ctx, l.room.ProjectID)
 		return p.WorkspacePending != nil
 	}, "the steps to wait for a person")
-	if err := l.h.SettleWorkspaceSteps(l.ctx, l.room.ProjectID, false); err != nil {
+	// Turned down from the card itself.
+	p, _ := l.s.GetProject(l.ctx, l.room.ProjectID)
+	drafts := l.drafts(p.SetupThreadID)
+	if len(drafts) != 1 {
+		t.Fatalf("the card's draft: %+v", drafts)
+	}
+	if _, err := l.h.DeclineDraft(l.ctx, drafts[0].ID, l.user.ID); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, func() bool {
 		turn, ok := turnOf(l.turns(), coder, store.TurnChat)
 		return ok && turn.Status == store.TurnFailed && strings.Contains(turn.Error, "turned the leader's setup steps down")
 	}, "Coder's turn to fail")
+	if p, _ := l.s.GetProject(l.ctx, l.room.ProjectID); p.WorkspacePending != nil {
+		t.Errorf("no steps wait any more: %+v", p.WorkspacePending)
+	}
 	if member, _ := l.s.GetMember(l.ctx, coder.ID); member.WorktreeDir != "" {
 		t.Errorf("a worktree made after all: %+v", member)
 	}
@@ -348,7 +366,7 @@ func TestLoop_CancelWhileWaitingForTheSetup(t *testing.T) {
 		turn, ok = turnOf(l.turns(), coder, store.TurnChat)
 		return ok
 	}, "Coder's turn to start")
-	if err := l.h.CancelTurn(l.ctx, turn.ID); err != nil {
+	if err := l.h.CancelTurn(l.ctx, turn.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	eventually(t, func() bool {

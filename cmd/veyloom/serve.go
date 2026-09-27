@@ -4,12 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 
 	"github.com/spf13/cobra"
 
+	veyloom "github.com/J0EY0/veyloom"
 	"github.com/J0EY0/veyloom/internal/account"
 	"github.com/J0EY0/veyloom/internal/api"
 	"github.com/J0EY0/veyloom/internal/auth"
@@ -60,11 +62,17 @@ func runServe(cmd *cobra.Command, cfg config.Config) error {
 	}
 	dir := &account.Directory{Store: s, File: accounts}
 
-	// Turns the last stop cut off would otherwise show as running forever.
+	// Turns the last stop cut off would otherwise show as running forever,
+	// and drafts a person was running could not be run again.
 	if cut, err := s.FailRunningTurns(ctx, "the hub stopped while the turn was running"); err != nil {
 		return err
 	} else if len(cut) > 0 {
 		logger.Warn("failed turns left running by the last stop", "count", len(cut))
+	}
+	if cut, err := s.ReleaseRunningDrafts(ctx); err != nil {
+		return err
+	} else if len(cut) > 0 {
+		logger.Warn("drafts left running by the last stop wait again", "count", len(cut))
 	}
 
 	person := func() string {
@@ -74,7 +82,13 @@ func runServe(cmd *cobra.Command, cfg config.Config) error {
 		return ""
 	}
 	// The account's memory switches say which memories turns use.
-	h := hub.New(dir, cfg.Hub, hub.WithLogger(logger), hub.WithPerson(person), hub.WithMemoryPrefs(accounts.MemoryPrefs))
+	// Veyloom's own skills, which every agent has (docs/design.md 5.23.6),
+	// come with the binary.
+	skills, err := fs.Sub(veyloom.Skills, "skills")
+	if err != nil {
+		return err
+	}
+	h := hub.New(dir, cfg.Hub, hub.WithLogger(logger), hub.WithPerson(person), hub.WithMemoryPrefs(accounts.MemoryPrefs), hub.WithSkills(skills))
 	discovery := machine.NewDiscovery(runtime.Builtin(), cfg.Machine.DetectTimeout)
 	identity := machine.FileIdentity{Path: cfg.MachineIdentityPath()}
 	// The CLIs reach a turn's tools through this very executable, run as
@@ -103,6 +117,11 @@ func runServe(cmd *cobra.Command, cfg config.Config) error {
 	}()
 	// The wiki maintainers' upkeeps, when they are due (docs/design.md 5.12).
 	go h.RunUpkeep(ctx)
+	// Uploads nobody sent, a day on (docs/webui.md 4.21), and what the chat
+	// looked up in the wikis, 90 days on (docs/design.md 5.23.7).
+	go h.RunSweep(ctx)
+	// Turns that may be stuck, said to be so (docs/design.md 5.23.8).
+	go h.RunQuietWatch(ctx)
 
 	// Sign-in over the account file; expired sessions are swept at startup.
 	signIn := auth.New(accounts, auth.DefaultSessionTTL)

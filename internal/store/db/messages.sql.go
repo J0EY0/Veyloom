@@ -488,6 +488,39 @@ func (q *Queries) MarkMentionsRead(ctx context.Context, arg MarkMentionsReadPara
 	return result.RowsAffected(), nil
 }
 
+const setMessageTitle = `-- name: SetMessageTitle :one
+UPDATE messages SET title = $2
+WHERE id = $1
+RETURNING id, seq, room_id, thread_id, sender_kind, user_id, member_id, body, mentions, created_at, turn_id, title
+`
+
+type SetMessageTitleParams struct {
+	ID    pgtype.UUID
+	Title string
+}
+
+// Names the task a message hands on: a topic root an agent filled in with
+// what it sent (design.md 5.24).
+func (q *Queries) SetMessageTitle(ctx context.Context, arg SetMessageTitleParams) (Message, error) {
+	row := q.db.QueryRow(ctx, setMessageTitle, arg.ID, arg.Title)
+	var i Message
+	err := row.Scan(
+		&i.ID,
+		&i.Seq,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.SenderKind,
+		&i.UserID,
+		&i.MemberID,
+		&i.Body,
+		&i.Mentions,
+		&i.CreatedAt,
+		&i.TurnID,
+		&i.Title,
+	)
+	return i, err
+}
+
 const threadSummaries = `-- name: ThreadSummaries :many
 SELECT t.root_message_id,
        t.id AS thread_id,

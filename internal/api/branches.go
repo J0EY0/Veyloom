@@ -221,7 +221,8 @@ func (h *handlers) settlePendingSteps(w http.ResponseWriter, r *http.Request) {
 		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
-	if err := wt.SettleWorkspaceSteps(r.Context(), r.PathValue("id"), req.Adopt); err != nil {
+	user, _ := userFrom(r.Context())
+	if err := wt.SettleWorkspaceSteps(r.Context(), r.PathValue("id"), user.ID, req.Adopt); err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}

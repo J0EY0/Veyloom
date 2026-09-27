@@ -8,7 +8,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -38,6 +40,9 @@ type PiConfig struct {
 	// room tools (see pi_extension.go). Empty means a directory under the
 	// system's temporary one.
 	ToolDir string
+	// RecordDir keeps the CLI's output as printed, a file a turn, for the
+	// replay tests (docs/design.md 5.23.9); empty records nothing.
+	RecordDir string
 }
 
 // DefaultPiConfig returns the defaults every PiConfig is completed with.
@@ -160,6 +165,8 @@ func (r *PiRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error) {
 		StdinPipe:   true,
 		StderrBytes: r.cfg.StderrBytes,
 		WaitDelay:   r.cfg.WaitDelay,
+		RecordDir:   r.cfg.RecordDir,
+		RecordName:  "pi",
 	})
 	if err != nil {
 		cancel()
@@ -167,13 +174,14 @@ func (r *PiRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error) {
 		return nil, fmt.Errorf("pi: %w", err)
 	}
 
-	t := &piTurn{turnBase: newTurnBase(ctx, cancel), ctx: ctx, cfg: r.cfg, release: release, in: newJSONLines(proc.stdin)}
+	t := &piTurn{turnBase: newTurnBase(ctx, cancel), ctx: ctx, cfg: r.cfg, release: release, in: newJSONLines(proc.stdin), prompted: make(chan struct{})}
 	go t.run(proc)
 	// Written while run reads; should a write fail, pi has gone, and run
 	// says why.
 	go func() {
 		t.in.send(map[string]any{"id": "state", "type": "get_state"})
 		t.in.send(map[string]any{"id": "prompt", "type": "prompt", "message": spec.Prompt})
+		close(t.prompted)
 	}()
 	return t, nil
 }
@@ -261,9 +269,24 @@ type piTurn struct {
 	// release gives the turn's tool endpoint back.
 	release func()
 	// in carries the commands and the answers to pi's requests. It is
-	// closed once pi is done (see piSettle): pi then exits.
-	in *jsonLines
+	// closed once pi is done (see piSettle): pi then exits. prompted is
+	// closed once the prompt is written: what Steer passes goes after it.
+	in       *jsonLines
+	prompted chan struct{}
+
+	// steers are the texts Steer sent that pi has not taken in yet,
+	// oldest first. ended says the agent's run is over, after which pi
+	// takes no more of them unless it runs the agent again.
+	steerMu sync.Mutex
+	steers  []piSteer
+	ended   bool
 }
+
+// piSteer is text Steer sent, with the id it was passed as.
+type piSteer struct{ id, text string }
+
+// piSteerPrefix begins the ids of the runner's steer commands.
+const piSteerPrefix = "steer:"
 
 // run reads pi's output until it ends, then reconciles the exit status
 // with what was parsed. Requests to people are answered as they come; pi
@@ -294,13 +317,90 @@ func (t *piTurn) run(proc *cliProcess) {
 		}
 		parser.handle(ev)
 		settle.handle(ev)
+		t.follow(ev)
 	})
 	t.in.close()
 	waitErr := proc.wait()
+	for _, s := range t.untaken() {
+		t.emit(t.ctx, Event{Kind: EventSteerDropped, SteerID: s.id})
+	}
 
 	res, err := parser.finish(waitErr, proc.stderrTail())
 	if t.release != nil {
 		t.release()
 	}
 	t.finish(t.ctx, res, err)
+}
+
+// Steer implements Turn. The text goes to pi with its steer command: pi
+// hands it to the agent once the tools of its current step are done,
+// before it next asks the model, and runs on for it even when it comes
+// with the run's last words; the user message pi then starts, whose text
+// is the text sent, says it was taken in (0.73.1, design.md 5.23.2).
+// Once the agent's run is over pi takes no more: the text is refused.
+func (t *piTurn) Steer(id, text string) error {
+	select {
+	case <-t.prompted:
+	case <-t.ctx.Done():
+		return ErrSteerRefused
+	}
+	t.steerMu.Lock()
+	defer t.steerMu.Unlock()
+	if t.ended {
+		return ErrSteerRefused
+	}
+	if err := t.in.send(map[string]any{"id": piSteerPrefix + id, "type": "steer", "message": text}); err != nil {
+		return ErrSteerRefused
+	}
+	t.steers = append(t.steers, piSteer{id: id, text: text})
+	return nil
+}
+
+// follow keeps up with what pi does with the texts Steer sent.
+func (t *piTurn) follow(ev piEvent) {
+	var took, lost []piSteer
+	t.steerMu.Lock()
+	switch ev.Type {
+	case "agent_start":
+		t.ended = false
+	case "agent_end":
+		t.ended = true
+	case "message_start":
+		if ev.Message == nil || ev.Message.Role != "user" {
+			break
+		}
+		text := ev.Message.text()
+		if i := slices.IndexFunc(t.steers, func(s piSteer) bool { return s.text == text }); i >= 0 {
+			took = append(took, t.steers[i])
+			t.steers = slices.Delete(t.steers, i, i+1)
+		}
+	case "response":
+		// A steer pi turned down, which it never will be taking in.
+		id, ok := strings.CutPrefix(ev.ID, piSteerPrefix)
+		if !ok || ev.Command != "steer" || ev.Success {
+			break
+		}
+		if i := slices.IndexFunc(t.steers, func(s piSteer) bool { return s.id == id }); i >= 0 {
+			lost = append(lost, t.steers[i])
+			t.steers = slices.Delete(t.steers, i, i+1)
+		}
+	}
+	t.steerMu.Unlock()
+	for _, s := range took {
+		t.emit(t.ctx, Event{Kind: EventSteer, SteerID: s.id, Text: s.text})
+	}
+	for _, s := range lost {
+		t.emit(t.ctx, Event{Kind: EventSteerDropped, SteerID: s.id})
+	}
+}
+
+// untaken ends the turn's steering: it returns the texts Steer sent that
+// pi never took in.
+func (t *piTurn) untaken() []piSteer {
+	t.steerMu.Lock()
+	defer t.steerMu.Unlock()
+	t.ended = true
+	left := t.steers
+	t.steers = nil
+	return left
 }

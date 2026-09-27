@@ -12,6 +12,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"time"
 
 	"github.com/J0EY0/veyloom/internal/hub"
 	"github.com/J0EY0/veyloom/internal/runtime"
@@ -67,7 +68,7 @@ type Worktrees interface {
 	// SettleWorkspaceSteps adopts the steps it wrote down, or turns them
 	// down; WorkspaceStepsWritten says a person wrote them.
 	StartSetup(ctx context.Context, projectID string) error
-	SettleWorkspaceSteps(ctx context.Context, projectID string, adopt bool) error
+	SettleWorkspaceSteps(ctx context.Context, projectID, userID string, adopt bool) error
 	WorkspaceStepsWritten(projectID string)
 }
 
@@ -107,6 +108,9 @@ type Wikis interface {
 	ImportSkill(ctx context.Context, folder, team, userID string) (hub.WikiPageView, error)
 	InstallSkill(ctx context.Context, name, agentID string, installed bool) ([]store.AgentRef, error)
 	CheckSkills(ctx context.Context, names []string) error
+	// BuiltinSkills are Veyloom's own, which every agent has
+	// (docs/design.md 5.23.6).
+	BuiltinSkills() []hub.BuiltinSkill
 	// A person rolls back an agent's change to a skill on trial.
 	RollbackSkill(ctx context.Context, name, userID, reason string) (hub.WikiPageView, error)
 
@@ -163,12 +167,22 @@ type Deps struct {
 	Worktrees Worktrees
 	// Logger receives unexpected errors. nil means slog.Default().
 	Logger *slog.Logger
+	// Now is the clock wrong passwords are counted by; nil means
+	// time.Now.
+	Now func() time.Time
 }
 
 // RuntimesResponse is the body of GET /api/v1/runtimes: the runtimes found on
 // the machine serving the request.
 type RuntimesResponse struct {
 	Runtimes []runtime.Info `json:"runtimes"`
+}
+
+// RuntimeTraitsResponse is the body of GET /api/v1/runtime-traits: how
+// each runtime there is a runner for takes its turns, by name
+// (docs/design.md 5.23.9). The web client asks once; nothing is probed.
+type RuntimeTraitsResponse struct {
+	Traits map[string]runtime.Traits `json:"traits"`
 }
 
 // MachinesResponse is the body of GET /api/v1/machines: every machine connected
@@ -180,6 +194,8 @@ type MachinesResponse struct {
 // handlers groups the HTTP handlers around their dependencies.
 type handlers struct {
 	deps Deps
+	// signIns counts wrong passwords (signin.go).
+	signIns *signInLimiter
 }
 
 // NewHandler builds the HTTP handler for the hub API.
@@ -187,10 +203,11 @@ func NewHandler(deps Deps) http.Handler {
 	if deps.Logger == nil {
 		deps.Logger = slog.Default()
 	}
-	h := &handlers{deps: deps}
+	h := &handlers{deps: deps, signIns: newSignInLimiter(deps.Now)}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/v1/runtimes", h.listRuntimes)
+	mux.HandleFunc("GET /api/v1/runtime-traits", h.runtimeTraits)
 	mux.HandleFunc("GET /api/v1/machines", h.listMachines)
 	mux.HandleFunc("POST /api/v1/machines/{id}/probe", h.probeMachine)
 	mux.HandleFunc("GET /api/v1/machines/{id}/members", h.listMachineMembers)
@@ -228,6 +245,9 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/v1/threads/{id}/messages", h.listThreadMessages)
 	mux.HandleFunc("POST /api/v1/rooms/{id}/attachments", h.uploadAttachment)
 	mux.HandleFunc("GET /api/v1/attachments/{id}", h.getAttachment)
+	mux.HandleFunc("GET /api/v1/attachments/{id}/thumbnail", h.getAttachmentThumbnail)
+	mux.HandleFunc("GET /api/v1/rooms/{id}/attachments", h.listRoomAttachments)
+	mux.HandleFunc("GET /api/v1/rooms/{id}/attachments/archive", h.downloadRoomAttachments)
 	mux.HandleFunc("POST /api/v1/avatars", h.uploadAvatar)
 	mux.HandleFunc("GET /api/v1/avatars/{name}", h.getAvatar)
 
@@ -250,7 +270,14 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/v1/turns/{id}/cancel", h.cancelTurn)
 	mux.HandleFunc("DELETE /api/v1/turns/{id}/trust", h.untrustTurn)
 	mux.HandleFunc("POST /api/v1/relays/{id}/continue", h.continueRelay)
+	mux.HandleFunc("GET /api/v1/pauses", h.listPauses)
+	mux.HandleFunc("DELETE /api/v1/pauses/{id}", h.liftPause)
 	mux.HandleFunc("GET /api/v1/threads/{id}/relay-holds", h.threadRelayHolds)
+	mux.HandleFunc("GET /api/v1/threads/{id}/reminders", h.threadReminders)
+	mux.HandleFunc("DELETE /api/v1/reminders/{id}", h.cancelReminder)
+	mux.HandleFunc("GET /api/v1/threads/{id}/drafts", h.threadDrafts)
+	mux.HandleFunc("POST /api/v1/drafts/{id}/run", h.runDraft)
+	mux.HandleFunc("POST /api/v1/drafts/{id}/decline", h.declineDraft)
 	mux.HandleFunc("GET /api/v1/turns/{id}/transcript", h.turnTranscript)
 	mux.HandleFunc("GET /api/v1/rooms/{id}/turns", h.listRoomTurns)
 	mux.HandleFunc("GET /api/v1/topics", h.listTopics)
@@ -307,6 +334,7 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/v1/library/transfer", h.transferSkill)
 	mux.HandleFunc("POST /api/v1/library/import", h.importSkill)
 	mux.HandleFunc("POST /api/v1/library/install", h.installSkill)
+	mux.HandleFunc("GET /api/v1/skills/builtin", h.builtinSkills)
 	mux.HandleFunc("POST /api/v1/library/rollback", h.rollbackSkill)
 	mux.HandleFunc("GET /api/v1/library/usage", h.skillUses)
 	return withCORS(deps.Events.AllowedOrigins, h.requireSession(mux))
@@ -314,6 +342,10 @@ func NewHandler(deps Deps) http.Handler {
 
 func (h *handlers) listRuntimes(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, RuntimesResponse{Runtimes: h.deps.Runtimes.Run(r.Context())})
+}
+
+func (h *handlers) runtimeTraits(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, RuntimeTraitsResponse{Traits: runtime.AllTraits()})
 }
 
 func (h *handlers) listMachines(w http.ResponseWriter, _ *http.Request) {

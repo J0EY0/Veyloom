@@ -25,12 +25,18 @@ const idleWakes = 3
 // talkTools are the tools a member follows and talks in the chat with: a
 // turn that called no other did no work.
 var talkTools = map[string]bool{
-	runtime.RoomToolListTopics: true,
-	runtime.RoomToolReadTopic:  true,
-	runtime.RoomToolReadTurn:   true,
-	runtime.RoomToolReadRoom:   true,
-	runtime.RoomToolSearch:     true,
-	runtime.MessageToolSend:    true,
+	runtime.RoomToolListTopics:  true,
+	runtime.RoomToolReadTopic:   true,
+	runtime.RoomToolReadTurn:    true,
+	runtime.RoomToolReadMessage: true,
+	runtime.RoomToolReadRoom:    true,
+	runtime.RoomToolSearch:      true,
+	runtime.MessageToolSend:     true,
+	// A reminder only waits; what the turn it makes does is its own. A
+	// draft is a person's to run.
+	runtime.MessageToolRemind:         true,
+	runtime.MessageToolCancelReminder: true,
+	runtime.MessageToolDraft:          true,
 }
 
 // talkTool says a tool call, by the name its runtime gave it, is one that
@@ -58,14 +64,17 @@ func workTool(name string) bool {
 // pieceOfWork says which piece of work a turn answering triggers belongs
 // to, and the turn that woke it when an agent did. A person's message, or
 // a person letting a held wake go on (anchor), starts a piece of its own;
-// an agent's message carries on the piece its turn was part of.
+// an agent's message carries on the piece its turn was part of, and so
+// does a reminder a turn of the member's set, coming due as a system
+// message of that turn's (reminders.go).
 func (m *TurnManager) pieceOfWork(ctx context.Context, triggers []store.Message, anchor string) (chain, wokenBy string) {
 	if anchor != "" {
 		return anchor, ""
 	}
 	for i := len(triggers) - 1; i >= 0; i-- {
-		if triggers[i].SenderKind != store.SenderAgent {
-			return triggers[i].ID, ""
+		t := triggers[i]
+		if t.SenderKind == store.SenderUser || t.SenderKind == store.SenderSystem && t.TurnID == "" {
+			return t.ID, ""
 		}
 	}
 	last := triggers[len(triggers)-1]
@@ -79,28 +88,52 @@ func (m *TurnManager) pieceOfWork(ctx context.Context, triggers []store.Message,
 	return waker.ChainMessageID, last.TurnID
 }
 
-// mayWake says whether msg, said in at, may wake member now, in thread.
-// When a limit holds the wake back, the person is told in at's topic and
+// waker is what asks for a wake, as the limits on agents waking one
+// another weigh it: the member whose turn asks, in the topic that turn ran
+// in, the turn, and the person it worked for. at is the turn while it
+// runs: a wake it has held back tells on the work it hands on
+// (handedon.go). A reminder coming due asks as the turn that set it
+// (reminders.go).
+type waker struct {
+	member    store.Member
+	thread    store.Thread
+	turn      store.Turn
+	initiator string
+	at        *activeTurn
+	reminder  bool
+}
+
+// asWaker is the running turn asking for a wake.
+func (at *activeTurn) asWaker() waker {
+	return waker{member: at.member, thread: at.thread, turn: at.turn, initiator: at.initiator, at: at}
+}
+
+// mayWake says whether msg, said by w, may wake member now, in thread.
+// When a limit holds the wake back, the person is told in w's topic and
 // the wake is kept for them to let go on. Two wakes at once may both pass
 // the limit by one: it is a brake, not a count to the turn.
-func (m *TurnManager) mayWake(ctx context.Context, at *activeTurn, member store.Member, msg store.Message, thread store.Thread) bool {
-	project, err := m.store.RoomProject(ctx, at.member.RoomID)
+func (m *TurnManager) mayWake(ctx context.Context, w waker, member store.Member, msg store.Message, thread store.Thread) bool {
+	project, err := m.store.RoomProject(ctx, w.member.RoomID)
 	if err != nil {
-		m.logger.Error("the relay limit", "turn", at.turn.ID, "err", err)
+		m.logger.Error("the relay limit", "turn", w.turn.ID, "err", err)
 		return false
 	}
 	limit := project.RelayLimit
 	if limit < 0 {
-		// Agents wake no one in this project: the mention stays a hand-off.
+		// Agents wake no one in this project: the mention stays a hand-off,
+		// and a reminder asks the person.
+		if w.reminder {
+			m.hold(ctx, w, member, msg, thread, store.HoldPeople, limit)
+		}
 		return false
 	}
-	chain := at.turn.ChainMessageID
+	chain := w.turn.ChainMessageID
 	if chain == "" {
 		return true
 	}
 	woken, worked, err := m.store.ChainWakes(ctx, chain, idleWakes)
 	if err != nil {
-		m.logger.Error("the wakes of a piece of work", "turn", at.turn.ID, "err", err)
+		m.logger.Error("the wakes of a piece of work", "turn", w.turn.ID, "err", err)
 		return false
 	}
 	var reason store.HoldReason
@@ -112,53 +145,69 @@ func (m *TurnManager) mayWake(ctx context.Context, at *activeTurn, member store.
 	default:
 		return true
 	}
-	m.hold(ctx, at, member, msg, thread, reason, limit)
-	m.heldBack(at)
+	m.hold(ctx, w, member, msg, thread, reason, limit)
+	if w.at != nil {
+		m.heldBack(w.at)
+	}
 	return false
 }
 
-// hold tells the person, in at's topic, that the wake of member by msg was
+// hold tells the person, in w's topic, that the wake of member by msg was
 // held back and why, and keeps the wake under that note.
-func (m *TurnManager) hold(ctx context.Context, at *activeTurn, member store.Member, msg store.Message, thread store.Thread, reason store.HoldReason, limit int) {
-	body := holdNote(at.member.DisplayName, member.DisplayName, reason, limit)
+func (m *TurnManager) hold(ctx context.Context, w waker, member store.Member, msg store.Message, thread store.Thread, reason store.HoldReason, limit int) {
+	body := holdNote(w.member.DisplayName, member.DisplayName, reason, limit)
+	if w.reminder {
+		body = reminderHoldNote(w.member.DisplayName, reason, limit)
+	}
 	var mentions []store.Mention
-	if user, ok := m.personOf(ctx, at); ok {
+	if user, ok := m.personOf(ctx, w); ok {
 		// Addressed to the person, so it reaches their inbox.
 		body = "@" + user.Name + " " + body
 		mentions = []store.Mention{{Kind: store.MentionUser, ID: user.ID}}
 	}
 	note, err := m.store.CreateMessage(ctx, store.NewMessage{
-		RoomID: at.thread.RoomID, ThreadID: at.thread.ID, SenderKind: store.SenderSystem,
-		Body: body, Mentions: mentions, TurnID: at.turn.ID,
+		RoomID: w.thread.RoomID, ThreadID: w.thread.ID, SenderKind: store.SenderSystem,
+		Body: body, Mentions: mentions, TurnID: w.turn.ID,
 	})
 	if err != nil {
-		m.logger.Error("tell of a held wake", "turn", at.turn.ID, "err", err)
+		m.logger.Error("tell of a held wake", "turn", w.turn.ID, "err", err)
 		return
 	}
 	// Kept before the note is announced, so whoever reads the note finds
 	// the wake to let go on.
 	if err := m.store.CreateRelayHold(ctx, store.RelayHold{MessageID: note.ID, MemberID: member.ID, ThreadID: thread.ID, TriggerMessageID: msg.ID, Reason: reason}); err != nil {
-		m.logger.Error("keep a held wake", "turn", at.turn.ID, "err", err)
+		m.logger.Error("keep a held wake", "turn", w.turn.ID, "err", err)
 	}
 	m.publish(messageEvent(note))
 }
 
 // holdNote says why a wake was held back.
 func holdNote(waker, woken string, reason store.HoldReason, limit int) string {
-	why := fmt.Sprintf("agents have woken %d turns in this piece of work since a person last spoke", limit)
-	if reason == store.HoldIdle {
-		why = fmt.Sprintf("the last %d turns agents woke in this piece of work only talked", idleWakes)
-	}
-	return fmt.Sprintf("%s mentioned %s, but %s; it waits for a person now.", waker, woken, why)
+	return fmt.Sprintf("%s mentioned %s, but %s; it waits for a person now.", waker, woken, holdWhy(reason, limit))
 }
 
-// personOf is the person the piece of work of at started from.
-func (m *TurnManager) personOf(ctx context.Context, at *activeTurn) (store.User, bool) {
-	id := at.initiator
-	if chain := at.turn.ChainMessageID; chain != "" {
-		if msg, err := m.store.GetMessage(ctx, chain); err == nil && msg.UserID != "" {
-			id = msg.UserID
-		}
+// reminderHoldNote says why the wake a member's reminder asked for as it
+// came due was held back.
+func reminderHoldNote(member string, reason store.HoldReason, limit int) string {
+	return fmt.Sprintf("%s's reminder came due, but %s; it waits for a person now.", member, holdWhy(reason, limit))
+}
+
+// holdWhy says which limit held a wake back.
+func holdWhy(reason store.HoldReason, limit int) string {
+	switch reason {
+	case store.HoldIdle:
+		return fmt.Sprintf("the last %d turns agents woke in this piece of work only talked", idleWakes)
+	case store.HoldPeople:
+		return "only people wake members in this project"
+	}
+	return fmt.Sprintf("agents have woken %d turns in this piece of work since a person last spoke", limit)
+}
+
+// personOf is the person the piece of work of w is for.
+func (m *TurnManager) personOf(ctx context.Context, w waker) (store.User, bool) {
+	id := w.initiator
+	if person := m.chainPerson(ctx, w.turn.ChainMessageID); person != "" {
+		id = person
 	}
 	if id == "" {
 		return store.User{}, false
@@ -219,22 +268,4 @@ func (m *TurnManager) relaysLeftOf(ctx context.Context, member store.Member, tur
 		return nil
 	}
 	return &relaysLeft{Limit: project.RelayLimit, Woken: woken}
-}
-
-// relaysLine tells a member it can talk and hand work on as it goes, and
-// how many more turns agents may wake in the piece of work it is part of.
-// A member a person asked hears back from the members it hands work to;
-// one woken to take part is told so apart (handedByLine).
-func relaysLine(r relaysLeft, woken bool) string {
-	line := "\nYou can post while you work with " + runtime.MessageToolSend + ": in this topic, or in the room to start something new. " +
-		"Writing @Name of a member there wakes it at once to work alongside you; writing @ and the person's name reaches their inbox."
-	if !woken {
-		line += " When the members you hand work to are done, you are woken once with what they came to, to see to what they need or sum it up for the person: do not wait for them or ask them to report back."
-	}
-	line += " Work that needs another's result, such as tests of code not written yet, hand on once that result is in, not alongside it."
-	if r.Limit > 0 {
-		line += fmt.Sprintf(" Agents may wake %d more turns of one another in the piece of work this turn belongs to before it waits for the person.", max(r.Limit-r.Woken, 0))
-	}
-	line += fmt.Sprintf(" Waking a member only to chat or to thank it wastes that: %d such turns in a row stop the waking sooner. When you are stuck, say so and mention the person.\n", idleWakes)
-	return line
 }

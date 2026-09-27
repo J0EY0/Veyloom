@@ -97,6 +97,31 @@ CREATE TABLE wiki_reviews (
     PRIMARY KEY (project_id, turn_id)
 );
 
+-- What the chat's turns looked up in the wikis (design.md 5.23.7): each
+-- search, with how many pages it found as written, and each page read.
+-- An upkeep shows its maintainer the searches that found nothing, with
+-- what their turns read next, and the pages no turn reads. Only chat
+-- turns' are kept, for 90 days.
+CREATE TABLE wiki_lookups (
+    id         bigserial   PRIMARY KEY,
+    project_id uuid        NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+    turn_id    uuid        NOT NULL REFERENCES turns (id) ON DELETE CASCADE,
+    scope      text        NOT NULL CHECK (scope IN ('project', 'library')),
+    -- A search's words, as the agent gave them, and how many pages matched
+    -- them as written; or the page a read read, as the wiki names it.
+    query      text        NOT NULL DEFAULT '',
+    hits       integer     NOT NULL DEFAULT 0 CHECK (hits >= 0),
+    path       text        NOT NULL DEFAULT '',
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CONSTRAINT wiki_lookups_search_or_read CHECK ((query = '') <> (path = ''))
+);
+
+-- An upkeep reads the lookups of the turns it goes over, and the pages of
+-- its project read lately; the hub drops the old ones of every project.
+CREATE INDEX wiki_lookups_by_turn ON wiki_lookups (turn_id);
+CREATE INDEX wiki_lookups_by_project ON wiki_lookups (project_id, created_at);
+CREATE INDEX wiki_lookups_by_time ON wiki_lookups (created_at);
+
 -- A skill of the library on trial (design.md 5.15). An agent it is
 -- installed for changed it in a turn, and every agent it is installed for
 -- uses the new version at once. It is kept once enough turns have used it
@@ -134,6 +159,7 @@ CREATE INDEX skill_trials_by_skill ON skill_trials (skill, started_at DESC);
 
 -- +goose Down
 DROP TABLE skill_trials;
+DROP TABLE wiki_lookups;
 DROP TABLE wiki_reviews;
 DROP TABLE member_rules;
 DROP TABLE approvals;

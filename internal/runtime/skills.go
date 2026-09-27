@@ -34,21 +34,39 @@ type SkillSet struct {
 
 // Names lists the skills of the set by name; none for a nil set.
 func (s *SkillSet) Names() []string {
+	return s.names(func(Skill) bool { return true })
+}
+
+// LibraryNames lists the set's skills installed from the library, and
+// BuiltinNames Veyloom's own, which every agent has (design.md 5.23.6).
+func (s *SkillSet) LibraryNames() []string {
+	return s.names(func(skill Skill) bool { return !skill.Builtin })
+}
+
+func (s *SkillSet) BuiltinNames() []string {
+	return s.names(func(skill Skill) bool { return skill.Builtin })
+}
+
+func (s *SkillSet) names(keep func(Skill) bool) []string {
 	if s == nil {
 		return nil
 	}
-	names := make([]string, len(s.Skills))
-	for i, skill := range s.Skills {
-		names[i] = skill.Name
+	var names []string
+	for _, skill := range s.Skills {
+		if keep(skill) {
+			names = append(names, skill.Name)
+		}
 	}
 	return names
 }
 
 // Skill is one skill: its files by their path in its directory, SKILL.md
-// among them.
+// among them. Builtin marks one of Veyloom's own, which every agent has
+// (design.md 5.23.6), apart from those installed from the library.
 type Skill struct {
-	Name  string            `json:"name"`
-	Files map[string]string `json:"files,omitempty"`
+	Builtin bool              `json:"builtin,omitempty"`
+	Name    string            `json:"name"`
+	Files   map[string]string `json:"files,omitempty"`
 }
 
 // keptSkillSets is how many sets a machine keeps written: the one a turn
@@ -89,7 +107,7 @@ func WriteSkills(root string, set *SkillSet, taken map[string]bool) (string, err
 	defer os.RemoveAll(tmp)
 	manifest, _ := json.MarshalIndent(map[string]string{
 		"name":        SkillPlugin,
-		"description": "Skills from the Veyloom skill library, shared by every project.",
+		"description": "Skills Veyloom gives this turn: its own, which every agent has, and those installed from its skill library.",
 		"version":     "1.0.0",
 	}, "", "  ")
 	files := map[string]string{".claude-plugin/plugin.json": string(manifest) + "\n"}

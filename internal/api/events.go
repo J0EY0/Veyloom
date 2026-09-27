@@ -20,6 +20,23 @@ type EventsOptions struct {
 	AllowedOrigins []string
 	// WriteTimeout bounds each event write; zero means unbounded.
 	WriteTimeout time.Duration
+	// Heartbeat is how often a stream says it is alive when nothing else
+	// happens (docs/design.md 5.23.9); zero means defaultHeartbeat.
+	Heartbeat time.Duration
+}
+
+// defaultHeartbeat is how often a quiet stream says it is alive: well
+// inside the minute a client waits before it takes the stream for dead.
+const defaultHeartbeat = 25 * time.Second
+
+// heartbeat is the frame a stream sends when it has had nothing else to
+// send for a while. A client that hears nothing, not even this, knows the
+// stream died without closing; a client that is gone is found out by the
+// write failing, where a quiet stream would otherwise hold its
+// subscription for good.
+type heartbeat struct {
+	Kind string    `json:"kind"`
+	At   time.Time `json:"at"`
 }
 
 // roomEvents upgrades GET /api/v1/rooms/{id}/events to a WebSocket and
@@ -66,10 +83,20 @@ func (h *handlers) stream(w http.ResponseWriter, r *http.Request, subscribe func
 	// CloseRead keeps reading so pings are answered and a closed peer is
 	// noticed; its context ends when the connection does.
 	ctx := conn.CloseRead(r.Context())
+	every := h.deps.Events.Heartbeat
+	if every <= 0 {
+		every = defaultHeartbeat
+	}
+	beat := time.NewTicker(every)
+	defer beat.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case now := <-beat.C:
+			if err := h.writeEvent(ctx, conn, heartbeat{Kind: "heartbeat", At: now}); err != nil {
+				return
+			}
 		case ev, ok := <-sub.Events():
 			if !ok {
 				if sub.Lagged() {
@@ -82,6 +109,8 @@ func (h *handlers) stream(w http.ResponseWriter, r *http.Request, subscribe func
 			if err := h.writeEvent(ctx, conn, ev); err != nil {
 				return
 			}
+			// An event says it is alive as well as a heartbeat does.
+			beat.Reset(every)
 		}
 	}
 }

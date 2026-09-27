@@ -158,6 +158,12 @@ func (t *turnBase) notice(ctx context.Context, level, text string) bool {
 	return t.emit(ctx, Event{Kind: EventNotice, Level: level, Text: text})
 }
 
+// Steer implements Turn for a runtime that takes nothing while a turn
+// runs: the text waits for the next turn instead.
+func (t *turnBase) Steer(string, string) error {
+	return ErrSteerRefused
+}
+
 // Answer implements Turn. Each request accepts exactly one answer.
 func (t *turnBase) Answer(approvalID string, d Decision) error {
 	t.mu.Lock()

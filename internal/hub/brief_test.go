@@ -27,6 +27,8 @@ type fakeBriefStore struct {
 	replies    []store.Message
 	replyTotal int
 	turns      []store.Turn
+	reminders  []store.Reminder
+	threads    map[string]store.Thread
 
 	asked struct {
 		room, topics, thread store.NewsQuery
@@ -97,6 +99,24 @@ func (f *fakeBriefStore) ListThreadTurns(context.Context, string) ([]store.Turn,
 	return f.turns, nil
 }
 
+func (f *fakeBriefStore) ListMemberPendingReminders(_ context.Context, memberID string) ([]store.Reminder, error) {
+	var out []store.Reminder
+	for _, r := range f.reminders {
+		if r.MemberID == memberID {
+			out = append(out, r)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeBriefStore) GetThread(_ context.Context, id string) (store.Thread, error) {
+	t, ok := f.threads[id]
+	if !ok {
+		return store.Thread{}, fmt.Errorf("thread %s: %w", id, store.ErrNotFound)
+	}
+	return t, nil
+}
+
 func user(id, body string) store.Message {
 	return store.Message{ID: id, SenderKind: store.SenderUser, UserID: "u1", Body: body}
 }
@@ -123,8 +143,9 @@ func newBriefRoom() (*fakeBriefStore, briefInput) {
 		messages: map[string]store.Message{"m1": user("m1", "@Claude plan the auth refactor")},
 	}
 	in := briefInput{
-		Member: st.members[0],
-		Thread: store.Thread{ID: "t7", RoomID: "r1", Number: 7, RootMessageID: "m1"},
+		Member:  st.members[0],
+		Runtime: "claude",
+		Thread:  store.Thread{ID: "t7", RoomID: "r1", Number: 7, RootMessageID: "m1"},
 	}
 	return st, in
 }
@@ -151,7 +172,12 @@ func wantInOrder(t *testing.T, text string, parts ...string) {
 	}
 }
 
-func TestBrief_HeaderComesWithEveryBrief(t *testing.T) {
+// What a brief opens with: what the project is and who is in the chat,
+// the ones taken out or disabled left out, each member with the first line
+// of its role card. Who the agent is and how the chat works are its
+// standing instructions, the system prompt of a runtime that takes one
+// with every run (design.md 5.23.1).
+func TestBrief_OpensWithTheProjectAndWhoIsInTheChat(t *testing.T) {
 	st, in := newBriefRoom()
 	removed := time.Now()
 	st.members = append(st.members,
@@ -159,20 +185,22 @@ func TestBrief_HeaderComesWithEveryBrief(t *testing.T) {
 		store.Member{ID: "a4", AgentID: "g2", DisplayName: "Off", Enabled: false},
 		store.Member{ID: "a5", AgentID: "g9", DisplayName: "Plain", Enabled: true}, // an agent with no card
 	)
-	text := build(t, st, in).Prompt
+	b := build(t, st, in)
 
-	wantInOrder(t, text,
-		`You are "Claude", an agent in the team chat of the project "Veyloom".`,
+	wantInOrder(t, b.Prompt,
 		"About the project:\nA group chat for coding agents.\nGo and Postgres.\n",
 		"In this chat",
 		"- Claude (you): Architect\n",
 		"- Codex: You implement what was designed.\n",
 		"- Plain\n",
 	)
-	for _, absent := range []string{"Gone", "- Off", "You design before you build", "new session"} {
-		if strings.Contains(text, absent) {
-			t.Errorf("brief should not hold %q:\n%s", absent, text)
+	for _, absent := range []string{"Gone", "- Off", "You design before you build", "new session", "You are \"Claude\""} {
+		if strings.Contains(b.Prompt, absent) {
+			t.Errorf("brief should not hold %q:\n%s", absent, b.Prompt)
 		}
+	}
+	if !strings.HasPrefix(b.Standing, `You are "Claude", an agent in the team chat of the project "Veyloom".`) {
+		t.Errorf("who the agent is opens its standing instructions:\n%s", b.Standing)
 	}
 
 	// The leader is marked, the member being briefed too.
@@ -185,6 +213,62 @@ func TestBrief_HeaderComesWithEveryBrief(t *testing.T) {
 	st.project.Description = "  "
 	if text := build(t, st, in).Prompt; strings.Contains(text, "About the project") {
 		t.Errorf("an empty description needs no heading:\n%s", text)
+	}
+}
+
+// A session is told a part that changes now and then again only when it
+// changed, or the session compacted and its record of what it saw is gone;
+// the parts it saw as they are are named as not repeated.
+func TestBrief_TellsAgainOnlyWhatChanged(t *testing.T) {
+	st, in := newBriefRoom()
+	first := build(t, st, in)
+	if first.Parts["about"] == "" || first.Parts["members"] == "" {
+		t.Fatalf("the parts shown are recorded: %v", first.Parts)
+	}
+
+	in.Session = store.MemberSession{ID: "s1", RoomSeen: 90, ThreadSeen: map[string]int64{"t7": 90}, BriefSeen: first.Parts}
+	b := build(t, st, in)
+	if strings.Contains(b.Prompt, "About the project") || strings.Contains(b.Prompt, "- Codex") ||
+		!strings.Contains(b.Prompt, "As you were told earlier in this session, unchanged and not repeated here: about the project, who is in the chat.\n") {
+		t.Errorf("seen and unchanged, they are only named:\n%s", b.Prompt)
+	}
+
+	st.members = append(st.members, store.Member{ID: "a5", AgentID: "g2", DisplayName: "Tester", Enabled: true})
+	b = build(t, st, in)
+	wantInOrder(t, b.Prompt, "In this chat", "- Tester: You implement", "unchanged and not repeated here: about the project.")
+
+	// A compaction empties the record: the session is told them all.
+	in.Session.BriefSeen = nil
+	if b = build(t, st, in); !strings.Contains(b.Prompt, "About the project") || strings.Contains(b.Prompt, "not repeated") {
+		t.Errorf("after a compaction every part is told:\n%s", b.Prompt)
+	}
+}
+
+// A runtime that fixes its system prompt when a session starts, as Codex
+// does, gets the standing instructions in a brief: the first of a session,
+// after a compaction, and when they changed, marked as replacing the ones
+// told before.
+func TestBrief_CodexIsToldTheStandingInstructionsInTheBrief(t *testing.T) {
+	st, in := newBriefRoom()
+	in.Runtime = "codex"
+	first := build(t, st, in)
+	if !strings.HasPrefix(first.Prompt, `You are "Claude", an agent in the team chat of the project "Veyloom".`) || !strings.Contains(first.Prompt, "use your veyloom tools") {
+		t.Errorf("the first brief opens with the standing instructions:\n%s", first.Prompt)
+	}
+
+	in.Session = store.MemberSession{ID: "s1", RoomSeen: 90, ThreadSeen: map[string]int64{"t7": 90}, BriefSeen: first.Parts}
+	if b := build(t, st, in); strings.Contains(b.Prompt, "use your veyloom tools") {
+		t.Errorf("seen, they are not told again:\n%s", b.Prompt)
+	}
+
+	st.project.LeaderID = "a1"
+	b := build(t, st, in)
+	wantInOrder(t, b.Prompt, "What follows replaces how this chat works, as you were told it earlier in this session.\n", `You are "Claude"`, "You are the project's leader.")
+
+	// Claude takes them as its system prompt, and its briefs never hold them.
+	in.Runtime = "claude"
+	if b := build(t, st, in); strings.Contains(b.Prompt, "use your veyloom tools") || !strings.Contains(b.Standing, "use your veyloom tools") {
+		t.Errorf("a runtime that takes its system prompt with every run gets them there:\n%s", b.Prompt)
 	}
 }
 
@@ -331,7 +415,7 @@ func TestBrief_SaysWhoIsAtWork(t *testing.T) {
 		"- Codex, in topic #12, for 1 h 30 min; has changed a.go, b.go, c.go, d.go, e.go, f.go, g.go, h.go and 2 more\n",
 		"- Keeper is tidying the wiki, for 4 min; waits for a person to allow running `make test`\n",
 		"- Pi, in topic #9, started just now\n",
-		"You are shown what is new",
+		"This topic, #7",
 	)
 }
 
@@ -392,8 +476,11 @@ func TestBrief_SaysWhenTheSessionIsNew(t *testing.T) {
 	}
 	in.NewSession = store.SessionNotFound
 	text := build(t, st, in).Prompt
-	// Right after the agent is told who it is, before anything else.
-	wantInOrder(t, text, `You are "Claude"`, "This is a new session", "the runtime no longer has it", "About the project:")
+	// Before anything else.
+	if !strings.HasPrefix(text, "This is a new session") {
+		t.Errorf("the note comes first:\n%s", text)
+	}
+	wantInOrder(t, text, "This is a new session", "the runtime no longer has it", "About the project:")
 }
 
 func TestBrief_ATriggerNoPartShowedIsNotLost(t *testing.T) {
@@ -456,6 +543,39 @@ func TestFirstLine(t *testing.T) {
 	for in, want := range cases {
 		if got := firstLine(in); got != want {
 			t.Errorf("firstLine(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// How a member talks and hands work on is standing, told as the project's
+// relay limit has it: counted, unlimited, or with agents waking no one.
+func TestBrief_RelayRulesFollowTheProjectsLimit(t *testing.T) {
+	for limit, want := range map[int]string{
+		30: "Agents waking one another stop after so many turns of one piece of work, which the brief tells",
+		0:  "3 turns in a row that agents woke and that only talked, doing no work, stop agents waking one another in that piece of work",
+		-1: "in this project a member you name is not woken by it",
+	} {
+		if got := relayRules(limit); !strings.Contains(got, want) {
+			t.Errorf("limit %d: %s", limit, got)
+		}
+	}
+}
+
+// How members work together is Veyloom's skill team-practices, which the
+// standing instructions point to when the turn has it; the practices
+// themselves are the skill's, not the instructions' (design.md 5.23.6).
+func TestBrief_PracticesAreASkill(t *testing.T) {
+	if got := practicesLine([]string{"team-practices"}); !strings.Contains(got, "Veyloom's skill team-practices, which every agent has") {
+		t.Errorf("the pointer: %q", got)
+	}
+	if got := practicesLine(nil); got != "" {
+		t.Errorf("no skill, no pointer: %q", got)
+	}
+	for _, limit := range []int{30, 0, -1} {
+		for _, practice := range []string{"hand on once that result is in", "When you are stuck"} {
+			if strings.Contains(relayRules(limit), practice) {
+				t.Errorf("limit %d: the practice %q is the skill's", limit, practice)
+			}
 		}
 	}
 }

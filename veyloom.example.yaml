@@ -56,6 +56,9 @@ hub:
   # How long an agent's permission request waits for someone to decide
   # before it is denied. Negative waits forever.
   approval_timeout: 15m
+  # How long a turn may show no sign of life, waiting on nobody, before the
+  # chat says it may be stuck. Nothing is stopped. Negative never says.
+  turn_quiet_after: 10m
 
 machine:
   # Label shown for this machine. Defaults to the hostname; it is not the

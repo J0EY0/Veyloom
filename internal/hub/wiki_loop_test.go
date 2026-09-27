@@ -191,8 +191,8 @@ func TestLoop_AgentWritesTheWiki(t *testing.T) {
 	if pages := turns[0].WikiPages; len(pages) != 1 || pages[0] != "/pitfalls/edit-migration-rebuild-db.md" {
 		t.Errorf("the turn's wiki pages: %q", pages)
 	}
-	if prompt := promptOf(t, turns[0]); !strings.Contains(prompt, "The project keeps a wiki of what the team has learned") || !strings.Contains(prompt, "Write to it only when a person asks you to") {
-		t.Errorf("the brief should point at the wiki:\n%s", prompt)
+	if standing := systemPromptOf(t, turns[0]); !strings.Contains(standing, "The project keeps a wiki of what the team has learned") || !strings.Contains(standing, "Write to it only when a person asks you to") {
+		t.Errorf("the standing instructions should point at the wiki:\n%s", standing)
 	}
 
 	// Another member finds it.

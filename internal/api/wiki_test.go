@@ -190,6 +190,10 @@ func (f *fakeWikis) SkillUses(_ context.Context, name string, limit int) ([]stor
 	return []store.SkillUse{{TurnID: "x1", ProjectName: "Veyloom", TopicNumber: 3}}, nil
 }
 
+func (f *fakeWikis) BuiltinSkills() []hub.BuiltinSkill {
+	return []hub.BuiltinSkill{{Name: "team-practices", Description: "How the members of a Veyloom team split, hand on, check and report back work."}}
+}
+
 func (f *fakeWikis) ImportSkill(ctx context.Context, folder, team, userID string) (hub.WikiPageView, error) {
 	f.record("import %s for %q by %s", folder, team, userID)
 	if folder == "relative" {

@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"slices"
 	"strconv"
 	"strings"
@@ -16,15 +17,38 @@ import (
 )
 
 // The skills a person installed for an agent go with every turn of its
-// (docs/design.md 5.11, 5.15): the ones its runtime may load, as Agent
-// Skills has them. Which of them the turn used is read off its tool calls
+// (docs/design.md 5.11, 5.15), and Veyloom's own with every turn of every
+// agent (5.23.6): the ones its runtime may load, as Agent Skills has them.
+// Which of the library's the turn used is read off its tool calls
 // (5.10), for the teams owning them to see where their skills were used
 // and how that went.
 
-// skillSet is what a turn of the agent is given of the library: the skills
-// installed for it that its runtime may load; nil when there is nothing to
-// give.
+// skillSet is what a turn of the agent is given of skills: Veyloom's own,
+// which every agent has (design.md 5.23.6), and the library's installed
+// for it (5.15) that its runtime may load; nil when there is nothing to
+// give. One of the library's with the name of one of Veyloom's own cannot
+// go by it too, and is left out.
 func (m *TurnManager) skillSet(ctx context.Context, agent store.Agent) *runtime.SkillSet {
+	installed := m.librarySkills(ctx, agent)
+	if len(m.builtin)+len(installed) == 0 {
+		return nil
+	}
+	set := &runtime.SkillSet{Skills: make([]runtime.Skill, 0, len(m.builtin)+len(installed))}
+	set.Skills = append(set.Skills, m.builtin...)
+	for _, s := range installed {
+		if m.isBuiltin(s.Name) {
+			m.logger.Warn("a skill of the library has the name of one of Veyloom's own", "skill", s.Name, "agent", agent.ID)
+			continue
+		}
+		set.Skills = append(set.Skills, s)
+	}
+	set.Hash = skillHash(set.Skills)
+	return set
+}
+
+// librarySkills are the library's skills installed for agent that its
+// runtime may load.
+func (m *TurnManager) librarySkills(ctx context.Context, agent store.Agent) []runtime.Skill {
 	if len(agent.Skills) == 0 {
 		return nil
 	}
@@ -33,11 +57,17 @@ func (m *TurnManager) skillSet(ctx context.Context, agent store.Agent) *runtime.
 		return nil
 	}
 	m.wikis.sync(ctx, b, "", "")
-	set := &runtime.SkillSet{}
-	hash := sha256.New()
-	for _, s := range b.Skills(agent.Runtime) {
+	return m.skillsOf(b, agent.Runtime, func(name string) bool { return slices.Contains(agent.Skills, name) })
+}
+
+// skillsOf are the skills of b a runtime may load that keep keeps: as
+// Agent Skills has them, their text files only, a runtime reading skills
+// and the set travelling as JSON.
+func (m *TurnManager) skillsOf(b *wiki.Bundle, runtimeName string, keep func(string) bool) []runtime.Skill {
+	var out []runtime.Skill
+	for _, s := range b.Skills(runtimeName) {
 		name := wiki.SkillName(s.Path)
-		if !slices.Contains(agent.Skills, name) {
+		if !keep(name) {
 			continue
 		}
 		projected, err := b.ProjectSkill(name)
@@ -45,28 +75,34 @@ func (m *TurnManager) skillSet(ctx context.Context, agent store.Agent) *runtime.
 			m.logger.Warn("project a skill", "skill", name, "err", err)
 			continue
 		}
-		paths := make([]string, 0, len(projected.Files))
+		files := make(map[string]string, len(projected.Files))
 		for p, data := range projected.Files {
-			// Text only: a runtime reads skills, and the set travels as JSON.
 			if utf8.Valid(data) {
-				paths = append(paths, p)
+				files[p] = string(data)
 			}
 		}
-		slices.Sort(paths)
-		skill := runtime.Skill{Name: name, Files: make(map[string]string, len(paths))}
+		out = append(out, runtime.Skill{Name: name, Files: files})
+	}
+	return out
+}
+
+// skillHash names a set by what it gives, which skill as which, each
+// file and its text, so a machine that wrote it before need not again.
+func skillHash(skills []runtime.Skill) string {
+	hash := sha256.New()
+	for _, s := range skills {
+		scope := "library"
+		if s.Builtin {
+			scope = "builtin"
+		}
+		paths := slices.Sorted(maps.Keys(s.Files))
 		for _, p := range paths {
-			skill.Files[p] = string(projected.Files[p])
-			for _, part := range []string{name, p, skill.Files[p]} {
+			for _, part := range []string{scope, s.Name, p, s.Files[p]} {
 				hash.Write([]byte(strconv.Itoa(len(part)) + ":" + part))
 			}
 		}
-		set.Skills = append(set.Skills, skill)
 	}
-	if len(set.Skills) == 0 {
-		return nil
-	}
-	set.Hash = hex.EncodeToString(hash.Sum(nil))[:16]
-	return set
+	return hex.EncodeToString(hash.Sum(nil))[:16]
 }
 
 // skillsIn names the skills of set a tool call used. Claude Code loads one
@@ -94,6 +130,10 @@ func skillsIn(ev runtime.Event, set *runtime.SkillSet) []string {
 	inSet := afterSet(ev.Input, set.Hash)
 	var used []string
 	for _, s := range set.Skills {
+		if s.Builtin {
+			// Veyloom's own: no trial of the library's to count it for.
+			continue
+		}
 		alias := runtime.SkillAlias(s.Name)
 		if called != "" && (s.Name == called || alias == called) ||
 			strings.HasPrefix(inSet, "/skills/"+s.Name+"/") || strings.HasPrefix(inSet, "/skills/"+alias+"/") {
@@ -124,7 +164,7 @@ func transcriptSpec(spec runtime.TurnSpec) *runtime.TurnSpec {
 	if spec.Skills != nil {
 		named := &runtime.SkillSet{Hash: spec.Skills.Hash}
 		for _, s := range spec.Skills.Skills {
-			named.Skills = append(named.Skills, runtime.Skill{Name: s.Name})
+			named.Skills = append(named.Skills, runtime.Skill{Builtin: s.Builtin, Name: s.Name})
 		}
 		spec.Skills = named
 	}

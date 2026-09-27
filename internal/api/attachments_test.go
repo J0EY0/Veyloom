@@ -21,15 +21,37 @@ import (
 type fakeAttachments struct {
 	rooms *fakeProjects
 	rows  map[string]store.Attachment
+	// listed is what the attachments tab is answered, asked is the last
+	// query it was asked.
+	listed []store.RoomAttachment
+	asked  store.AttachmentQuery
 }
 
 func (f *fakeAttachments) CreateAttachment(ctx context.Context, a store.NewAttachment) (store.Attachment, error) {
 	if _, err := f.rooms.GetRoom(ctx, a.RoomID); err != nil {
 		return store.Attachment{}, err
 	}
-	row := store.Attachment{ID: a.ID, RoomID: a.RoomID, Filename: a.Filename, MediaType: a.MediaType, Size: a.Size, Path: a.Path}
+	row := store.Attachment{
+		ID: a.ID, RoomID: a.RoomID, Filename: a.Filename, MediaType: a.MediaType, Kind: a.Kind, Size: a.Size,
+		Width: a.Width, Height: a.Height, Thumbnail: a.ThumbnailPath != "", Path: a.Path, ThumbnailPath: a.ThumbnailPath,
+	}
 	f.rows[a.ID] = row
 	return row, nil
+}
+
+func (f *fakeAttachments) ListRoomAttachments(_ context.Context, _ string, q store.AttachmentQuery) ([]store.RoomAttachment, int, error) {
+	f.asked = q
+	return append([]store.RoomAttachment(nil), f.listed...), len(f.listed) + 40, nil
+}
+
+func (f *fakeAttachments) RoomAttachmentsByID(_ context.Context, roomID string, ids []string) ([]store.Attachment, error) {
+	var out []store.Attachment
+	for _, id := range ids {
+		if row, ok := f.rows[id]; ok && row.RoomID == roomID {
+			out = append(out, row)
+		}
+	}
+	return out, nil
 }
 
 func (f *fakeAttachments) GetAttachment(_ context.Context, id string) (store.Attachment, error) {
@@ -42,13 +64,20 @@ func (f *fakeAttachments) GetAttachment(_ context.Context, id string) (store.Att
 
 func attachmentHandler(t *testing.T) (http.Handler, store.Room, store.User, *fakeChat, string) {
 	t.Helper()
+	h, room, user, chat, dir, _ := attachmentsHandler(t)
+	return h, room, user, chat, dir
+}
+
+// attachmentsHandler is attachmentHandler with the fake store as well.
+func attachmentsHandler(t *testing.T) (http.Handler, store.Room, store.User, *fakeChat, string, *fakeAttachments) {
+	t.Helper()
 	handler, room, user, messages := chatHandler(t)
 	_ = handler
 	dir := t.TempDir()
 	attachments := &fakeAttachments{rooms: messages.rooms, rows: map[string]store.Attachment{}}
 	chat := &fakeChat{messages: messages, running: map[string]bool{}}
 	h := NewHandler(Deps{Projects: messages.rooms, Users: messages.users, Messages: messages, Turns: fakeTurns{}, Chat: chat, Attachments: attachments, AttachmentDir: dir})
-	return h, room, user, chat, dir
+	return h, room, user, chat, dir, attachments
 }
 
 // upload builds a multipart request with one file field.

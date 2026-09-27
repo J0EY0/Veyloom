@@ -102,6 +102,45 @@ func TestEvents_StreamsRoomEvents(t *testing.T) {
 	}
 }
 
+// A quiet stream says it is alive, so a client can tell it from one that
+// died without closing (docs/design.md 5.23.9).
+func TestEvents_AQuietStreamSaysItIsAlive(t *testing.T) {
+	srv, room, chat := eventsServer(t, EventsOptions{Heartbeat: 50 * time.Millisecond})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, wsURL(srv, "/api/v1/rooms/"+room.ID+"/events"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.CloseNow()
+
+	var beat struct {
+		Kind string    `json:"kind"`
+		At   time.Time `json:"at"`
+	}
+	if err := wsjson.Read(ctx, conn, &beat); err != nil || beat.Kind != "heartbeat" || beat.At.IsZero() {
+		t.Fatalf("a quiet stream's first frame: %+v %v", beat, err)
+	}
+	// Events come through as ever, beats or no beats.
+	msg := store.Message{ID: "m1", Room: room.ID, Body: "hello"}
+	chat.sub.ch <- hub.Event{Kind: hub.EventMessage, RoomID: room.ID, Message: &msg}
+	for {
+		var ev hub.Event
+		if err := wsjson.Read(ctx, conn, &ev); err != nil {
+			t.Fatal(err)
+		}
+		if ev.Kind == hub.EventMessage {
+			if ev.Message == nil || ev.Message.Body != "hello" {
+				t.Errorf("event = %+v", ev)
+			}
+			break
+		}
+		if ev.Kind != "heartbeat" {
+			t.Fatalf("frame = %+v", ev)
+		}
+	}
+}
+
 func TestEvents_LaggedClientIsToldToResync(t *testing.T) {
 	srv, room, chat := eventsServer(t, EventsOptions{})
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

@@ -2,12 +2,14 @@ package hub
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/J0EY0/veyloom/internal/protocol"
 	"github.com/J0EY0/veyloom/internal/runtime"
@@ -34,11 +36,13 @@ type roomStore interface {
 
 // Limits of a room tool's answer. An answer is read by a model, whose
 // context it spends: a page is a screenful, and a long message is quoted
-// up to a length with the rest a read_topic away.
+// up to a number of characters, briefs included, with the rest a
+// read_message away, which reads one whole up to a number of its own.
 const (
 	roomPageDefault = 20
 	roomPageMax     = 50
 	roomBodyMax     = 4000
+	readMessageMax  = 100_000
 )
 
 // OnRoomQuery answers a room tool call of a running turn. It returns at
@@ -63,12 +67,20 @@ func (m *TurnManager) OnRoomQuery(conn protocol.Conn, q protocol.RoomQuery) {
 			text, err = m.answerMemory(ctx, at, q.Query)
 		case q.Query.Tool == runtime.RoomToolReadTurn:
 			text, err = m.answerReadTurn(ctx, at, q.Query)
+		case q.Query.Tool == runtime.RoomToolReadMessage:
+			text, err = m.answerReadMessage(ctx, at, q.Query)
 		case slices.Contains(runtime.UpkeepToolNames, q.Query.Tool):
 			text, err = m.answerUpkeep(ctx, at, q.Query)
 		case q.Query.Tool == runtime.SetupToolSteps:
 			text, err = m.answerSetupSteps(ctx, at, q.Query)
 		case q.Query.Tool == runtime.MessageToolSend:
 			text, err = m.answerSendMessage(ctx, at, q.Query)
+		case q.Query.Tool == runtime.MessageToolRemind:
+			text, err = m.answerRemind(ctx, at, q.Query)
+		case q.Query.Tool == runtime.MessageToolCancelReminder:
+			text, err = m.answerCancelReminder(ctx, at, q.Query)
+		case q.Query.Tool == runtime.MessageToolDraft:
+			text, err = m.answerDraft(ctx, at, q.Query)
 		default:
 			text, err = answerRoomQuery(ctx, m.store, at.thread.RoomID, m.attachmentDir, q.Query)
 		}
@@ -278,8 +290,8 @@ func (r *roomReader) message(ctx context.Context, m store.Message, tag string) {
 		return
 	}
 	body := m.Body
-	if len(body) > roomBodyMax {
-		body = excerpt(body, roomBodyMax) + " (cut)"
+	if cut, more := cutBody(body, roomBodyMax); more > 0 {
+		body = cut + cutNote(m.ID, more)
 	}
 	fmt.Fprintf(&r.sb, "%s%s [%s] %s\n", tag, stamp(m.CreatedAt), r.names.of(ctx, m), body)
 	for _, a := range m.Attachments {
@@ -295,4 +307,66 @@ func stamp(t time.Time) string {
 		return "-"
 	}
 	return t.UTC().Format("2006-01-02 15:04")
+}
+
+// cutBody is body cut to at most max characters, with its lines as they
+// were, and how many characters it left out; body itself, and nothing left
+// out, when it fits. Characters, not bytes: a message in Chinese is cut
+// where one of as many English characters is.
+func cutBody(body string, max int) (string, int) {
+	if len(body) <= max {
+		return body, 0
+	}
+	n := 0
+	for i := range body {
+		if n == max {
+			return strings.TrimRight(body[:i], " \t"), utf8.RuneCountInString(body[i:])
+		}
+		n++
+	}
+	return body, 0
+}
+
+// cutNote says what a message cut short left out, and how to read it whole.
+func cutNote(id string, more int) string {
+	return fmt.Sprintf(" … (%d more characters: %s with message %s reads it whole)", more, runtime.RoomToolReadMessage, id)
+}
+
+// answerReadMessage reads one message of the turn's room whole
+// (read_message): a long one a brief or another tool cut short.
+func (m *TurnManager) answerReadMessage(ctx context.Context, at *activeTurn, q runtime.RoomQuery) (string, error) {
+	var args struct {
+		Message string `json:"message"`
+	}
+	if len(q.Args) > 0 {
+		if err := json.Unmarshal(q.Args, &args); err != nil {
+			return "", fmt.Errorf("read_message: %w", err)
+		}
+	}
+	id := strings.TrimSpace(args.Message)
+	if id == "" {
+		return "", errors.New("read which message? give its id as message")
+	}
+	msg, err := m.store.GetMessage(ctx, id)
+	if err != nil || msg.Room != at.thread.RoomID {
+		// Another project's messages are not this turn's to read.
+		return "", fmt.Errorf("this chat has no message %s", id)
+	}
+	where := "in the room"
+	if msg.ThreadID != "" {
+		if thread, err := m.store.GetThread(ctx, msg.ThreadID); err == nil {
+			where = fmt.Sprintf("in topic #%d", thread.Number)
+		}
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "Message %s, from %s, %s, %s:\n", msg.ID, newNameResolver(m.store).of(ctx, msg), stamp(msg.CreatedAt), where)
+	body, more := cutBody(msg.Body, readMessageMax)
+	sb.WriteString(body + "\n")
+	if more > 0 {
+		fmt.Fprintf(&sb, "(%d more characters are too many to read here.)\n", more)
+	}
+	for _, a := range msg.Attachments {
+		fmt.Fprintf(&sb, "(attached %s, %s, %d bytes; file %s at %s)\n", a.Filename, a.MediaType, a.Size, a.ID, filepath.Join(m.attachmentDir, filepath.FromSlash(a.Path)))
+	}
+	return sb.String(), nil
 }

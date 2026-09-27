@@ -2,6 +2,7 @@ package hub
 
 import (
 	"context"
+	"time"
 
 	"github.com/J0EY0/veyloom/internal/store"
 )
@@ -19,10 +20,54 @@ type Store interface {
 	approvalStore
 	wikiStore
 	upkeepStore
+	lookupStore
 	reviewStore
 	graphStore
 	worktreeStore
 	relayStore
+	reminderStore
+	draftStore
+	attachmentStore
+}
+
+// draftStore is what drafts for a person to run need of the store
+// (docs/design.md 5.23.5).
+type draftStore interface {
+	CreateDraft(ctx context.Context, d store.NewDraft) (store.Draft, []store.Draft, error)
+	SetDraftMessage(ctx context.Context, id, messageID string) error
+	SetDraftResultMessage(ctx context.Context, id, messageID string) error
+	GetDraft(ctx context.Context, id string) (store.Draft, error)
+	GetDraftByMessage(ctx context.Context, messageID string) (store.Draft, error)
+	OpenDraft(ctx context.Context, projectID, subject string) (store.Draft, error)
+	SupersedeDrafts(ctx context.Context, projectID, subject string) ([]store.Draft, error)
+	ListThreadDrafts(ctx context.Context, threadID string) ([]store.Draft, error)
+	ClaimDraft(ctx context.Context, id string) (store.Draft, error)
+	ReleaseDraft(ctx context.Context, id string) (store.Draft, error)
+	SettleDraft(ctx context.Context, id string, status store.DraftStatus, result store.DraftResult, userID string) (store.Draft, error)
+	DeclineDraft(ctx context.Context, id, userID string) (store.Draft, error)
+}
+
+// reminderStore is what members' reminders to themselves need of the
+// store (docs/design.md 5.23.4).
+type reminderStore interface {
+	CreateReminder(ctx context.Context, r store.NewReminder) (store.Reminder, error)
+	SetReminderMessage(ctx context.Context, id, messageID string) error
+	GetReminder(ctx context.Context, id string) (store.Reminder, error)
+	CountPendingReminders(ctx context.Context, memberID string) (int, error)
+	ListPendingReminders(ctx context.Context, machineID string) ([]store.Reminder, error)
+	ListMemberPendingReminders(ctx context.Context, memberID string) ([]store.Reminder, error)
+	ListThreadReminders(ctx context.Context, threadID string) ([]store.Reminder, error)
+	FireReminder(ctx context.Context, id string) (store.Reminder, error)
+	SetReminderFired(ctx context.Context, id, messageID string) error
+	CancelReminder(ctx context.Context, id, userID string) (store.Reminder, error)
+	DropReminder(ctx context.Context, id string) (store.Reminder, error)
+}
+
+// attachmentStore is what sweeping away uploads nobody sent needs of the
+// store (docs/webui.md 4.21).
+type attachmentStore interface {
+	UnclaimedAttachments(ctx context.Context, before time.Time, limit int) ([]store.Attachment, error)
+	DeleteUnclaimedAttachment(ctx context.Context, id string) (store.Attachment, error)
 }
 
 // relayStore is what agents waking one another needs of the store
@@ -32,6 +77,16 @@ type relayStore interface {
 	CreateRelayHold(ctx context.Context, h store.RelayHold) error
 	GetRelayHold(ctx context.Context, messageID string) (store.RelayHold, error)
 	ContinueRelayHold(ctx context.Context, messageID string) (store.RelayHold, error)
+	// What busy members were asked, kept until their turns start.
+	QueueWake(ctx context.Context, w store.QueuedWake) error
+	UnqueueWakes(ctx context.Context, memberID string, messageIDs []string) error
+	ListQueuedWakes(ctx context.Context, machineID string) ([]store.QueuedWake, error)
+	// What keeps turns from starting that would only fail (pauses.go).
+	PauseAccount(ctx context.Context, machineID, runtime string, reason store.PauseReason, detail string, endsAt *time.Time) (store.Pause, error)
+	PauseMember(ctx context.Context, memberID string, reason store.PauseReason, detail string, endsAt *time.Time) (store.Pause, error)
+	ListPauses(ctx context.Context) ([]store.Pause, error)
+	LiftAccountPause(ctx context.Context, machineID, runtime string) (bool, error)
+	LiftMemberPause(ctx context.Context, memberID string) (bool, error)
 }
 
 // messageStore is the message and thread access the hub uses.
@@ -45,6 +100,7 @@ type messageStore interface {
 	ThreadOfMessage(ctx context.Context, messageID string) (store.Thread, error)
 	GetThread(ctx context.Context, id string) (store.Thread, error)
 	UpdateMessageBody(ctx context.Context, id, body, turnID string, mentions []store.Mention) (store.Message, error)
+	SetMessageTitle(ctx context.Context, id, title string) (store.Message, error)
 	LastAgentMessageInThread(ctx context.Context, threadID string) (store.Message, error)
 	GetUser(ctx context.Context, id string) (store.User, error)
 	// What a person read of their inbox.

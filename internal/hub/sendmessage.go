@@ -61,13 +61,13 @@ func (m *TurnManager) answerSendMessage(ctx context.Context, at *activeTurn, q r
 	at.sent++
 	at.mu.Unlock()
 
-	named := m.mentionedMembers(ctx, at, text)
+	named, person := m.mentionsIn(ctx, at, text)
 	mentions := make([]store.Mention, 0, len(named)+1)
 	for _, a := range named {
 		mentions = append(mentions, store.Mention{Kind: store.MentionAgent, ID: a.ID})
 	}
-	if user, ok := m.personOf(ctx, at); ok && mentionsName(text, user.Name) {
-		mentions = append(mentions, store.Mention{Kind: store.MentionUser, ID: user.ID})
+	if person != nil {
+		mentions = append(mentions, store.Mention{Kind: store.MentionUser, ID: person.ID})
 	}
 
 	var msg store.Message
@@ -112,7 +112,7 @@ func (m *TurnManager) answerSendMessage(ctx context.Context, at *activeTurn, q r
 		case at.reportsTo(member.ID):
 			notWoken = append(notWoken, a.DisplayName+" (it handed you the work: your answer reaches it once all of it is done, and naming it does not wake it)")
 			continue
-		case !m.mayWake(ctx, at, member, msg, thread):
+		case !m.mayWake(ctx, at.asWaker(), member, msg, thread):
 			notWoken = append(notWoken, a.DisplayName+" (held back by the limit on agents waking one another; the person is told)")
 			continue
 		}
@@ -138,8 +138,9 @@ type sent struct {
 	toRoom, names bool
 }
 
-// postSent stores and announces what a member sent: in its topic, or in
-// the room, where naming members starts a topic at the message for them.
+// postSent stores and announces what a member sent: in its topic, where
+// it is what the turn said there (sayInTopic), or in the room, where
+// naming members starts a topic at the message for them.
 func (m *TurnManager) postSent(ctx context.Context, at *activeTurn, s sent) (store.Message, store.Thread, error) {
 	in := store.NewMessage{
 		RoomID: at.thread.RoomID, SenderKind: store.SenderAgent, MemberID: at.member.ID,
@@ -147,8 +148,7 @@ func (m *TurnManager) postSent(ctx context.Context, at *activeTurn, s sent) (sto
 	}
 	toRoom, names := s.toRoom, s.names
 	if !toRoom {
-		in.ThreadID = at.thread.ID
-		msg, err := m.post(ctx, in)
+		msg, err := m.sayInTopic(ctx, at, in)
 		return msg, at.thread, err
 	}
 	msg, err := m.store.CreateMessage(ctx, in)
@@ -167,6 +167,45 @@ func (m *TurnManager) postSent(ctx context.Context, at *activeTurn, s sent) (sto
 	}
 	m.publish(Event{Kind: EventMessage, RoomID: msg.Room, At: msg.CreatedAt, Message: &msg, Thread: topicSummary(thread)})
 	return msg, thread, nil
+}
+
+// sayInTopic puts what a turn sent to its own topic there as what the turn
+// said (design.md 5.24): at the head of a topic the turn opened while that
+// is still empty, as its first words would be, else under it. Either way
+// it is the turn's latest word, which its end addresses to whoever asked
+// when nothing follows it. Runs on the turn's executor, in order with what
+// the turn streams.
+func (m *TurnManager) sayInTopic(ctx context.Context, at *activeTurn, in store.NewMessage) (store.Message, error) {
+	at.mu.Lock()
+	root := at.root
+	head := root != nil && at.segments == 0
+	at.mu.Unlock()
+
+	var msg store.Message
+	var err error
+	if head {
+		msg, err = m.store.UpdateMessageBody(ctx, root.ID, in.Body, in.TurnID, in.Mentions)
+		if err == nil && in.Title != "" {
+			msg, err = m.store.SetMessageTitle(ctx, root.ID, in.Title)
+		}
+		if err == nil {
+			m.publish(Event{Kind: EventMessage, RoomID: msg.Room, At: msg.CreatedAt, Message: &msg, Thread: topicSummary(at.thread)})
+		}
+	} else {
+		in.ThreadID = at.thread.ID
+		msg, err = m.post(ctx, in)
+	}
+	if err != nil {
+		return store.Message{}, err
+	}
+	at.mu.Lock()
+	if head {
+		at.root = &msg
+	}
+	at.segments++
+	at.lastReply, at.lastReplyID = msg.Body, msg.ID
+	at.mu.Unlock()
+	return msg, nil
 }
 
 // sentAnswer tells the agent what came of its message.

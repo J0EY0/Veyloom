@@ -14,7 +14,7 @@ import (
 const claimAttachments = `-- name: ClaimAttachments :many
 UPDATE attachments SET message_id = $1
 WHERE id = ANY($2::uuid[]) AND room_id = $3 AND message_id IS NULL
-RETURNING id, room_id, message_id, filename, media_type, size, path, created_at
+RETURNING id, room_id, message_id, filename, media_type, kind, size, width, height, path, thumbnail_path, created_at
 `
 
 type ClaimAttachmentsParams struct {
@@ -40,8 +40,12 @@ func (q *Queries) ClaimAttachments(ctx context.Context, arg ClaimAttachmentsPara
 			&i.MessageID,
 			&i.Filename,
 			&i.MediaType,
+			&i.Kind,
 			&i.Size,
+			&i.Width,
+			&i.Height,
 			&i.Path,
+			&i.ThumbnailPath,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err
@@ -54,19 +58,64 @@ func (q *Queries) ClaimAttachments(ctx context.Context, arg ClaimAttachmentsPara
 	return items, nil
 }
 
+const countRoomAttachments = `-- name: CountRoomAttachments :one
+SELECT count(*)
+FROM attachments a
+JOIN messages m ON m.id = a.message_id
+LEFT JOIN members mb ON mb.id = m.member_id
+WHERE a.room_id = $1
+  AND (cardinality($2::text[]) = 0 OR a.kind = ANY($2::text[]))
+  AND ($3::uuid IS NULL OR m.user_id = $3)
+  AND ($4::uuid IS NULL OR m.member_id = $4)
+  AND NOT EXISTS (
+    SELECT 1 FROM unnest($5::text[]) AS w(pattern)
+    WHERE NOT (a.filename ILIKE w.pattern OR m.body ILIKE w.pattern
+               OR coalesce(mb.display_name, '') ILIKE w.pattern OR coalesce(($6::text[])[array_position($7::uuid[], m.user_id)], '') ILIKE w.pattern))
+`
+
+type CountRoomAttachmentsParams struct {
+	RoomID      pgtype.UUID
+	Kinds       []string
+	UserID      pgtype.UUID
+	MemberID    pgtype.UUID
+	Patterns    []string
+	PeopleNames []string
+	PeopleIds   []pgtype.UUID
+}
+
+// How many attachments ListRoomAttachments finds, all its pages.
+func (q *Queries) CountRoomAttachments(ctx context.Context, arg CountRoomAttachmentsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countRoomAttachments,
+		arg.RoomID,
+		arg.Kinds,
+		arg.UserID,
+		arg.MemberID,
+		arg.Patterns,
+		arg.PeopleNames,
+		arg.PeopleIds,
+	)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
 const createAttachment = `-- name: CreateAttachment :one
-INSERT INTO attachments (id, room_id, filename, media_type, size, path)
-VALUES ($1, $2, $3, $4, $5, $6)
-RETURNING id, room_id, message_id, filename, media_type, size, path, created_at
+INSERT INTO attachments (id, room_id, filename, media_type, kind, size, width, height, path, thumbnail_path)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+RETURNING id, room_id, message_id, filename, media_type, kind, size, width, height, path, thumbnail_path, created_at
 `
 
 type CreateAttachmentParams struct {
-	ID        pgtype.UUID
-	RoomID    pgtype.UUID
-	Filename  string
-	MediaType string
-	Size      int64
-	Path      string
+	ID            pgtype.UUID
+	RoomID        pgtype.UUID
+	Filename      string
+	MediaType     string
+	Kind          string
+	Size          int64
+	Width         int32
+	Height        int32
+	Path          string
+	ThumbnailPath string
 }
 
 // The id comes from the caller: the file is named after it on disk before
@@ -77,8 +126,12 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 		arg.RoomID,
 		arg.Filename,
 		arg.MediaType,
+		arg.Kind,
 		arg.Size,
+		arg.Width,
+		arg.Height,
 		arg.Path,
+		arg.ThumbnailPath,
 	)
 	var i Attachment
 	err := row.Scan(
@@ -87,15 +140,45 @@ func (q *Queries) CreateAttachment(ctx context.Context, arg CreateAttachmentPara
 		&i.MessageID,
 		&i.Filename,
 		&i.MediaType,
+		&i.Kind,
 		&i.Size,
+		&i.Width,
+		&i.Height,
 		&i.Path,
+		&i.ThumbnailPath,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const deleteUnclaimedAttachment = `-- name: DeleteUnclaimedAttachment :one
+DELETE FROM attachments WHERE id = $1 AND message_id IS NULL
+RETURNING id, room_id, message_id, filename, media_type, kind, size, width, height, path, thumbnail_path, created_at
+`
+
+// Forgets an upload, unless a message took it meanwhile.
+func (q *Queries) DeleteUnclaimedAttachment(ctx context.Context, id pgtype.UUID) (Attachment, error) {
+	row := q.db.QueryRow(ctx, deleteUnclaimedAttachment, id)
+	var i Attachment
+	err := row.Scan(
+		&i.ID,
+		&i.RoomID,
+		&i.MessageID,
+		&i.Filename,
+		&i.MediaType,
+		&i.Kind,
+		&i.Size,
+		&i.Width,
+		&i.Height,
+		&i.Path,
+		&i.ThumbnailPath,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const getAttachment = `-- name: GetAttachment :one
-SELECT id, room_id, message_id, filename, media_type, size, path, created_at FROM attachments WHERE id = $1
+SELECT id, room_id, message_id, filename, media_type, kind, size, width, height, path, thumbnail_path, created_at FROM attachments WHERE id = $1
 `
 
 func (q *Queries) GetAttachment(ctx context.Context, id pgtype.UUID) (Attachment, error) {
@@ -107,15 +190,19 @@ func (q *Queries) GetAttachment(ctx context.Context, id pgtype.UUID) (Attachment
 		&i.MessageID,
 		&i.Filename,
 		&i.MediaType,
+		&i.Kind,
 		&i.Size,
+		&i.Width,
+		&i.Height,
 		&i.Path,
+		&i.ThumbnailPath,
 		&i.CreatedAt,
 	)
 	return i, err
 }
 
 const listAttachmentsByMessages = `-- name: ListAttachmentsByMessages :many
-SELECT id, room_id, message_id, filename, media_type, size, path, created_at FROM attachments
+SELECT id, room_id, message_id, filename, media_type, kind, size, width, height, path, thumbnail_path, created_at FROM attachments
 WHERE message_id = ANY($1::uuid[])
 ORDER BY created_at, id
 `
@@ -135,8 +222,215 @@ func (q *Queries) ListAttachmentsByMessages(ctx context.Context, messageIds []pg
 			&i.MessageID,
 			&i.Filename,
 			&i.MediaType,
+			&i.Kind,
 			&i.Size,
+			&i.Width,
+			&i.Height,
 			&i.Path,
+			&i.ThumbnailPath,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoomAttachments = `-- name: ListRoomAttachments :many
+SELECT a.id, a.room_id, a.message_id, a.filename, a.media_type, a.kind, a.size, a.width, a.height, a.path, a.thumbnail_path, a.created_at, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.seq AS message_seq, m.body AS message_body,
+       coalesce(mb.display_name, ($1::text[])[array_position($2::uuid[], m.user_id)], '')::text AS sender_name, coalesce(th.number, 0)::int AS thread_number
+FROM attachments a
+JOIN messages m ON m.id = a.message_id
+LEFT JOIN members mb ON mb.id = m.member_id
+LEFT JOIN threads th ON th.id = m.thread_id
+WHERE a.room_id = $3
+  AND (cardinality($4::text[]) = 0 OR a.kind = ANY($4::text[]))
+  AND ($5::uuid IS NULL OR m.user_id = $5)
+  AND ($6::uuid IS NULL OR m.member_id = $6)
+  AND NOT EXISTS (
+    SELECT 1 FROM unnest($7::text[]) AS w(pattern)
+    WHERE NOT (a.filename ILIKE w.pattern OR m.body ILIKE w.pattern
+               OR coalesce(mb.display_name, '') ILIKE w.pattern OR coalesce(($1::text[])[array_position($2::uuid[], m.user_id)], '') ILIKE w.pattern))
+ORDER BY
+    CASE WHEN $8::text = 'size' THEN a.size END DESC,
+    CASE WHEN $8::text = 'name' THEN lower(a.filename) END,
+    CASE WHEN $8::text = 'oldest' THEN m.seq END,
+    CASE WHEN $8::text = 'oldest' THEN a.created_at END,
+    CASE WHEN $8::text = 'oldest' THEN a.id END,
+    m.seq DESC,
+    a.created_at DESC, a.id DESC
+LIMIT $10 OFFSET $9
+`
+
+type ListRoomAttachmentsParams struct {
+	PeopleNames []string
+	PeopleIds   []pgtype.UUID
+	RoomID      pgtype.UUID
+	Kinds       []string
+	UserID      pgtype.UUID
+	MemberID    pgtype.UUID
+	Patterns    []string
+	Sort        string
+	Skip        int32
+	Max         int32
+}
+
+type ListRoomAttachmentsRow struct {
+	Attachment   Attachment
+	ThreadID     pgtype.UUID
+	SenderKind   string
+	UserID       pgtype.UUID
+	MemberID     pgtype.UUID
+	MessageSeq   int64
+	MessageBody  string
+	SenderName   string
+	ThreadNumber int32
+}
+
+// The attachments messages of a room carry, for the attachments tab
+// (docs/webui.md 4.21): each with the message that carried it and who sent
+// it, narrowed by kind, sender and words, sorted newest or oldest first,
+// biggest first or by name. Every one of the patterns matches the file's
+// name, the message's text, the member's or the person's name; people's
+// names are in the account file, so they come in as people_ids and
+// people_names, side by side, and a person's is found by position. Newest first is oldest first turned round,
+// a message's files too, so the viewer can walk either way.
+func (q *Queries) ListRoomAttachments(ctx context.Context, arg ListRoomAttachmentsParams) ([]ListRoomAttachmentsRow, error) {
+	rows, err := q.db.Query(ctx, listRoomAttachments,
+		arg.PeopleNames,
+		arg.PeopleIds,
+		arg.RoomID,
+		arg.Kinds,
+		arg.UserID,
+		arg.MemberID,
+		arg.Patterns,
+		arg.Sort,
+		arg.Skip,
+		arg.Max,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListRoomAttachmentsRow
+	for rows.Next() {
+		var i ListRoomAttachmentsRow
+		if err := rows.Scan(
+			&i.Attachment.ID,
+			&i.Attachment.RoomID,
+			&i.Attachment.MessageID,
+			&i.Attachment.Filename,
+			&i.Attachment.MediaType,
+			&i.Attachment.Kind,
+			&i.Attachment.Size,
+			&i.Attachment.Width,
+			&i.Attachment.Height,
+			&i.Attachment.Path,
+			&i.Attachment.ThumbnailPath,
+			&i.Attachment.CreatedAt,
+			&i.ThreadID,
+			&i.SenderKind,
+			&i.UserID,
+			&i.MemberID,
+			&i.MessageSeq,
+			&i.MessageBody,
+			&i.SenderName,
+			&i.ThreadNumber,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listRoomAttachmentsByID = `-- name: ListRoomAttachmentsByID :many
+SELECT id, room_id, message_id, filename, media_type, kind, size, width, height, path, thumbnail_path, created_at FROM attachments
+WHERE room_id = $1 AND id = ANY($2::uuid[]) AND message_id IS NOT NULL
+ORDER BY created_at, id
+`
+
+type ListRoomAttachmentsByIDParams struct {
+	RoomID pgtype.UUID
+	Ids    []pgtype.UUID
+}
+
+// Some of the attachments messages of a room carry, to download together.
+func (q *Queries) ListRoomAttachmentsByID(ctx context.Context, arg ListRoomAttachmentsByIDParams) ([]Attachment, error) {
+	rows, err := q.db.Query(ctx, listRoomAttachmentsByID, arg.RoomID, arg.Ids)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Attachment
+	for rows.Next() {
+		var i Attachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.RoomID,
+			&i.MessageID,
+			&i.Filename,
+			&i.MediaType,
+			&i.Kind,
+			&i.Size,
+			&i.Width,
+			&i.Height,
+			&i.Path,
+			&i.ThumbnailPath,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUnclaimedAttachments = `-- name: ListUnclaimedAttachments :many
+SELECT id, room_id, message_id, filename, media_type, kind, size, width, height, path, thumbnail_path, created_at FROM attachments
+WHERE message_id IS NULL AND created_at < $1
+ORDER BY created_at
+LIMIT $2
+`
+
+type ListUnclaimedAttachmentsParams struct {
+	Before pgtype.Timestamptz
+	Max    int32
+}
+
+// Uploads no message took, older than a moment: left behind when a person
+// attached a file and then did not send it.
+func (q *Queries) ListUnclaimedAttachments(ctx context.Context, arg ListUnclaimedAttachmentsParams) ([]Attachment, error) {
+	rows, err := q.db.Query(ctx, listUnclaimedAttachments, arg.Before, arg.Max)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Attachment
+	for rows.Next() {
+		var i Attachment
+		if err := rows.Scan(
+			&i.ID,
+			&i.RoomID,
+			&i.MessageID,
+			&i.Filename,
+			&i.MediaType,
+			&i.Kind,
+			&i.Size,
+			&i.Width,
+			&i.Height,
+			&i.Path,
+			&i.ThumbnailPath,
 			&i.CreatedAt,
 		); err != nil {
 			return nil, err

@@ -165,6 +165,7 @@ func setDefaults(v *viper.Viper, def Config) {
 	v.SetDefault("hub.memory_personal_chars", def.Hub.MemoryPersonalChars)
 	v.SetDefault("hub.memory_project_chars", def.Hub.MemoryProjectChars)
 	v.SetDefault("hub.approval_timeout", def.Hub.ApprovalTimeout)
+	v.SetDefault("hub.turn_quiet_after", def.Hub.TurnQuietAfter)
 	v.SetDefault("hub.upkeep_idle", def.Hub.UpkeepIdle)
 	v.SetDefault("hub.upkeep_check", def.Hub.UpkeepCheck)
 	v.SetDefault("hub.upkeep_turns", def.Hub.UpkeepTurns)

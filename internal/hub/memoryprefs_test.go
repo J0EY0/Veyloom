@@ -43,7 +43,8 @@ func TestLoop_MemorySwitches(t *testing.T) {
 			}
 			return false
 		}, "the writer's turn")
-		return promptOf(t, turn), l.root(l.topic(asked)).Body
+		// What it is told: the brief, after the standing instructions.
+		return systemPromptOf(t, turn) + "\n\n" + promptOf(t, turn), l.root(l.topic(asked)).Body
 	}
 
 	ask("记住",

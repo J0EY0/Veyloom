@@ -187,7 +187,7 @@ func (m *TurnManager) TriggerSetup(ctx context.Context, member store.Member, not
 	}
 	st.starting = true
 	m.mu.Unlock()
-	m.start(ctx, member.ID, topic, []store.Message{note}, "", nil, run)
+	m.launch(member.ID, topic, []store.Message{note}, nil, run)
 	return nil
 }
 
@@ -310,23 +310,42 @@ func (m *TurnManager) answerSetupSteps(ctx context.Context, at *activeTurn, q ru
 		if err := m.store.SetWorkspaceSteps(ctx, project.ID, steps); err != nil {
 			return "", err
 		}
+		m.supersedeDrafts(ctx, project.ID, setupSubject)
 		m.settleSetup(project.ID, nil)
 		return "Written down. Every new worktree now gets: " + stepsLine(steps) + ".", nil
 	}
-	// The card is on the project before the chat hears of it: the chat
-	// reads the project again on a note, and so knows to draw it as one.
-	note, err := m.store.CreateMessage(ctx, store.NewMessage{
-		RoomID: at.thread.RoomID, ThreadID: at.thread.ID, SenderKind: store.SenderSystem, TurnID: at.turn.ID,
-		Body: fmt.Sprintf("%s wrote down how a new worktree is got ready: %s. A person adopts the command before it runs.", at.member.DisplayName, stepsLine(steps)),
-	})
+	// A card a person adopts, drafted as any other (design.md 5.23.5); the
+	// project keeps the steps as waiting too, which is what new worktrees
+	// wait on.
+	d, err := m.draft(ctx, at, store.NewDraft{
+		RoomID: at.thread.RoomID, ThreadID: at.thread.ID, MemberID: at.member.ID, TurnID: at.turn.ID,
+		Kind: store.DraftSetupSteps, Subject: setupSubject, Params: store.DraftParams{Steps: &steps},
+	}, store.Member{})
 	if err != nil {
 		return "", err
 	}
-	if err := m.store.SetWorkspacePending(ctx, project.ID, steps, note.ID); err != nil {
+	if err := m.store.SetWorkspacePending(ctx, project.ID, steps, d.MessageID); err != nil {
+		m.untellable(d.ID)
 		return "", err
 	}
-	m.publish(messageEvent(note))
 	return "Written down. A person adopts the command before it takes effect; until then new worktrees wait. The steps: " + stepsLine(steps) + ".", nil
+}
+
+// setupSubject is what the drafts of setup steps are about: a project has
+// one set waiting for a person at a time.
+const setupSubject = "setup"
+
+// supersedeDrafts has the project's pending drafts about subject give way:
+// what they were about was settled otherwise.
+func (m *TurnManager) supersedeDrafts(ctx context.Context, projectID, subject string) {
+	gone, err := m.store.SupersedeDrafts(ctx, projectID, subject)
+	if err != nil {
+		m.logger.Error("supersede drafts", "project", projectID, "err", err)
+		return
+	}
+	for _, d := range gone {
+		m.publish(draftEvent(d))
+	}
 }
 
 // tellLeader tells the project's leader, in the setup topic, that getting
@@ -390,16 +409,40 @@ func (h *Hub) StartSetup(ctx context.Context, projectID string) error {
 }
 
 // SettleWorkspaceSteps adopts the setup steps waiting for a person, or
-// turns them down (docs/design.md 5.21). The members' turns waiting for
-// them go on, or end saying the steps were turned down.
-func (h *Hub) SettleWorkspaceSteps(ctx context.Context, projectID string, adopt bool) error {
-	if adopt {
-		if err := h.store.AdoptWorkspacePending(ctx, projectID); err != nil {
-			return err
+// turns them down, as the person userID (docs/design.md 5.21): their card
+// (5.23.5) says so. The members' turns waiting for them go on, or end
+// saying the steps were turned down.
+func (h *Hub) SettleWorkspaceSteps(ctx context.Context, projectID, userID string, adopt bool) error {
+	if d, err := h.store.OpenDraft(ctx, projectID, setupSubject); err == nil {
+		if adopt {
+			_, err = h.RunDraft(ctx, d.ID, userID, DraftEdit{})
+		} else {
+			_, err = h.DeclineDraft(ctx, d.ID, userID)
 		}
-		h.turns.settleSetup(projectID, nil)
-		return nil
+		return err
+	} else if !errors.Is(err, store.ErrNotFound) {
+		return err
 	}
+	// Steps waiting with no card: written down before steps were drafts.
+	if adopt {
+		return h.adoptSteps(ctx, projectID)
+	}
+	return h.dropSteps(ctx, projectID)
+}
+
+// adoptSteps makes the steps waiting for a person the project's; the
+// members waiting for them go on.
+func (h *Hub) adoptSteps(ctx context.Context, projectID string) error {
+	if err := h.store.AdoptWorkspacePending(ctx, projectID); err != nil {
+		return err
+	}
+	h.turns.settleSetup(projectID, nil)
+	return nil
+}
+
+// dropSteps turns the steps waiting for a person down; the members waiting
+// for them are told.
+func (h *Hub) dropSteps(ctx context.Context, projectID string) error {
 	if err := h.store.DropWorkspacePending(ctx, projectID); err != nil {
 		return err
 	}
@@ -408,7 +451,11 @@ func (h *Hub) SettleWorkspaceSteps(ctx context.Context, projectID string, adopt 
 }
 
 // WorkspaceStepsWritten tells the turns waiting for the project's setup
-// that a person wrote the steps down: the project is set up.
+// that a person wrote the steps down: the project is set up, and steps a
+// card offered give way to theirs.
 func (h *Hub) WorkspaceStepsWritten(projectID string) {
+	ctx, cancel := context.WithTimeout(context.Background(), h.cfg.StoreTimeout)
+	defer cancel()
+	h.turns.supersedeDrafts(ctx, projectID, setupSubject)
 	h.turns.settleSetup(projectID, nil)
 }

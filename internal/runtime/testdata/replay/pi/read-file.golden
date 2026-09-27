@@ -1,0 +1,16 @@
+{"kind":"session","session_ref":"pi-sess-1"}
+{"kind":"status","text":"session pi-sess-1"}
+{"call_id":"call_00_ET_OjYXjpftPBZKy69XcuF89425","input":"{\"path\":\"NOTES.md\"}","kind":"tool_call","tool":"read"}
+{"call_id":"call_00_ET_OjYXjpftPBZKy69XcuF89425","kind":"tool_result","text":"The build is green.\n","tool":"read"}
+{"kind":"text","text":"*("}
+{"kind":"text","text":"Ke"}
+{"kind":"text","text":"in"}
+{"kind":"text","text":" Text"}
+{"kind":"text","text":" —"}
+{"kind":"text","text":" nur"}
+{"kind":"text","text":" g"}
+{"kind":"text","text":"eles"}
+{"kind":"text","text":"en"}
+{"kind":"text","text":".)"}
+{"kind":"text","text":"*"}
+result {"output":"*(Kein Text — nur gelesen.)*","session_ref":"pi-sess-1","usage":{"input_tokens":345,"cache_read_tokens":17792,"cache_write_tokens":0,"output_tokens":51}}

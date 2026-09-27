@@ -242,7 +242,7 @@ func TestRoomRead_ReadRoom(t *testing.T) {
 		"#7 2026-09-18 12:00 [alice] plan the auth refactor\n",
 		"2026-09-18 12:10 [alice] fyi the deploy is at noon\n",
 		"2026-09-18 12:11 [Codex] xxx",
-		"… (cut)\n",
+		"x … (500 more characters: read_message with message m21 reads it whole)\n",
 	)
 	if len(got) > roomBodyMax+600 {
 		t.Errorf("a long message should be cut, the answer is %d bytes", len(got))
@@ -278,5 +278,24 @@ func TestRoomRead_Search(t *testing.T) {
 func TestRoomRead_UnknownTool(t *testing.T) {
 	if _, err := answerRoomQuery(context.Background(), newFakeRoom(), "r1", "", runtime.RoomQuery{Tool: "delete_everything"}); err == nil {
 		t.Error("an unknown tool should be turned down")
+	}
+}
+
+// A long message is cut by characters, Chinese as English, its lines kept.
+func TestCutBody_CountsCharacters(t *testing.T) {
+	chinese := strings.Repeat("审批超时", 375)
+	if got, more := cutBody(chinese, 4000); got != chinese || more != 0 {
+		t.Errorf("1500 characters of Chinese fit in 4000: cut to %d, %d more", len([]rune(got)), more)
+	}
+	got, more := cutBody(strings.Repeat("超", 4000)+"时间", 4000)
+	if len([]rune(got)) != 4000 || more != 2 {
+		t.Errorf("4002 characters: kept %d, %d more", len([]rune(got)), more)
+	}
+	got, more = cutBody("line one\nline two   \nline three", 18)
+	if got != "line one\nline two" || more != len("  \nline three") {
+		t.Errorf("cut at a line's end: %q, %d more", got, more)
+	}
+	if got, more := cutBody("short", 4000); got != "short" || more != 0 {
+		t.Errorf("short: %q %d", got, more)
 	}
 }

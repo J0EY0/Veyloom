@@ -90,11 +90,129 @@ CREATE TABLE relay_holds (
     thread_id          uuid        NOT NULL REFERENCES threads (id) ON DELETE CASCADE,
     trigger_message_id uuid        NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
     -- idle: the last turns agents woke did no work; limit: the piece of
-    -- work reached the project's relay limit.
-    reason             text        NOT NULL CHECK (reason IN ('idle', 'limit')),
+    -- work reached the project's relay limit; people: only people wake
+    -- members in the project, and a member's reminder came due.
+    reason             text        NOT NULL CHECK (reason IN ('idle', 'limit', 'people')),
     created_at         timestamptz NOT NULL DEFAULT now(),
     continued_at       timestamptz
 );
+
+-- What a member was asked while it was busy, waiting for its turn: kept so
+-- a hub that stops does not lose it, the member woken for it once its
+-- machine is back; gone as the turn that answers it starts.
+CREATE TABLE queued_wakes (
+    member_id  uuid        NOT NULL REFERENCES members (id) ON DELETE CASCADE,
+    message_id uuid        NOT NULL REFERENCES messages (id) ON DELETE CASCADE,
+    -- The topic it is answered in; NULL for a message to the room, whose
+    -- turn opens a topic of its own.
+    thread_id  uuid        REFERENCES threads (id) ON DELETE CASCADE,
+    -- A piece of work of its own starts at this message: a person let a
+    -- held wake go on (design.md 5.22).
+    anchor_id  uuid        REFERENCES messages (id) ON DELETE CASCADE,
+    queued_at  timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (member_id, message_id)
+);
+
+-- What keeps a member's turns from starting for a while (design.md
+-- 5.23.3): a runtime's account on a machine that cannot take turns now
+-- (signed out, its usage limit reached, too many requests, its provider
+-- failing), or a member whose turns keep failing. What the members are
+-- asked meanwhile waits in queued_wakes, and goes on once the pause is
+-- lifted: when it runs out, or when a person lifts it.
+CREATE TABLE pauses (
+    id         uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    -- An account's: its machine and runtime. A member's: the member.
+    machine_id uuid        REFERENCES machines (id) ON DELETE CASCADE,
+    runtime    text        NOT NULL DEFAULT '',
+    member_id  uuid        REFERENCES members (id) ON DELETE CASCADE,
+    -- auth, quota, rate_limit or server for an account's; failing for a
+    -- member's.
+    reason     text        NOT NULL,
+    -- What the runtime said, the last time it failed.
+    detail     text        NOT NULL DEFAULT '',
+    -- When it runs out; NULL waits for a person.
+    ends_at    timestamptz,
+    created_at timestamptz NOT NULL DEFAULT now(),
+    CHECK ((member_id IS NULL) = (machine_id IS NOT NULL AND runtime <> ''))
+);
+
+CREATE UNIQUE INDEX pauses_by_account ON pauses (machine_id, runtime) WHERE member_id IS NULL;
+CREATE UNIQUE INDEX pauses_by_member ON pauses (member_id) WHERE member_id IS NOT NULL;
+
+-- A member's reminder to itself (design.md 5.23.4): the hub wakes it, in
+-- the topic it set it in, once it comes due.
+CREATE TABLE reminders (
+    id               uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    member_id        uuid        NOT NULL REFERENCES members (id) ON DELETE CASCADE,
+    room_id          uuid        NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,
+    thread_id        uuid        NOT NULL REFERENCES threads (id) ON DELETE CASCADE,
+    -- The turn that set it: the wake it makes carries on that turn's
+    -- piece of work.
+    turn_id          uuid        REFERENCES turns (id) ON DELETE SET NULL,
+    note             text        NOT NULL,
+    due_at           timestamptz NOT NULL,
+    -- pending: not yet due; fired: came due; cancelled: taken back, by the
+    -- member or a person; dropped: its member was taken out of the project
+    -- or switched off by the time it came due.
+    status           text        NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'fired', 'cancelled', 'dropped')),
+    -- The note that told of it as it was set, and the message it came due
+    -- as.
+    set_message_id   uuid        REFERENCES messages (id) ON DELETE SET NULL,
+    fired_message_id uuid        REFERENCES messages (id) ON DELETE SET NULL,
+    -- The person who cancelled it; NULL for one the member took back. No
+    -- reference: the one account lives outside users (00011).
+    cancelled_by     uuid,
+    created_at       timestamptz NOT NULL DEFAULT now(),
+    settled_at       timestamptz
+);
+
+CREATE INDEX reminders_pending ON reminders (due_at) WHERE status = 'pending';
+CREATE INDEX reminders_by_thread ON reminders (thread_id, created_at);
+
+-- What a member drafted for a person to do with one press (design.md
+-- 5.23.5): put a member's work on the main line, give it up, install a
+-- skill for a member, adopt the steps new worktrees are got ready with.
+-- The card in the topic is drawn from it.
+CREATE TABLE drafts (
+    id                uuid        PRIMARY KEY DEFAULT gen_random_uuid(),
+    project_id        uuid        NOT NULL REFERENCES projects (id) ON DELETE CASCADE,
+    room_id           uuid        NOT NULL REFERENCES rooms (id) ON DELETE CASCADE,
+    thread_id         uuid        NOT NULL REFERENCES threads (id) ON DELETE CASCADE,
+    -- Who drafted it, in which turn.
+    member_id         uuid        NOT NULL REFERENCES members (id) ON DELETE CASCADE,
+    turn_id           uuid        REFERENCES turns (id) ON DELETE SET NULL,
+    kind              text        NOT NULL CHECK (kind IN ('merge', 'set_aside', 'install_skill', 'setup_steps')),
+    -- The member whose work or agent it acts on; NULL for setup steps.
+    target_id         uuid        REFERENCES members (id) ON DELETE CASCADE,
+    -- What it is about, which one pending draft of the project holds at a
+    -- time: a member's work, a skill for a member, the setup steps.
+    subject           text        NOT NULL,
+    -- The kind's own: a merge's message, why work is given up, the skill,
+    -- the steps.
+    params            jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    -- What the member does once it is done: set, it is woken then.
+    then_note         text        NOT NULL DEFAULT '',
+    status            text        NOT NULL DEFAULT 'pending'
+        CHECK (status IN ('pending', 'running', 'done', 'conflicted', 'declined', 'superseded')),
+    -- What came of it: the commit, the archive ref, the conflicting files.
+    result            jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    -- The card, and the message that told the member what came of it.
+    message_id        uuid        REFERENCES messages (id) ON DELETE SET NULL,
+    result_message_id uuid        REFERENCES messages (id) ON DELETE SET NULL,
+    -- The person who ran it or turned it down. No reference: the one
+    -- account lives outside users (00011).
+    decided_by        uuid,
+    created_at        timestamptz NOT NULL DEFAULT now(),
+    settled_at        timestamptz
+);
+
+CREATE INDEX drafts_by_thread ON drafts (thread_id, created_at);
+CREATE INDEX drafts_open ON drafts (project_id, subject) WHERE status IN ('pending', 'running');
+-- One pending draft of a project about a thing, however many members draft
+-- it at once: the one drafted last stands.
+CREATE UNIQUE INDEX drafts_one_pending ON drafts (project_id, subject) WHERE status = 'pending';
+CREATE INDEX drafts_by_message ON drafts (message_id);
+CREATE INDEX drafts_by_result ON drafts (result_message_id);
 
 -- What became of a member's branch (design.md 5.21): its work put on the
 -- main line by a merge, or the branch reset to the main line with its work
@@ -119,5 +237,9 @@ CREATE INDEX branch_events_by_member ON branch_events (member_id, created_at);
 
 -- +goose Down
 DROP TABLE branch_events;
+DROP TABLE drafts;
+DROP TABLE reminders;
+DROP TABLE pauses;
+DROP TABLE queued_wakes;
 DROP TABLE relay_holds;
 DROP TABLE turns;

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +35,14 @@ type ClaudeConfig struct {
 	// reach the turn's MCP endpoint, which serves the room tools. Empty
 	// means there is none, and turns run without the room tools.
 	ProxyBinary string
+	// SteerWait is how long, once a turn's answer is in, the runner waits
+	// for the CLI to take in text Steer passed it before giving up on the
+	// text and letting the CLI end. The CLI takes such text in the moment
+	// its answer is done, so this only bounds one that lost it.
+	SteerWait time.Duration
+	// RecordDir keeps the CLI's output as printed, a file a turn, for the
+	// replay tests (docs/design.md 5.23.9); empty records nothing.
+	RecordDir string
 }
 
 // DefaultClaudeConfig returns the defaults every ClaudeConfig is completed
@@ -44,6 +53,7 @@ func DefaultClaudeConfig() ClaudeConfig {
 		MaxEventBytes:  4096,
 		StderrBytes:    4096,
 		WaitDelay:      5 * time.Second,
+		SteerWait:      15 * time.Second,
 	}
 }
 
@@ -57,6 +67,9 @@ func (c ClaudeConfig) withDefaults() ClaudeConfig {
 	}
 	if c.WaitDelay <= 0 {
 		c.WaitDelay = def.WaitDelay
+	}
+	if c.SteerWait <= 0 {
+		c.SteerWait = def.SteerWait
 	}
 	return c
 }
@@ -121,6 +134,8 @@ func (r *ClaudeRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, erro
 		ctx:           ctx,
 		preset:        spec.Permission,
 		maxEventBytes: r.cfg.MaxEventBytes,
+		steerWait:     r.cfg.SteerWait,
+		prompted:      make(chan struct{}),
 		inflight:      make(map[string]context.CancelFunc),
 	}
 
@@ -155,6 +170,8 @@ func (r *ClaudeRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, erro
 		Env:         spec.Env,
 		StderrBytes: r.cfg.StderrBytes,
 		WaitDelay:   r.cfg.WaitDelay,
+		RecordDir:   r.cfg.RecordDir,
+		RecordName:  "claude",
 	})
 	if err != nil {
 		r.tools.unregister(t.token)
@@ -167,13 +184,18 @@ func (r *ClaudeRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, erro
 	// Written while run reads, so a long prompt cannot stall against the
 	// CLI's output. Should the write fail, the CLI has gone, and run says
 	// why.
-	go t.in.send(claudeUserMessage(spec.Prompt))
+	go func() {
+		t.in.send(claudeUserMessage(spec.Prompt))
+		close(t.prompted)
+	}()
 	return t, nil
 }
 
 // args builds the command line for spec.
 func (r *ClaudeRunner) args(spec TurnSpec) []string {
-	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose"}
+	// The CLI echoes what it takes in from its input, which says when text
+	// Steer passed it reached the agent (design.md 5.23.2).
+	args := []string{"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--replay-user-messages"}
 	if r.cfg.StreamPartials {
 		args = append(args, "--include-partial-messages")
 	}
@@ -237,8 +259,21 @@ type claudeTurn struct {
 	maxEventBytes int
 
 	// in carries the prompt and the answers to the CLI's requests. It is
-	// closed once the result is in: the CLI then exits.
-	in *jsonLines
+	// closed once the result is in: the CLI then exits. prompted is closed
+	// once the prompt is written: what Steer passes goes after it.
+	in       *jsonLines
+	prompted chan struct{}
+
+	// steers are the texts Steer wrote that the CLI has not taken in yet,
+	// oldest first; steerMu also keeps a result from closing the input
+	// between Steer's look and its write. took says one was taken in since
+	// the last result. unheard, while set, closes the input should the CLI
+	// not take any of them in within steerWait of a result (resultIn).
+	steerMu   sync.Mutex
+	steers    []claudeSteer
+	took      bool
+	unheard   *time.Timer
+	steerWait time.Duration
 
 	// inflight holds, by request id, what ends the wait of each control
 	// request still being answered.
@@ -251,6 +286,7 @@ type claudeTurn struct {
 // the result record closes the input, which ends the CLI.
 func (t *claudeTurn) run(proc *cliProcess, r *ClaudeRunner) {
 	parser := newClaudeParser(r.cfg, func(ev Event) { t.emit(t.ctx, ev) })
+	answered := false
 	proc.lines(func(raw []byte) {
 		var line claudeLine
 		if err := json.Unmarshal(raw, &line); err != nil {
@@ -272,18 +308,154 @@ func (t *claudeTurn) run(proc *cliProcess, r *ClaudeRunner) {
 		case "control_response":
 			// Replies to requests of the runner's own; it sends none.
 		default:
+			if line.Type == "user" && line.IsReplay {
+				// Text of the input echoed back, not a tool result.
+				t.tookIn(line.Message)
+				return
+			}
+			if line.Type == "system" && line.Subtype == "init" && answered {
+				// A turn of the CLI's own for text Steer passed, the
+				// session long announced.
+				parser.nextTurn()
+				t.takingNext()
+				return
+			}
 			parser.handle(line)
 			if line.Type == "result" {
-				t.in.close()
+				answered = true
+				t.resultIn()
 			}
 		}
 	})
 	t.in.close()
 	waitErr := proc.wait()
+	for _, s := range t.untaken() {
+		t.emit(t.ctx, Event{Kind: EventSteerDropped, SteerID: s.id})
+	}
 
 	res, err := parser.finish(waitErr, proc.stderrTail())
 	t.finish(t.ctx, res, err)
 	if t.token != "" {
 		r.tools.unregister(t.token)
 	}
+}
+
+// claudeSteer is text Steer wrote to the CLI's input.
+type claudeSteer struct{ id, text string }
+
+// Steer implements Turn. The text goes to the CLI as a user message: it
+// hands the agent the message with its next tool result, or answers it as
+// a turn of its own once the turn's answer is done (2.1.85 and 2.1.281,
+// design.md 5.23.2). The CLI echoing it back says it was taken in.
+func (t *claudeTurn) Steer(id, text string) error {
+	select {
+	case <-t.prompted:
+	case <-t.ctx.Done():
+		return ErrSteerRefused
+	}
+	t.steerMu.Lock()
+	defer t.steerMu.Unlock()
+	if err := t.in.send(claudeUserMessage(text)); err != nil {
+		return ErrSteerRefused
+	}
+	t.steers = append(t.steers, claudeSteer{id: id, text: text})
+	return nil
+}
+
+// tookIn notes that the CLI took in text of its input, which is the
+// prompt or one of the texts Steer passed: each is echoed on its own, in
+// the order written, word for word (2.1.85 and 2.1.281). The text is
+// looked for among all those still untaken, so one the CLI somehow lost
+// holds up none after it.
+func (t *claudeTurn) tookIn(msg *claudeMessage) {
+	text := userText(msg)
+	t.steerMu.Lock()
+	t.heard()
+	i := slices.IndexFunc(t.steers, func(s claudeSteer) bool { return s.text == text })
+	var took claudeSteer
+	if i >= 0 {
+		took = t.steers[i]
+		t.steers = slices.Delete(t.steers, i, i+1)
+		t.took = true
+	}
+	t.steerMu.Unlock()
+	if i >= 0 {
+		t.emit(t.ctx, Event{Kind: EventSteer, SteerID: took.id, Text: took.text})
+	}
+}
+
+// takingNext notes that the CLI began a turn of its own once its answer
+// was done, which answers the oldest text Steer passed not yet taken in:
+// streaming partial messages, the CLI echoes that text only once the
+// answer to it is under way (2.1.85), too late to tell where it begins.
+// When the echo came first, it said so already.
+func (t *claudeTurn) takingNext() {
+	t.steerMu.Lock()
+	t.heard()
+	var took *claudeSteer
+	if !t.took && len(t.steers) > 0 {
+		first := t.steers[0]
+		took = &first
+		t.steers = slices.Delete(t.steers, 0, 1)
+		t.took = true
+	}
+	t.steerMu.Unlock()
+	if took != nil {
+		t.emit(t.ctx, Event{Kind: EventSteer, SteerID: took.id, Text: took.text})
+	}
+}
+
+// resultIn closes the input on a result, which ends the CLI, unless the
+// CLI still has text of Steer's to take in: it answers each such text as
+// a turn of its own, which may ask people for things on the input, and
+// takes the first in the moment the result is out. Should it not within
+// steerWait, it lost the text, and the input is closed after all.
+func (t *claudeTurn) resultIn() {
+	t.steerMu.Lock()
+	defer t.steerMu.Unlock()
+	t.heard()
+	t.took = false
+	if len(t.steers) == 0 {
+		t.in.close()
+		return
+	}
+	t.unheard = time.AfterFunc(t.steerWait, t.in.close)
+}
+
+// heard stops the wait resultIn set going. steerMu is held.
+func (t *claudeTurn) heard() {
+	if t.unheard != nil {
+		t.unheard.Stop()
+		t.unheard = nil
+	}
+}
+
+// untaken ends the turn's steering: it returns the texts Steer passed that
+// the CLI never took in.
+func (t *claudeTurn) untaken() []claudeSteer {
+	t.steerMu.Lock()
+	defer t.steerMu.Unlock()
+	t.heard()
+	left := t.steers
+	t.steers = nil
+	return left
+}
+
+// userText is the text of a user message, whose content is a string or
+// blocks.
+func userText(msg *claudeMessage) string {
+	if msg == nil {
+		return ""
+	}
+	var text string
+	if json.Unmarshal(msg.Content, &text) == nil {
+		return text
+	}
+	var parts []string
+	for _, b := range blocksOf(msg) {
+		if b.Type == "text" {
+			parts = append(parts, b.Text)
+		}
+	}
+	return strings.Join(parts, "")
 }

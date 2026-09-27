@@ -21,6 +21,9 @@ const (
 	HoldIdle HoldReason = "idle"
 	// HoldLimit: the piece of work reached the project's relay limit.
 	HoldLimit HoldReason = "limit"
+	// HoldPeople: only people wake members in the project, and a member's
+	// reminder came due (docs/design.md 5.23.4).
+	HoldPeople HoldReason = "people"
 )
 
 // RelayHold is a wake a limit held back: the note that told the person,

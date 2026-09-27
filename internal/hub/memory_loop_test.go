@@ -67,7 +67,8 @@ func TestLoop_AMemberRemembers(t *testing.T) {
 	wantInOrder(t, promptOf(t, next),
 		"Personal memory, what the person you work for wants in every project (where the project memory says otherwise, it wins):\n- 提交说明用英文。 ("+today+", Writer in topic #1 of "+project.Name+")\n",
 		"Project memory, how to work in this project:\n- 回复用中文。 ("+today+", Writer in topic #1)\n",
-		"In this chat",
+		// The memories changed since the first turn; who is in the chat did not.
+		"unchanged and not repeated here: who is in the chat.",
 	)
 }
 

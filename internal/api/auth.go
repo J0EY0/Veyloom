@@ -138,11 +138,20 @@ func (h *handlers) authLogin(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	try, wait := h.signIns.begin(clientAddr(r))
+	if wait > 0 {
+		writeTooManyAttempts(w, wait)
+		return
+	}
 	user, token, err := h.deps.Auth.Login(r.Context(), req.Name, req.Password)
 	if err != nil {
+		if !errors.Is(err, auth.ErrBadCredentials) {
+			try.void()
+		}
 		h.writeAuthError(w, r, err)
 		return
 	}
+	try.right()
 	h.setSessionCookie(w, r, token)
 	writeJSON(w, http.StatusOK, UserResponse{User: user})
 }
@@ -171,6 +180,13 @@ func (h *handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 		writeReason(w, http.StatusBadRequest, err)
 		return
 	}
+	// A session someone else got hold of is no way to guess the password
+	// either.
+	try, wait := h.signIns.begin("password " + user.ID)
+	if wait > 0 {
+		writeTooManyAttempts(w, wait)
+		return
+	}
 	token, err := h.deps.Auth.ChangePassword(r.Context(), user.ID, req.Current, req.New)
 	if errors.Is(err, auth.ErrBadCredentials) {
 		// Not 401: the session is fine, the current password is not.
@@ -178,9 +194,11 @@ func (h *handlers) changePassword(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err != nil {
+		try.void()
 		h.writeAuthError(w, r, err)
 		return
 	}
+	try.right()
 	h.setSessionCookie(w, r, token)
 	w.WriteHeader(http.StatusNoContent)
 }

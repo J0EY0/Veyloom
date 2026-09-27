@@ -29,6 +29,9 @@ type briefStore interface {
 	TopicNews(ctx context.Context, q store.NewsQuery, exceptThreadID string) ([]store.TopicNewsItem, int, error)
 	ThreadNews(ctx context.Context, threadID string, q store.NewsQuery) ([]store.Message, int, error)
 	ListThreadTurns(ctx context.Context, threadID string) ([]store.Turn, error)
+	// The member's reminders not yet due, and the topics they are in.
+	ListMemberPendingReminders(ctx context.Context, memberID string) ([]store.Reminder, error)
+	GetThread(ctx context.Context, id string) (store.Thread, error)
 }
 
 // briefLimits caps the parts of a brief. What a cap leaves out is counted
@@ -49,24 +52,29 @@ type briefLimits struct {
 }
 
 // briefBuilder composes the prompt an agent receives for a turn (design.md
-// 5.2). A member keeps one session with its runtime for the whole room, so
-// a brief does not repeat what the session has read: it opens with a short
-// fixed header, then tells only what is new since the session last looked,
-// as far as the session's reading positions say.
+// 5.2, 5.23.1). A member keeps one session with its runtime for the whole
+// room, so a brief does not repeat what the session has read: it tells
+// only what is new since the session last looked, as far as the session's
+// reading positions say.
 //
-//   - The header comes with every brief: who the agent is, the project, who
-//     else is in the chat. It is small, and a runtime that compacts its
-//     session would otherwise lose what was said once at the start.
+//   - The member's standing instructions (standing.go) are the system
+//     prompt of a runtime that takes one with every run. One that fixes it
+//     when a session starts gets them in a brief, when its session has not
+//     seen them as they are.
+//   - The parts that change now and then (briefparts.go), each when the
+//     session has not seen it as it is: what the project is, the memories,
+//     who is in the chat, the others' branches, the skills installed for
+//     the member, the bundles the wiki mounts, the resident pages.
+//   - What changes by the turn: whether the session is new, who is at work,
+//     how many more turns agents may wake, whose work this is.
+//   - The wiki's catalog, all of it the first time and after a compaction,
+//     otherwise the pages changed since; and the pages that may bear on
+//     the topic.
 //   - New top-level messages of the room.
 //   - Other topics with new replies, one line each: a directory, not the
 //     text.
 //   - The topic the turn is in: all of it the first time the session is
 //     there (and again after a compaction), otherwise only what is new.
-//
-// With a project wiki, the header is followed by what the brief shows of
-// it: the resident pages in full, every turn; the catalog, all of it the
-// first time and after a compaction, otherwise the pages changed since;
-// and the pages that may bear on the topic.
 //
 // A session that has read nothing gets the whole story from the same code:
 // there is no separate "full brief".
@@ -91,7 +99,10 @@ func newBriefBuilder(store briefStore, limits briefLimits, attachmentDir string)
 
 // briefInput is what a brief is made for.
 type briefInput struct {
-	Member   store.Member
+	Member store.Member
+	// Runtime names the member's runtime, which says where its standing
+	// instructions go (runtime.TraitsOf).
+	Runtime  string
 	Thread   store.Thread
 	Triggers []store.Message
 	// Session is the session the turn runs in; its reading positions decide
@@ -102,9 +113,14 @@ type briefInput struct {
 	// that what follows is all it has and does not take the turn for a
 	// continuation of things it no longer remembers.
 	NewSession store.SessionEndReason
+	// Stopped is the turn a person cancelled asking for the new session,
+	// when that is why the earlier one ended (design.md 5.23.8).
+	Stopped *stoppedTurn
 	// Skills are the library's skills the turn is given, which the agent
-	// may improve as it uses them (design.md 5.15).
-	Skills []string
+	// may improve as it uses them (design.md 5.15); BuiltinSkills
+	// Veyloom's own, which every agent has (5.23.6).
+	Skills        []string
+	BuiltinSkills []string
 	// Busy are the room's other members at work as the brief is put
 	// together (see busyIn).
 	Busy []busyMember
@@ -134,6 +150,13 @@ type brief struct {
 	// Leads says the member is the project's leader, whose turns get the
 	// tool for writing down how worktrees are got ready.
 	Leads bool
+	// Standing is the member's standing instructions, which a runtime that
+	// takes its system prompt with every run is given there.
+	Standing string
+	// Parts is what the brief showed, or left out as seen, of its parts
+	// that change now and then: what the session has seen of them once it
+	// takes the brief in.
+	Parts map[string]string
 }
 
 // Build renders the brief for one turn.
@@ -161,12 +184,16 @@ func (b *briefBuilder) Build(ctx context.Context, in briefInput) (brief, error) 
 	}
 
 	bundle := b.projectWiki(ctx, project, in.Thread.RoomID)
-	b.header(ctx, w, in, project, members, bundle)
+	standing := b.standing(in, project)
+	parts := newBriefParts(in.Session.BriefSeen)
+	// The memory is carried whole with the memories, not listed again.
+	listed := map[string]bool{wiki.MemoryPath: true}
+	b.header(ctx, w, in, project, members, bundle, standing, parts, listed)
 	topic, err := b.readTopic(ctx, in, position)
 	if err != nil {
 		return brief{}, err
 	}
-	wikiAt := b.wiki(ctx, w, in, bundle, members, topic)
+	wikiAt := b.wiki(ctx, w, in, bundle, members, topic, listed)
 	news := store.NewsQuery{RoomID: in.Thread.RoomID, After: in.Session.RoomSeen, UpTo: position, SessionID: in.Session.ID}
 	// What the agent is to answer comes last, where it reads it last: in
 	// the topic when it was asked there, in the room when it was asked
@@ -208,7 +235,10 @@ func (b *briefBuilder) Build(ctx context.Context, in briefInput) (brief, error) 
 	if len(in.HandedOn) > 0 {
 		w.sb.WriteString("\n" + handedOnSection(in.HandedOn))
 	}
-	return brief{Prompt: strings.TrimRight(w.sb.String(), "\n") + "\n", Position: position, Wiki: wikiAt, Leads: in.Member.ID == project.LeaderID}, nil
+	return brief{
+		Prompt: strings.TrimLeft(strings.TrimRight(w.sb.String(), "\n")+"\n", "\n"), Position: position, Wiki: wikiAt,
+		Leads: in.Member.ID == project.LeaderID, Standing: standing, Parts: parts.now,
+	}, nil
 }
 
 // coAskedLine tells a member a person asked in the same message as other
@@ -239,24 +269,75 @@ func coAskedLine(member store.Member, triggers []store.Message, members []store.
 		"Do yours now, and do not wait for %s unless the person asked you to.\n", who, who)
 }
 
-// header writes what every brief opens with. bundle is the project's
-// wiki, nil when there is none to show.
-func (b *briefBuilder) header(ctx context.Context, w *briefWriter, in briefInput, project store.Project, members []store.Member, bundle *wiki.Bundle) {
-	fmt.Fprintf(&w.sb, "You are %q, an agent in the team chat of the project %q. Lines marked with >> are addressed to you; reply to them. "+
-		"Write to the chat in the language its people write in, what you say as you work included, whatever language this brief is in.\n", in.Member.DisplayName, project.Name)
-	if in.NewSession != "" {
+// header writes what a brief opens with: the standing instructions of a
+// runtime that fixes its system prompt when a session starts, whether the
+// session is new, and around what changes by the turn, the parts that
+// change now and then, each when the session has not seen it as it is.
+// bundle is the project's wiki, nil when there is none to show; listed
+// takes the pages the brief carries whole.
+func (b *briefBuilder) header(ctx context.Context, w *briefWriter, in briefInput, project store.Project, members []store.Member, bundle *wiki.Bundle, standing string, parts *briefParts, listed map[string]bool) {
+	if !runtime.TraitsOf(in.Runtime).SystemPromptEachRun {
+		parts.put(w, partStanding, standing)
+	}
+	switch {
+	case in.NewSession == store.SessionCancelled:
+		w.sb.WriteString(stoppedLine(in.Stopped))
+	case in.NewSession != "":
 		fmt.Fprintf(&w.sb, "\nThis is a new session: your earlier session in this project could not be continued (%s), so you do not remember your earlier turns here. What follows is the hub's record; rely on that, and on the repository, rather than on memory.\n", sessionEndPhrase(in.NewSession))
 	}
-	if about := strings.TrimSpace(project.Description); about != "" {
-		w.section("About the project:")
-		w.sb.WriteString(about)
-		w.sb.WriteString("\n")
-	}
+	parts.put(w, partAbout, aboutText(project))
 	if b.wikis != nil {
-		b.wikis.writeMemories(ctx, w, bundle)
+		if text, read := b.wikis.memoriesText(ctx, bundle); read {
+			parts.put(w, partMemories, text)
+		} else {
+			parts.keep(partMemories)
+		}
 	}
+	parts.put(w, partMembers, b.membersText(ctx, in, project, members))
+	parts.put(w, partBranches, branchesText(in, members))
+	if text, read := b.remindersText(ctx, in.Member); read {
+		parts.put(w, partReminders, text)
+	} else {
+		parts.keep(partReminders)
+	}
+	b.atWork(w, in.Busy)
+	if in.Relays != nil && in.Relays.Limit > 0 {
+		w.sb.WriteString(relaysLeftLine(*in.Relays))
+	}
+	if in.HandedBy != nil {
+		w.sb.WriteString(handedByLine(*in.HandedBy))
+	}
+	// The skills as the runtime gets them this turn, those of a library
+	// that could not be read left out of both.
+	parts.put(w, partSkills, skillsText(in.BuiltinSkills, in.Skills))
+	if b.wikis != nil {
+		if mounts := b.wikis.mounts(ctx, project); mountsRead(mounts) {
+			parts.put(w, partMounts, mountsText(mounts))
+		} else {
+			parts.keep(partMounts)
+		}
+	}
+	if bundle != nil {
+		parts.put(w, partResident, b.residentText(bundle, listed))
+	} else {
+		parts.keep(partResident)
+	}
+	parts.unchanged(w)
+}
 
-	w.section("In this chat (mention one as @Name to hand something over):")
+// aboutText is what the project is, as its people describe it.
+func aboutText(project store.Project) string {
+	about := strings.TrimSpace(project.Description)
+	if about == "" {
+		return ""
+	}
+	return "\nAbout the project:\n" + about + "\n"
+}
+
+// membersText names who is in the chat, each with what it is for.
+func (b *briefBuilder) membersText(ctx context.Context, in briefInput, project store.Project, members []store.Member) string {
+	var sb strings.Builder
+	sb.WriteString("\nIn this chat (mention one as @Name to hand something over):\n")
 	for _, m := range members {
 		if m.Removed() || !m.Enabled {
 			continue
@@ -281,37 +362,65 @@ func (b *briefBuilder) header(ctx context.Context, w *briefWriter, in briefInput
 				line += ": " + excerpt(role, roleExcerpt)
 			}
 		}
-		w.sb.WriteString(line + "\n")
+		sb.WriteString(line + "\n")
 	}
-	workplace(w, in, project, members)
-	b.atWork(w, in.Busy)
-	// Said every time, like the rest of the header: a brief shows only what
-	// is new, and this is how the agent gets at everything else.
-	w.sb.WriteString("\nYou are shown what is new since you last looked. For anything else in this chat, such as earlier messages, another topic, or what an agent did in a turn, the commands it ran and what came of them, use your veyloom tools: " + strings.Join(runtime.RoomToolNames, ", ") + ". Topics are numbered; #12 is read with read_topic, which names each agent turn for read_turn.\n")
-	if in.Relays != nil {
-		w.sb.WriteString(relaysLine(*in.Relays, in.HandedBy != nil))
+	return sb.String()
+}
+
+// branchesText names the branches the other members work on, to a member
+// in a worktree of its own (design.md 5.21): it builds on one by merging.
+func branchesText(in briefInput, members []store.Member) string {
+	if !worksInOwnWorktree(in) {
+		return ""
 	}
-	if in.HandedBy != nil {
-		w.sb.WriteString(handedByLine(*in.HandedBy))
-	}
-	if b.wikis != nil {
-		line := "\nThe project keeps a wiki of what the team has learned: decisions, conventions, facts, pitfalls, what modules are for, what finished topics came to. Look things up in it with search_wiki and read_wiki. " +
-			"Write to it only when a person asks you to, now or as a standing rule of this chat: then write_wiki a new page, patch_wiki the page that has it, or deprecate_wiki one that no longer holds; " +
-			"the change takes effect at once, and a person can undo it. When a person says a page is wrong, check it against the code, or ask them, set it right and say what you changed."
-		line += " related_wiki shows how pages bear on each other, and, given a path of the repository, which pages name it: look before you change a file."
-		line += " Every project also shares a skill library, the same tools with scope library: patterns of how tasks went wrong or right, and skills, which people add and install for agents; your runtime loads the ones installed for you when a task calls for them."
-		line += memoryLine(b.wikis.memoryPrefs())
-		if len(in.Skills) > 0 {
-			line += fmt.Sprintf(" Installed for you: %s. Those you improve as you use them, without being asked: when one proves wrong or short in your task, or you find a better way, "+
-				"set it right with patch_wiki (scope library), one focused change to its SKILL.md or a page of its folder, and record what happened as a Pattern page. "+
-				"The change reaches every agent the skill is installed for from its next turn, on trial until %d turns have used it and ended well; a person or the skill's team can roll it back.",
-				strings.Join(in.Skills, ", "), b.trialUses)
+	var others []string
+	for _, m := range members {
+		if m.ID != in.Member.ID && m.Branch != "" && !m.Removed() {
+			others = append(others, fmt.Sprintf("%s (%s)", m.Branch, m.DisplayName))
 		}
-		if mounted := mountsLine(b.wikis.mounts(ctx, project)); mounted != "" {
-			line += " " + mounted
-		}
-		w.sb.WriteString(line + "\n")
 	}
+	if len(others) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("\nThe others' work is on their branches of the same repository: %s. To build on what one of them committed, merge its branch into yours (git merge %s, say).\n",
+		strings.Join(others, ", "), strings.SplitN(others[0], " ", 2)[0])
+}
+
+// skillsText names the skills the turn is given: Veyloom's own, which
+// every agent has (design.md 5.23.6), and those installed for the agent
+// from the library (5.15).
+func skillsText(builtin, installed []string) string {
+	var b strings.Builder
+	if len(builtin) > 0 {
+		b.WriteString("\nVeyloom's own skills, which every agent has: " + strings.Join(builtin, ", ") + ".")
+	}
+	if len(installed) > 0 {
+		b.WriteString("\nInstalled for you from the skill library: " + strings.Join(installed, ", ") + ".")
+	}
+	if b.Len() == 0 {
+		return ""
+	}
+	return b.String() + "\n"
+}
+
+// mountsRead reports whether every bundle the project's wiki mounts could
+// be read.
+func mountsRead(mounts []mountedWiki) bool {
+	return !slices.ContainsFunc(mounts, func(m mountedWiki) bool { return m.err != nil })
+}
+
+// mountsText names the bundles the project's wiki mounts.
+func mountsText(mounts []mountedWiki) string {
+	if line := mountsLine(mounts); line != "" {
+		return "\n" + line + "\n"
+	}
+	return ""
+}
+
+// relaysLeftLine says how many more turns agents may wake in the piece of
+// work the turn belongs to (design.md 5.22).
+func relaysLeftLine(r relaysLeft) string {
+	return fmt.Sprintf("\nAgents may wake %d more turns of one another in the piece of work this turn belongs to before it waits for the person.\n", max(r.Limit-r.Woken, 0))
 }
 
 // Parts of the wiki a brief shows beside the capped ones.
@@ -345,44 +454,46 @@ func (b *briefBuilder) projectWiki(ctx context.Context, project store.Project, r
 
 // wiki writes what the brief shows of the project wiki (design.md 5.2) and
 // returns where the wiki stood, zero when it showed none.
-func (b *briefBuilder) wiki(ctx context.Context, w *briefWriter, in briefInput, bundle *wiki.Bundle, members []store.Member, topic topicPart) time.Time {
+func (b *briefBuilder) wiki(ctx context.Context, w *briefWriter, in briefInput, bundle *wiki.Bundle, members []store.Member, topic topicPart, listed map[string]bool) time.Time {
 	if bundle == nil {
 		return time.Time{}
 	}
 	at := bundle.Latest()
-	// The memory is carried whole in the header, not listed again.
-	listed := map[string]bool{wiki.MemoryPath: true}
-	b.residentPages(w, bundle, listed)
 	b.wikiCatalog(w, bundle, in.Session.WikiSeen, listed)
 	b.relatedPages(ctx, w, bundle, b.relevance(ctx, in, members, topic), listed)
 	return at
 }
 
-// residentPages writes the pages every turn carries, in full, as many as
-// fit; those that do not are named so the agent can read them.
-func (b *briefBuilder) residentPages(w *briefWriter, bundle *wiki.Bundle, listed map[string]bool) {
+// residentText is the pages a session carries whole, as many as fit; those
+// that do not are named so the agent can read them. listed takes the ones
+// carried: the catalog does not list them again. One that did not fit is
+// the catalog's like any other page, which tells the session when it
+// changes, as naming it here would not.
+func (b *briefBuilder) residentText(bundle *wiki.Bundle, listed map[string]bool) string {
 	pages := bundle.Resident()
 	if len(pages) == 0 {
-		return
+		return ""
 	}
-	w.section("Resident pages of the project wiki, carried in every turn:")
+	var sb strings.Builder
+	sb.WriteString("\nResident pages of the project wiki, carried whole whenever they change:\n")
 	room := b.limits.Resident
 	var left []string
 	for _, p := range pages {
-		listed[p.Path] = true
 		text := p.ResidentText()
 		// In order: what does not fit ends the part, so a page is never
 		// cut and the ones carried are the ones confirmed last.
 		if n := utf8.RuneCountInString(text); len(left) == 0 && n <= room {
 			room -= n
-			w.sb.WriteString(text)
+			sb.WriteString(text)
+			listed[p.Path] = true
 			continue
 		}
 		left = append(left, p.Path)
 	}
 	if len(left) > 0 {
-		fmt.Fprintf(&w.sb, "\n(%s did not fit here; read_wiki has %s: %s)\n", count(len(left), "more resident page"), pronoun(len(left)), strings.Join(left, ", "))
+		fmt.Fprintf(&sb, "\n(%s did not fit here; read_wiki has %s: %s)\n", count(len(left), "more resident page"), pronoun(len(left)), strings.Join(left, ", "))
 	}
+	return sb.String()
 }
 
 // wikiCatalog lists the wiki's pages: all of them to a session that has
@@ -751,12 +862,15 @@ func (w *briefWriter) message(ctx context.Context, m store.Message, tag string) 
 		// A topic root the agent has not filled in yet says nothing.
 		return
 	}
-	marker := "   "
+	marker, body := "   ", m.Body
 	if w.addressed[m.ID] {
+		// What the turn answers is told whole, however long.
 		marker = ">> "
+	} else if cut, more := cutBody(body, roomBodyMax); more > 0 {
+		body = cut + cutNote(m.ID, more)
 	}
 	w.written[m.ID] = true
-	fmt.Fprintf(&w.sb, "%s%s[%s] %s\n", marker, tag, w.names.of(ctx, m), m.Body)
+	fmt.Fprintf(&w.sb, "%s%s[%s] %s\n", marker, tag, w.names.of(ctx, m), body)
 	// Files come as paths on this machine: the runtime reads them with
 	// its own tools, images included.
 	for _, a := range m.Attachments {
@@ -817,46 +931,13 @@ func memoryLine(prefs store.MemoryPrefs) string {
 	switch {
 	case prefs.UsesProject() && prefs.UsesPersonal():
 		return " When a person wants a way of working kept for later turns, a preference, a rule, a correction of how you went about something, note it with remember: in the project memory, or with scope personal when they mean every project; " +
-			"forget takes out an entry that no longer holds." + rest + " Every turn carries both memories whole, so each entry is one short line."
+			"forget takes out an entry that no longer holds." + rest + " Both memories reach you whole, in the brief whenever they change, so each entry is one short line."
 	case prefs.UsesProject():
 		return " When a person wants a way of working kept for later turns, a preference, a rule, a correction of how you went about something, note it with remember in the project memory; " +
-			"forget takes out an entry that no longer holds." + rest + " Every turn carries the project memory whole, so each entry is one short line."
+			"forget takes out an entry that no longer holds." + rest + " The project memory reaches you whole, in the brief whenever it changes, so each entry is one short line."
 	case prefs.UsesPersonal():
 		return " When a person wants a way of working kept for later turns in every project, a preference, a rule, a correction of how you went about something, note it with remember, scope personal; " +
-			"forget, scope personal, takes out an entry that no longer holds." + rest + " Every turn carries the personal memory whole, so each entry is one short line."
+			"forget, scope personal, takes out an entry that no longer holds." + rest + " The personal memory reaches you whole, in the brief whenever it changes, so each entry is one short line."
 	}
 	return ""
-}
-
-// workplace says where the member works (design.md 5.21): the leader in the
-// project's checkout, and the others, once they have one, each in a git
-// worktree of its own.
-func workplace(w *briefWriter, in briefInput, project store.Project, members []store.Member) {
-	switch {
-	case in.Member.ID == project.LeaderID:
-		w.sb.WriteString("\nYou are the project's leader. You work in the project's checkout itself, where people work too; " +
-			"when the others work in git worktrees of their own, you write down with " + runtime.SetupToolSteps + " how a new one is got ready, whenever a person asks you to change it. " +
-			"Each of them commits on a branch of its own, veyloom/ and its name, which a person merges onto the main line: do not ask them for other branches. " +
-			"When they do, commit the files you changed in the checkout yourself, and only those, before your turn ends, with a message saying what the change does: " +
-			"changes left there uncommitted are missing from their worktrees, and keep a person from merging work that changes the same files. " +
-			"What documents work still on a member's branch, such as the README section for a feature it wrote, goes on that branch with the work: " +
-			"ask the member for it, since the checkout would describe what it does not have until a person merges it.\n")
-	case in.Dir != "" && in.Member.WorktreeDir != "" && in.Dir == in.Member.WorkDir:
-		fmt.Fprintf(&w.sb, "\nYou work in a git worktree of your own, %s, on the branch %s, made from the project's checkout at %s. "+
-			"What you change stays there until a person merges it into the branch the checkout is on: you need not commit, and do not push or switch branches. "+
-			"Whatever you leave there is merged as your work, so what you build or run only to check it writes outside the worktree, in a temporary folder, "+
-			"or you remove what it wrote before your turn ends.",
-			in.Dir, in.Member.Branch, project.RepoPath)
-		var others []string
-		for _, m := range members {
-			if m.ID != in.Member.ID && m.Branch != "" && !m.Removed() {
-				others = append(others, fmt.Sprintf("%s (%s)", m.Branch, m.DisplayName))
-			}
-		}
-		if len(others) > 0 {
-			fmt.Fprintf(&w.sb, " The others' work is on their branches of the same repository: %s. To build on what one of them committed, merge its branch into yours "+
-				"(git merge %s, say) rather than copying its files.", strings.Join(others, ", "), strings.SplitN(others[0], " ", 2)[0])
-		}
-		w.sb.WriteString("\n")
-	}
 }

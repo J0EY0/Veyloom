@@ -279,10 +279,15 @@ func (r *smokeRoom) wikiRound(n int, threadID string) (store.Turn, []wiki.Commit
 		threadID = thread.ID
 	}
 	tx, _ := os.ReadFile(turn.TranscriptPath)
-	for _, want := range []string{"write_wiki", "search_wiki", "Saved /facts/smoke-wiki-check.md", `Pages matching \"smoke check\"`} {
+	for _, want := range []string{"write_wiki", "search_wiki", "Saved /facts/smoke-wiki-check.md"} {
 		if !strings.Contains(string(tx), want) {
 			r.t.Errorf("turn %d should show %q:\n%s", n, want, tx)
 		}
+	}
+	// A runtime may make both calls at once, the search answered before the
+	// page is written: then the pages sharing its words list it.
+	if !strings.Contains(string(tx), `Pages matching \"smoke check\"`) && !strings.Contains(string(tx), `Pages sharing words with it, best first:\n/facts/smoke-wiki-check.md`) {
+		r.t.Errorf("turn %d should find the page with search_wiki:\n%s", n, tx)
 	}
 	if reply := r.lastReply(threadID); !strings.Contains(reply, "/facts/smoke-wiki-check.md") {
 		r.t.Errorf("the agent should have found the page, said %q", reply)

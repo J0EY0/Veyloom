@@ -198,13 +198,7 @@ func stepsLine(steps store.WorkspaceSteps) string {
 // notice shows a line of the hub's in a turn that is under way, the way a
 // runtime's are shown; kept for the transcript once it is open.
 func (m *TurnManager) notice(at *activeTurn, level, text string) {
-	ev := runtime.Event{Kind: runtime.EventNotice, Level: level, Text: text, At: time.Now()}
-	at.mu.Lock()
-	if at.transcript == nil {
-		at.early = append(at.early, ev)
-	}
-	at.mu.Unlock()
-	m.OnEvent(at.turn.ID, ev)
+	m.OnEvent(at.turn.ID, runtime.Event{Kind: runtime.EventNotice, Level: level, Text: text, At: time.Now()})
 }
 
 // workspaceFailure is what a machine said went wrong, as an error.

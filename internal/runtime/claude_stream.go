@@ -1,9 +1,11 @@
 package runtime
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -22,9 +24,12 @@ type claudeLine struct {
 	// Status is set on system/status lines, "compacting" while the CLI
 	// compacts the session, and on task_notification lines, how the
 	// background task ended.
-	Status  string             `json:"status"`
-	Message *claudeMessage     `json:"message"`
-	Event   *claudeStreamEvent `json:"event"`
+	Status  string         `json:"status"`
+	Message *claudeMessage `json:"message"`
+	// IsReplay marks a user message the CLI echoes back from its input
+	// (--replay-user-messages).
+	IsReplay bool               `json:"isReplay"`
+	Event    *claudeStreamEvent `json:"event"`
 	// control_request and control_cancel_request lines (claude_control.go).
 	RequestID string          `json:"request_id"`
 	Request   json.RawMessage `json:"request"`
@@ -63,11 +68,66 @@ type claudeLine struct {
 	PermissionDenials []claudeDenial `json:"permission_denials"`
 	// system/api_retry records: which attempt failed, how many there may
 	// be, when the next one comes and what went wrong.
-	Attempt      int             `json:"attempt"`
-	MaxRetries   int             `json:"max_retries"`
-	RetryDelayMS float64         `json:"retry_delay_ms"`
-	ErrorStatus  *int            `json:"error_status"`
-	Error        json.RawMessage `json:"error"`
+	Attempt      int     `json:"attempt"`
+	MaxRetries   int     `json:"max_retries"`
+	RetryDelayMS float64 `json:"retry_delay_ms"`
+	ErrorStatus  *int    `json:"error_status"`
+	// Error is, on api_retry records, what went wrong; on an assistant
+	// message the CLI made of a failed model call, its kind of failure
+	// (authentication_failed, billing_error, rate_limit, server_error, …).
+	Error json.RawMessage `json:"error"`
+	// rate_limit_event records: how a claude.ai account stands against its
+	// usage limits, as the CLI read it off the API's answers.
+	RateLimitInfo *claudeRateLimit `json:"rate_limit_info"`
+}
+
+// claudeRateLimit is a claude.ai account's standing against its usage
+// limits (2.1.85): the limit it is nearest, or the one reached.
+type claudeRateLimit struct {
+	// Status is allowed, allowed_warning or rejected.
+	Status string `json:"status"`
+	// ResetsAt is when the limit resets, in Unix seconds.
+	ResetsAt float64 `json:"resetsAt"`
+	// RateLimitType is five_hour, seven_day, seven_day_opus,
+	// seven_day_sonnet or overage.
+	RateLimitType string `json:"rateLimitType"`
+	// Utilization is how much of it is used, 0 to 1, when warned.
+	Utilization *float64 `json:"utilization"`
+	// IsUsingOverage says a limit was reached but the account goes on,
+	// on usage paid for beyond it.
+	IsUsingOverage bool `json:"isUsingOverage"`
+}
+
+// claudeWindows names the limits as a person reads them.
+var claudeWindows = map[string]string{"five_hour": "5h", "seven_day": "7d", "seven_day_opus": "7d opus", "seven_day_sonnet": "7d sonnet", "overage": "overage"}
+
+// quota is the standing as Quota.
+func (r claudeRateLimit) quota() Quota {
+	q := Quota{Limited: r.Status == "rejected" && !r.IsUsingOverage, Window: claudeWindows[r.RateLimitType]}
+	if q.Window == "" {
+		q.Window = r.RateLimitType
+	}
+	switch {
+	case r.Utilization != nil:
+		used := int(math.Round(*r.Utilization * 100))
+		q.UsedPercent = &used
+	case q.Limited:
+		used := 100
+		q.UsedPercent = &used
+	}
+	if r.ResetsAt > 0 {
+		q.ResetsAt = time.Unix(int64(r.ResetsAt), 0)
+	}
+	return q
+}
+
+// claudeAPIFailures are the kinds of failure the CLI names on the message
+// it makes of a failed model call, as the hub tells them.
+var claudeAPIFailures = map[string]FailureKind{
+	"authentication_failed": FailureAuth,
+	"billing_error":         FailureQuota,
+	"rate_limit":            FailureRateLimit,
+	"server_error":          FailureServer,
 }
 
 // claudeDenial is one tool use the CLI turned down, on its own or as it was
@@ -131,7 +191,26 @@ type claudeParser struct {
 	sessionID string
 	text      strings.Builder
 	result    *claudeLine
+	// spent adds up the results' usage: each tells its own turn's, and a
+	// run may answer more than one, as when it answers what Steer passed it
+	// once its turn is done.
+	spent     Usage
 	malformed int
+	// quota is the account's last reported standing; apiFailure what the
+	// CLI said went wrong with the last failed model call of its turn.
+	quota      *Quota
+	apiFailure FailureKind
+	// answering says the CLI began a turn of its own after a result, for
+	// text Steer passed, and has not given that turn's result yet.
+	answering bool
+}
+
+// nextTurn notes that the CLI began a turn of its own after a result, for
+// text Steer passed: what went wrong in the turn before is no longer the
+// news, and the run is not over until this turn has its result.
+func (p *claudeParser) nextTurn() {
+	p.apiFailure = ""
+	p.answering = true
 }
 
 func newClaudeParser(cfg ClaudeConfig, emit func(Event)) *claudeParser {
@@ -206,12 +285,31 @@ func (p *claudeParser) handle(line claudeLine) {
 			p.emit(Event{Kind: EventText, Text: ev.Delta.Text})
 		}
 	case "assistant":
+		var kind string
+		if json.Unmarshal(line.Error, &kind) == nil && kind != "" && kind != "max_output_tokens" {
+			// The CLI's own message of a model call that failed, not the
+			// model's words: the failure tells of it.
+			if line.ParentToolUseID == nil {
+				p.apiFailure = claudeAPIFailures[kind]
+			}
+			return
+		}
 		p.assistant(line.Message, line.ParentToolUseID != nil)
+	case "rate_limit_event":
+		if line.RateLimitInfo != nil {
+			q := line.RateLimitInfo.quota()
+			p.quota = &q
+			p.emit(Event{Kind: EventQuota, Quota: &q})
+		}
 	case "user":
 		p.user(line.Message)
 	case "result":
 		result := line
 		p.result = &result
+		p.answering = false
+		if u := line.Usage; u != nil {
+			p.spent = p.spent.Plus(Usage{InputTokens: tokens(u.InputTokens), CacheReadTokens: tokens(u.CacheReadInputTokens), CacheWriteTokens: tokens(u.CacheCreationInputTokens), OutputTokens: tokens(u.OutputTokens)})
+		}
 		for _, d := range line.PermissionDenials {
 			if p.askedIDs[d.ToolUseID] {
 				continue
@@ -327,7 +425,7 @@ func (p *claudeParser) assistant(msg *claudeMessage, subagent bool) {
 			}
 		case "tool_use":
 			p.toolNames[block.ID] = block.Name
-			p.emit(Event{Kind: EventToolCall, Tool: block.Name, Input: truncate(compactJSON(block.Input), p.cfg.MaxEventBytes)})
+			p.emit(Event{Kind: EventToolCall, Tool: block.Name, CallID: block.ID, Input: truncate(compactJSON(block.Input), p.cfg.MaxEventBytes)})
 			if path := editedPath(block); path != "" {
 				p.edits[block.ID] = path
 			}
@@ -341,9 +439,10 @@ func (p *claudeParser) user(msg *claudeMessage) {
 			continue
 		}
 		p.emit(Event{
-			Kind: EventToolResult,
-			Tool: p.toolNames[block.ToolUseID],
-			Text: truncate(toolResultText(block.Content), p.cfg.MaxEventBytes),
+			Kind:   EventToolResult,
+			Tool:   p.toolNames[block.ToolUseID],
+			CallID: block.ToolUseID,
+			Text:   truncate(toolResultText(block.Content), p.cfg.MaxEventBytes),
 		})
 		if path, ok := p.edits[block.ToolUseID]; ok {
 			delete(p.edits, block.ToolUseID)
@@ -359,14 +458,20 @@ func (p *claudeParser) finish(waitErr error, stderr string) (Result, error) {
 	if p.result == nil {
 		if waitErr != nil {
 			detail := strings.TrimSpace(stderr)
-			return Result{Failure: classifyFailure(detail)}, fmt.Errorf("claude: %w: %s", waitErr, detail)
+			return p.failed(Result{}, detail), fmt.Errorf("claude: %w: %s", waitErr, detail)
 		}
 		return Result{}, errors.New("claude: output ended without a result record")
 	}
 	res := *p.result
-	var usage Usage
-	if u := res.Usage; u != nil {
-		usage = Usage{InputTokens: tokens(u.InputTokens), CacheReadTokens: tokens(u.CacheReadInputTokens), CacheWriteTokens: tokens(u.CacheCreationInputTokens), OutputTokens: tokens(u.OutputTokens)}
+	usage := p.spent
+	if p.answering {
+		// Gone in the midst of answering text Steer passed, which it took
+		// in: that text is not answered, whatever the answers before it.
+		detail := strings.TrimSpace(stderr)
+		if detail == "" && waitErr != nil {
+			detail = waitErr.Error()
+		}
+		return p.failed(Result{Usage: usage}, detail), fmt.Errorf("claude: ended before answering what was passed to it as it ran: %s", cmp.Or(detail, "no reason given"))
 	}
 	if res.IsError {
 		// The real reason, wherever the CLI put it; the subtype alone
@@ -381,7 +486,7 @@ func (p *claudeParser) finish(waitErr error, stderr string) (Result, error) {
 		if reason == "" {
 			reason = res.Subtype
 		}
-		return Result{Usage: usage, Failure: classifyFailure(reason)}, fmt.Errorf("claude: %s", reason)
+		return p.failed(Result{Usage: usage}, reason), fmt.Errorf("claude: %s", reason)
 	}
 
 	output := res.Result
@@ -389,6 +494,26 @@ func (p *claudeParser) finish(waitErr error, stderr string) (Result, error) {
 		output = p.text.String()
 	}
 	return Result{Output: output, SessionRef: p.sessionID, Usage: usage}, nil
+}
+
+// failed names why the run failed, in res: what reason says of the
+// session first; then the account's standing, when it was reported
+// reached; then what the CLI named of the last failed model call; then
+// what reason says of the rest. A usage limit reached gives when it
+// resets.
+func (p *claudeParser) failed(res Result, reason string) Result {
+	res.Failure = classifyFailure(reason)
+	switch {
+	case res.Failure == FailureSessionNotFound || res.Failure == FailureContextOverflow:
+	case p.quota != nil && p.quota.Limited:
+		res.Failure = FailureQuota
+	case p.apiFailure != "":
+		res.Failure = p.apiFailure
+	}
+	if res.Failure == FailureQuota && p.quota != nil && p.quota.Limited {
+		res.RetryAt = p.quota.ResetsAt
+	}
+	return res
 }
 
 // blocksOf decodes a message's content, which is an array of blocks or, for

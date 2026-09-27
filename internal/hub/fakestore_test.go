@@ -6,6 +6,7 @@ import (
 	"sync"
 
 	"github.com/J0EY0/veyloom/internal/runtime"
+	"github.com/J0EY0/veyloom/internal/store"
 )
 
 // fakeStore is an in-memory MachineStore for tests. It mirrors the real
@@ -71,6 +72,16 @@ func (s *fakeStore) MarkMachineDisconnected(_ context.Context, id string) error 
 	defer s.mu.Unlock()
 	s.disconnected[id]++
 	return nil
+}
+
+// ListPendingReminders has no reminders: a machine connecting looks.
+func (s *fakeStore) ListPendingReminders(context.Context, string) ([]store.Reminder, error) {
+	return nil, nil
+}
+
+// ListQueuedWakes has nothing waiting: a machine connecting looks.
+func (s *fakeStore) ListQueuedWakes(context.Context, string) ([]store.QueuedWake, error) {
+	return nil, nil
 }
 
 func (s *fakeStore) touchCount(id string) int {

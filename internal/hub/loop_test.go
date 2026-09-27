@@ -3,6 +3,7 @@ package hub
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -30,6 +31,18 @@ type loop struct {
 	machineID string
 	// worktrees is where the machine makes the members' worktrees.
 	worktrees string
+	// cfg and opts made the hub, for restart; identity is the machine's,
+	// kept by it across its connections.
+	cfg      Config
+	opts     []Option
+	identity *machine.MemoryIdentity
+	// runners are what the machine runs turns with: the built-in ones
+	// unless a test gives it more (fixedRuntime).
+	runners map[string]runtime.Runner
+	// hubRun is the hub's life; stopHub and stopMachine end the hub and
+	// its machine's connection.
+	hubRun               context.Context
+	stopHub, stopMachine context.CancelFunc
 }
 
 func newLoop(t *testing.T) *loop {
@@ -47,16 +60,12 @@ func newLoopWith(t *testing.T, cfg Config, opts ...Option) *loop {
 
 	cfg.TranscriptDir = t.TempDir()
 	cfg.HeartbeatInterval = time.Hour
-	h := New(s, cfg, opts...)
 	worktrees, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
-	w := machine.New(machine.Config{Name: "laptop", ToolDir: t.TempDir(), WorktreeDir: worktrees}, machine.NewDiscovery(nil, time.Second), &machine.MemoryIdentity{}, runtime.BuiltinRunners())
-	hubEnd, machineEnd := protocol.Pipe()
-	go h.Serve(ctx, hubEnd)
-	go w.Run(ctx, machineEnd)
-	eventually(t, func() bool { return len(h.Machines()) == 1 }, "machine to connect")
+	l := &loop{t: t, ctx: ctx, s: s, worktrees: worktrees, cfg: cfg, opts: opts, identity: &machine.MemoryIdentity{}}
+	l.startHub()
 
 	_, room, err := s.CreateProject(ctx, store.NewProject{Name: "p"})
 	if err != nil {
@@ -66,7 +75,59 @@ func newLoopWith(t *testing.T, cfg Config, opts ...Option) *loop {
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &loop{t: t, ctx: ctx, s: s, h: h, room: room, user: user, machineID: h.Machines()[0].ID, worktrees: worktrees}
+	l.room, l.user = room, user
+	return l
+}
+
+// startHub starts a hub over the loop's store and connects the machine.
+func (l *loop) startHub() {
+	l.t.Helper()
+	run, stop := context.WithCancel(l.ctx)
+	l.t.Cleanup(stop)
+	l.h, l.hubRun, l.stopHub = New(l.s, l.cfg, l.opts...), run, stop
+	l.connectMachine()
+}
+
+// connectMachine connects the loop's machine to its hub, as itself.
+func (l *loop) connectMachine() {
+	l.t.Helper()
+	run, stop := context.WithCancel(l.ctx)
+	l.t.Cleanup(stop)
+	l.stopMachine = stop
+	runners := l.runners
+	if runners == nil {
+		runners = runtime.BuiltinRunners()
+	}
+	w := machine.New(machine.Config{Name: "laptop", ToolDir: l.t.TempDir(), WorktreeDir: l.worktrees}, machine.NewDiscovery(nil, time.Second), l.identity, runners)
+	hubEnd, machineEnd := protocol.Pipe()
+	h := l.h
+	go h.Serve(l.hubRun, hubEnd)
+	go w.Run(run, machineEnd)
+	eventually(l.t, func() bool { return len(h.Machines()) == 1 }, "machine to connect")
+	l.machineID = h.Machines()[0].ID
+}
+
+// dropMachine takes the machine off its hub, as when it loses the network.
+func (l *loop) dropMachine() {
+	l.t.Helper()
+	l.stopMachine()
+	eventually(l.t, func() bool { return len(l.h.Machines()) == 0 }, "machine to go")
+}
+
+// restart stops the hub and its machine and starts them again over the
+// same store, as `veyloom serve` does after a stop: the turns the old hub
+// left running are failed first.
+func (l *loop) restart() {
+	l.t.Helper()
+	l.stopHub()
+	l.dropMachine()
+	if _, err := l.s.FailRunningTurns(l.ctx, "the hub stopped while the turn was running"); err != nil {
+		l.t.Fatal(err)
+	}
+	if _, err := l.s.ReleaseRunningDrafts(l.ctx); err != nil {
+		l.t.Fatal(err)
+	}
+	l.startHub()
 }
 
 // member sets up a fake-runtime agent with the given options and adds it
@@ -435,12 +496,71 @@ func TestLoop_AnAgentTakenOutOfTheProjectIsNeitherWokenNorNamed(t *testing.T) {
 	if err := l.h.turns.TriggerIn(l.ctx, echo, msg, thread); err != nil {
 		t.Fatal(err)
 	}
-	notes := l.replies(thread.ID, store.SenderSystem)
+	var notes []store.Message
+	eventually(t, func() bool {
+		notes = l.replies(thread.ID, store.SenderSystem)
+		return len(notes) > 0
+	}, "the note that Echo was taken out")
+	time.Sleep(100 * time.Millisecond)
+	notes = l.replies(thread.ID, store.SenderSystem)
 	if len(notes) != 1 || !strings.Contains(notes[0].Body, "taken out of the project") {
 		t.Errorf("want one note that Echo was taken out, got %+v", notes)
 	}
 	if n := len(l.turns()); n != 1 {
 		t.Errorf("want still 1 turn, got %d", n)
+	}
+}
+
+// An @ means the longest name after it: with Coder and Coder2 in the room,
+// "@Coder2" wakes Coder2 and not Coder, and once Coder2 is taken out it
+// wakes no one, Coder2 still owning its name.
+func TestLoop_AnAtMeansTheLongestNameAfterIt(t *testing.T) {
+	l := newLoop(t)
+	coder := l.member("Coder", map[string]any{"reply": "coded"})
+	coder2 := l.member("Coder2", map[string]any{"reply": "coded too"})
+	hander := l.member("Hander", map[string]any{"tool": true, "reply": "交给 @Coder2 看看", "summary_reply": "Coder2 看过了"})
+
+	msg := l.say("@Hander go", "", hander)
+	// Hander, Coder2, and Hander taking back what it handed on.
+	turns := l.settle(3, "Hander's turn, Coder2's and the hand back")
+	if slices.ContainsFunc(turns, func(turn store.Turn) bool { return turn.MemberID == coder.ID }) {
+		t.Fatalf("Coder was woken by @Coder2: %+v", turns)
+	}
+	if root := l.root(l.topic(msg)); !slices.Equal(root.Mentions, []store.Mention{{Kind: store.MentionAgent, ID: coder2.ID}}) {
+		t.Errorf("the reply names Coder2 alone, got %+v", root.Mentions)
+	}
+
+	if _, err := l.s.RemoveMember(l.ctx, coder2.ID); err != nil {
+		t.Fatal(err)
+	}
+	again := l.say("@Hander again", "", hander)
+	turns = l.settle(4, "Hander's second turn")
+	if slices.ContainsFunc(turns, func(turn store.Turn) bool { return turn.MemberID == coder.ID }) {
+		t.Fatalf("Coder was woken in place of Coder2: %+v", turns)
+	}
+	// Handing nothing on, Hander's word is addressed to the person instead.
+	if root := l.root(l.topic(again)); slices.ContainsFunc(root.Mentions, func(m store.Mention) bool { return m.Kind == store.MentionAgent }) {
+		t.Errorf("a member taken out is no mention, nor is the name it begins with: %+v", root.Mentions)
+	}
+}
+
+// The person's name competes for an @ too: a member whose name begins it
+// is not woken when an agent names the person.
+func TestLoop_NamingThePersonWakesNoMemberWhoseNameBeginsTheirs(t *testing.T) {
+	l := newLoop(t)
+	ali := l.member("ali", map[string]any{"reply": "here"})
+	lead := l.member("Lead", map[string]any{"tool_calls": []any{sendCall("@alice have a look", "")}, "reply": "Done."})
+	msg := l.say("@Lead go", "", lead)
+	l.settle(1, "Lead's turn")
+	said := l.saidIn(l.topic(msg))
+	sent := slices.IndexFunc(said, func(m store.Message) bool {
+		return m.Body == "@alice have a look" && slices.Equal(m.Mentions, []store.Mention{{Kind: store.MentionUser, ID: l.user.ID}})
+	})
+	if sent < 0 {
+		t.Errorf("the message names the person alone: %+v", said)
+	}
+	if turns := l.turns(); slices.ContainsFunc(turns, func(turn store.Turn) bool { return turn.MemberID == ali.ID }) {
+		t.Errorf("ali was woken by @alice: %+v", turns)
 	}
 }
 
@@ -562,13 +682,13 @@ func TestLoop_TurnsOfOneAgentNeverOverlap(t *testing.T) {
 
 func TestLoop_QueuedTriggersInOneThreadMergeIntoOneTurn(t *testing.T) {
 	l := newLoop(t)
-	slow := l.member("Slow", map[string]any{"delay_ms": float64(200)})
+	// A runtime that takes nothing while a turn runs: what is said in the
+	// topic meanwhile waits for the next turn (steer.go).
+	slow := l.member("Slow", map[string]any{"delay_ms": float64(200), "steer": "refuse"})
 	msg := l.say("@Slow first", "", slow)
 	thread := l.topic(msg)
 
-	// The agent has not spoken in the thread yet, so the thread rule cannot
-	// route these; they mention it explicitly and queue behind the first
-	// turn.
+	// They mention it explicitly and queue behind the first turn.
 	l.say("second", thread.ID, slow)
 	l.say("third", thread.ID, slow)
 
@@ -580,6 +700,80 @@ func TestLoop_QueuedTriggersInOneThreadMergeIntoOneTurn(t *testing.T) {
 	data, _ := os.ReadFile(turns[0].TranscriptPath)
 	if !strings.Contains(string(data), ">> [alice] second") || !strings.Contains(string(data), ">> [alice] third") {
 		t.Errorf("merged brief should mark both queued messages:\n%s", data)
+	}
+}
+
+// queued is what the store keeps waiting on the loop's machine.
+func (l *loop) queued() []store.QueuedWake {
+	l.t.Helper()
+	q, err := l.s.ListQueuedWakes(l.ctx, l.machineID)
+	if err != nil {
+		l.t.Fatal(err)
+	}
+	return q
+}
+
+// What a busy member was asked outlives the hub: while the machine is away
+// it is neither started nor failed, and the next hub answers it once the
+// machine is back, the store having kept it (queue.go).
+func TestLoop_WhatWaitsOutlivesTheHub(t *testing.T) {
+	l := newLoop(t)
+	busy := l.member("Busy", map[string]any{"reply": "done", "delay_ms": float64(5000)})
+	l.say("@Busy one", "", busy)
+	l.waitTurns(1, store.TurnRunning, "Busy's first turn")
+	second := l.say("@Busy two", "", busy)
+	eventually(t, func() bool { q := l.queued(); return len(q) == 1 && q[0].MessageID == second.ID }, "the second ask to be kept")
+
+	// The hub stops, its machine with it: the running turn fails, the
+	// second ask waits.
+	l.setOptions(busy, map[string]any{"reply": "done"})
+	l.restart()
+	eventually(t, func() bool {
+		turns := l.turns()
+		return len(turns) == 2 && turns[0].TriggerMessageID == second.ID && turns[0].Status == store.TurnDone
+	}, "the next hub to answer the second ask")
+	if turns := l.turns(); turns[1].Status != store.TurnFailed {
+		t.Errorf("the turn the stop cut off: %+v", turns[1])
+	}
+	if q := l.queued(); len(q) != 0 {
+		t.Errorf("answered, it waits no longer: %+v", q)
+	}
+	// Nothing was started for it while the hub was down, so no note of a
+	// failure to start.
+	for _, note := range l.notes(l.topic(second).ID) {
+		if strings.Contains(note, "could not start") {
+			t.Errorf("a note of a failed start: %q", note)
+		}
+	}
+}
+
+// A machine that drops off and comes back finds what its members were
+// asked meanwhile waiting in the same hub, and goes on with it.
+func TestLoop_WhatWaitsGoesOnWhenTheMachineIsBack(t *testing.T) {
+	l := newLoop(t)
+	busy := l.member("Busy", map[string]any{"reply": "done", "delay_ms": float64(5000)})
+	l.say("@Busy one", "", busy)
+	l.waitTurns(1, store.TurnRunning, "Busy's first turn")
+	second := l.say("@Busy two", "", busy)
+	eventually(t, func() bool { return len(l.queued()) == 1 }, "the second ask to be kept")
+
+	l.setOptions(busy, map[string]any{"reply": "done"})
+	l.dropMachine()
+	// Cancelled by the machine as it went, or failed by the hub: over.
+	eventually(t, func() bool { turns := l.turns(); return len(turns) == 1 && turns[0].Status != store.TurnRunning }, "the first turn to end with its machine")
+	time.Sleep(200 * time.Millisecond)
+	if n := len(l.turns()); n != 1 || len(l.queued()) != 1 {
+		t.Fatalf("with the machine away the second ask waits: %d turns, %+v", n, l.queued())
+	}
+
+	l.connectMachine()
+	eventually(t, func() bool {
+		turns := l.turns()
+		return len(turns) == 2 && turns[0].TriggerMessageID == second.ID && turns[0].Status == store.TurnDone
+	}, "the second ask to be answered once the machine is back")
+	time.Sleep(200 * time.Millisecond)
+	if n := len(l.turns()); n != 2 || len(l.queued()) != 0 {
+		t.Errorf("answered once: %d turns, %+v queued", n, l.queued())
 	}
 }
 
@@ -645,7 +839,7 @@ func TestLoop_Cancel(t *testing.T) {
 		return false
 	}, "the turn to be running")
 
-	if err := l.h.CancelTurn(l.ctx, turnID); err != nil {
+	if err := l.h.CancelTurn(l.ctx, turnID, false); err != nil {
 		t.Fatal(err)
 	}
 
@@ -653,7 +847,7 @@ func TestLoop_Cancel(t *testing.T) {
 	if turns[0].EndedAt == nil {
 		t.Error("a cancelled turn is finished")
 	}
-	if err := l.h.CancelTurn(l.ctx, turnID); err == nil {
+	if err := l.h.CancelTurn(l.ctx, turnID, false); err == nil {
 		t.Error("cancelling a finished turn should report ErrUnknownTurn")
 	}
 }
@@ -909,6 +1103,14 @@ func TestLoop_MovedMemberIsToldItStartsOver(t *testing.T) {
 }
 
 // promptOf is the brief a turn's run started with, as its transcript has it.
+// systemPromptOf is the system prompt a turn's run was given: the role
+// card, and for a runtime that takes one with every run the standing
+// instructions (design.md 5.23.1).
+func systemPromptOf(t *testing.T, turn store.Turn) string {
+	t.Helper()
+	return specOf(t, turn).SystemPrompt
+}
+
 func promptOf(t *testing.T, turn store.Turn) string {
 	t.Helper()
 	for _, line := range strings.Split(transcriptOf(t, turn), "\n") {
@@ -950,13 +1152,15 @@ func TestLoop_LaterTurnsAreBriefedOnlyOnWhatIsNew(t *testing.T) {
 	turns := l.waitTurns(4, store.TurnDone, "Echo's second turn")
 	opening, later := promptOf(t, turns[3]), promptOf(t, turns[0])
 
-	// The first brief: asked in the room, the question comes last.
-	if !strings.Contains(opening, "Your reply will open topic #1.") || !strings.HasSuffix(opening, ">> [alice] @Echo start on the parser\n") {
+	// The first brief: who is in the chat; asked in the room, the question
+	// comes last.
+	if !strings.Contains(opening, "- Echo (you, the leader)") || !strings.Contains(opening, "Your reply will open topic #1.") || !strings.HasSuffix(opening, ">> [alice] @Echo start on the parser\n") {
 		t.Errorf("first brief:\n%s", opening)
 	}
-	// The second: what happened since, and no more.
+	// The second: what happened since, and no more; who is in the chat is
+	// as the first said.
 	for _, want := range []string{
-		"In this chat", "- Echo (you, the leader)", "- Other",
+		"As you were told earlier in this session, unchanged and not repeated here: who is in the chat.",
 		"New in the room since you last looked:",
 		"[alice] fyi the deploy is at noon",
 		"[alice] @Other look at the logs",
@@ -971,6 +1175,9 @@ func TestLoop_LaterTurnsAreBriefedOnlyOnWhatIsNew(t *testing.T) {
 	}
 	if !strings.HasSuffix(later, ">> [alice] and now?\n") {
 		t.Errorf("the question should come last:\n%s", later)
+	}
+	if strings.Contains(later, "- Echo (you, the leader)") {
+		t.Errorf("who is in the chat is not told again:\n%s", later)
 	}
 	// As lines of their own: the topic's title quotes Echo's first reply,
 	// which the fake runtime makes an echo of the question.
@@ -1001,8 +1208,8 @@ func TestLoop_CompactionShowsTheTopicInFullAgain(t *testing.T) {
 		session, _ = l.s.GetOpenSession(l.ctx, echo.ID)
 		return session.Compactions == 1
 	}, "the compaction to be counted")
-	if len(session.ThreadSeen) != 0 || session.RoomSeen == 0 {
-		t.Errorf("after compacting: topics read %v, room read to %d; want none, and the room kept", session.ThreadSeen, session.RoomSeen)
+	if len(session.ThreadSeen) != 0 || session.RoomSeen == 0 || len(session.BriefSeen) != 0 {
+		t.Errorf("after compacting: topics read %v, room read to %d, parts seen %v; want none, and the room kept", session.ThreadSeen, session.RoomSeen, session.BriefSeen)
 	}
 
 	l.say("and now?", thread.ID)
@@ -1010,6 +1217,9 @@ func TestLoop_CompactionShowsTheTopicInFullAgain(t *testing.T) {
 	later := promptOf(t, turns[0])
 	if !strings.Contains(later, "in full") || !strings.Contains(later, "[Echo] Echo: ") {
 		t.Errorf("after a compaction the topic is shown in full, the agent's own words included:\n%s", later)
+	}
+	if !strings.Contains(later, "In this chat (mention one as @Name") {
+		t.Errorf("after a compaction the parts that change now and then are told again:\n%s", later)
 	}
 	if strings.Contains(later, "New in the room") || strings.Contains(later, "\n   [alice] @Echo start\n") {
 		t.Errorf("the room is still read from where the session left it:\n%s", later)
@@ -1026,8 +1236,52 @@ func TestLoop_ATurnThatNeverGotGoingLeavesThePositions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if session.RoomSeen != 0 || len(session.ThreadSeen) != 0 {
-		t.Errorf("a turn that failed before saying or doing anything read nothing: room %d, topics %v", session.RoomSeen, session.ThreadSeen)
+	if session.RoomSeen != 0 || len(session.ThreadSeen) != 0 || len(session.BriefSeen) != 0 {
+		t.Errorf("a turn that failed before saying or doing anything read nothing: room %d, topics %v, parts %v", session.RoomSeen, session.ThreadSeen, session.BriefSeen)
+	}
+}
+
+// A long message is cut short in a brief, its id given, and read whole
+// with read_message, lines and all; what the turn answers is told whole.
+// Another project's messages are not the turn's to read.
+func TestLoop_ALongMessageIsReadWholeWithReadMessage(t *testing.T) {
+	l := newLoop(t)
+	var long strings.Builder
+	for i := range 300 {
+		fmt.Fprintf(&long, "line %03d of the build log\n", i)
+	}
+	logged, err := l.h.PostUserMessage(l.ctx, store.NewMessage{RoomID: l.room.ID, UserID: l.user.ID, Body: long.String()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, _, err := l.s.CreateProject(l.ctx, store.NewProject{Name: "elsewhere"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	elsewhere, err := l.s.CreateMessage(l.ctx, store.NewMessage{RoomID: other.MainRoomID, SenderKind: store.SenderUser, UserID: l.user.ID, Body: "not yours"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	reader := l.member("Reader", map[string]any{"tool_calls": []any{
+		call(runtime.RoomToolReadMessage, map[string]any{"message": logged.ID}),
+		call(runtime.RoomToolReadMessage, map[string]any{"message": elsewhere.ID}),
+	}})
+	asked := l.say("@Reader what does the log say?\n"+long.String(), "", reader)
+	turns := l.waitTurns(1, store.TurnDone, "Reader's turn")
+
+	brief := promptOf(t, turns[0])
+	if !strings.Contains(brief, "line 100 of the build log") || !strings.Contains(brief, "more characters: read_message with message "+logged.ID+" reads it whole)") {
+		t.Errorf("the long message is cut in the brief, its id given:\n%s", brief)
+	}
+	if !strings.Contains(brief, ">> [alice] @Reader what does the log say?\nline 000 of the build log") || !strings.Contains(brief, "line 299 of the build log\n") {
+		t.Errorf("what the turn answers is told whole:\n%s", brief)
+	}
+	answer := l.root(l.topic(asked)).Body
+	if !strings.Contains(answer, "Message "+logged.ID+", from alice") || !strings.Contains(answer, "line 298 of the build log\nline 299 of the build log\n") {
+		t.Errorf("read_message reads it whole, lines kept:\n%s", answer)
+	}
+	if !strings.Contains(answer, "this chat has no message "+elsewhere.ID) || strings.Contains(answer, "not yours") {
+		t.Errorf("another project's message is not read:\n%s", answer)
 	}
 }
 
@@ -1061,9 +1315,9 @@ func TestLoop_AgentReadsAnotherTopicWithItsRoomTools(t *testing.T) {
 			t.Errorf("Reader's answer lacks %q:\n%s", want, answer)
 		}
 	}
-	// Every brief says the tools are there.
-	if prompt := promptOf(t, read); !strings.Contains(prompt, "use your veyloom tools: list_topics, read_topic, read_turn, read_room, search_messages") {
-		t.Errorf("the brief should say how to read more:\n%s", prompt)
+	// Every run is told the tools are there, in its standing instructions.
+	if standing := systemPromptOf(t, read); !strings.Contains(standing, "use your veyloom tools: list_topics, read_topic, read_turn, read_message, read_room, search_messages") {
+		t.Errorf("the standing instructions should say how to read more:\n%s", standing)
 	}
 }
 
@@ -1118,7 +1372,7 @@ func TestLoop_BriefSaysWhoIsAtWork(t *testing.T) {
 		"In this chat (mention one as @Name to hand something over):\n",
 		"At work right now:\n",
 		"- Worker, in topic #1, started just now; has changed auth/token.go; waits for a person to allow running `make test`\n",
-		"You are shown what is new",
+		">> [alice] @Helper how is it going?",
 	)
 
 	if _, err := l.h.DecideApproval(l.ctx, asked.ID, l.user.ID, runtime.Decision{Allow: true}, ""); err != nil {

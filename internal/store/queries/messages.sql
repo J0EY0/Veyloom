@@ -45,6 +45,13 @@ UPDATE messages SET body = $2, turn_id = $3, mentions = $4
 WHERE id = $1
 RETURNING *;
 
+-- name: SetMessageTitle :one
+-- Names the task a message hands on: a topic root an agent filled in with
+-- what it sent (design.md 5.24).
+UPDATE messages SET title = $2
+WHERE id = $1
+RETURNING *;
+
 -- name: ThreadSummaries :many
 -- What the room timeline shows under each topic root: reply count, last
 -- reply time, the latest turn, and, under the topic where the latest turn's

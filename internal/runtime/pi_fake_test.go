@@ -26,7 +26,9 @@ import (
 // otherwise plays the extension dialogs the prompt names, in order
 // (piScriptDialogs), and ends with a reply whose text is every answer it
 // got, as JSON by keyword; or, when the prompt names one, with what pi
-// does after the agent's run (piScriptEndings).
+// does after the agent's run (piScriptEndings). [steer] runs a tool until
+// a steer comes, which it takes in once the tool is done; [late] waits
+// for a steer that comes too late to be taken in.
 //
 // Like pi, once the agent is done it waits for its input to close,
 // answering get_state as it goes.
@@ -89,6 +91,8 @@ func fakePiMain() {
 		}
 		json.Unmarshal(raw, &cmd)
 		switch cmd.Type {
+		case "steer":
+			s.steered(raw)
 		case "get_state":
 			s.send(map[string]any{"id": cmd.ID, "type": "response", "command": "get_state", "success": true, "data": map[string]any{"sessionId": session, "isStreaming": false}})
 			got++
@@ -137,6 +141,51 @@ type piScript struct {
 	answers map[string]any
 	n       int
 	session string
+	// said are the steers that came, oldest first, not yet taken in.
+	said []string
+}
+
+// steered answers raw when it is a steer command, keeping its text, as pi
+// queues it. It reports whether it was one.
+func (s *piScript) steered(raw []byte) bool {
+	var cmd struct {
+		ID      string `json:"id"`
+		Type    string `json:"type"`
+		Message string `json:"message"`
+	}
+	if json.Unmarshal(raw, &cmd) != nil || cmd.Type != "steer" {
+		return false
+	}
+	s.said = append(s.said, cmd.Message)
+	s.send(map[string]any{"id": cmd.ID, "type": "response", "command": "steer", "success": true})
+	return true
+}
+
+// heard is the oldest steer not yet taken in, waiting up to wait for one
+// to come.
+func (s *piScript) heard(wait time.Duration) (string, bool) {
+	deadline := time.After(wait)
+	for len(s.said) == 0 {
+		select {
+		case raw, ok := <-s.in:
+			if !ok {
+				return "", false
+			}
+			s.steered(raw)
+		case <-deadline:
+			return "", false
+		}
+	}
+	text := s.said[0]
+	s.said = s.said[1:]
+	return text, true
+}
+
+// takeIn hands text to the agent, as pi does a steer before its next step.
+func (s *piScript) takeIn(text string) {
+	msg := map[string]any{"role": "user", "content": []any{map[string]any{"type": "text", "text": text}}}
+	s.send(map[string]any{"type": "message_start", "message": msg})
+	s.send(map[string]any{"type": "message_end", "message": msg})
 }
 
 func (s *piScript) send(v any) {
@@ -164,7 +213,7 @@ func (s *piScript) ask(keyword string, wait time.Duration) {
 				return
 			}
 			var resp map[string]any
-			if json.Unmarshal(raw, &resp) != nil || resp["type"] != "extension_ui_response" {
+			if s.steered(raw) || json.Unmarshal(raw, &resp) != nil || resp["type"] != "extension_ui_response" {
 				continue
 			}
 			if resp["id"] != id {
@@ -186,6 +235,20 @@ func (s *piScript) play(prompt string) {
 	s.send(map[string]any{"type": "agent_start"})
 	for _, keyword := range strings.Fields(prompt) {
 		switch keyword {
+		case "[steer]":
+			s.send(map[string]any{"type": "tool_execution_start", "toolCallId": "tc-steer", "toolName": "bash", "args": map[string]any{"command": "sleep 1"}})
+			text, ok := s.heard(10 * time.Second)
+			s.send(map[string]any{"type": "tool_execution_end", "toolCallId": "tc-steer", "toolName": "bash", "result": "slept", "isError": false})
+			if ok {
+				s.takeIn(text)
+				s.answers["[steer]"] = text
+			}
+		case "[late]":
+			// It comes as the run ends: pi keeps it, and the run is over.
+			s.send(map[string]any{"type": "tool_execution_start", "toolCallId": "tc-late", "toolName": "bash", "args": map[string]any{"command": "true"}})
+			s.heard(10 * time.Second)
+			s.said = nil
+			s.send(map[string]any{"type": "tool_execution_end", "toolCallId": "tc-late", "toolName": "bash", "result": "", "isError": false})
 		case "[retry]":
 			s.send(map[string]any{"type": "auto_retry_start", "attempt": 1, "maxAttempts": 3, "delayMs": 2000, "errorMessage": "529 overloaded"})
 			s.send(map[string]any{"type": "auto_retry_end", "success": false, "attempt": 3, "finalError": "529 overloaded_error: Overloaded"})
@@ -208,7 +271,7 @@ func (s *piScript) play(prompt string) {
 		case raw, ok := <-s.in:
 			if ok {
 				var resp map[string]any
-				if json.Unmarshal(raw, &resp) == nil && resp["type"] == "extension_ui_response" {
+				if !s.steered(raw) && json.Unmarshal(raw, &resp) == nil && resp["type"] == "extension_ui_response" {
 					s.answers["unexpected "+fmt.Sprint(resp["id"])] = resp
 				}
 				continue
@@ -303,6 +366,9 @@ func (s *piScript) state(compacting bool) bool {
 		var cmd struct {
 			ID   string `json:"id"`
 			Type string `json:"type"`
+		}
+		if s.steered(raw) {
+			continue
 		}
 		if json.Unmarshal(raw, &cmd) == nil && cmd.Type == "get_state" {
 			s.send(map[string]any{"id": cmd.ID, "type": "response", "command": "get_state", "success": true,

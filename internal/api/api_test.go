@@ -80,6 +80,24 @@ func TestRuntimesEndpoint(t *testing.T) {
 	}
 }
 
+// How each runtime takes its turns, the one table of it (docs/design.md
+// 5.23.9), for the web client to go by.
+func TestRuntimeTraitsEndpoint(t *testing.T) {
+	handler := NewHandler(Deps{Machines: stubMachines{}})
+	rec := get(t, handler, "/api/v1/runtime-traits")
+	var body RuntimeTraitsResponse
+	if err := json.NewDecoder(rec.Body).Decode(&body); err != nil || rec.Code != http.StatusOK {
+		t.Fatalf("%d %v", rec.Code, err)
+	}
+	codex, claude := body.Traits["codex"], body.Traits["claude"]
+	if codex.SystemPromptEachRun || codex.WikiWhenReadOnly || !codex.Steer || !claude.SystemPromptEachRun || !claude.WikiWhenReadOnly {
+		t.Errorf("traits = %+v", body.Traits)
+	}
+	if _, ok := body.Traits["pi"]; !ok || len(body.Traits) != 4 {
+		t.Errorf("every runtime with a runner: %+v", body.Traits)
+	}
+}
+
 func TestMachinesEndpoint(t *testing.T) {
 	now := time.Date(2026, 9, 13, 10, 0, 0, 0, time.UTC)
 	handler := NewHandler(Deps{

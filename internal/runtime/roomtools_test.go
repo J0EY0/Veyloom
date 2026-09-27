@@ -242,7 +242,7 @@ func TestClaude_RoomToolsInEveryPreset(t *testing.T) {
 			args := strings.Split(strings.TrimSpace(string(raw)), "\n")
 
 			mcpEndpoint(t, flagValue(args, "--mcp-config"), "/opt/veyloom")
-			want := "mcp__veyloom__list_topics,mcp__veyloom__read_topic,mcp__veyloom__read_turn,mcp__veyloom__read_room,mcp__veyloom__search_messages," +
+			want := "mcp__veyloom__list_topics,mcp__veyloom__read_topic,mcp__veyloom__read_turn,mcp__veyloom__read_message,mcp__veyloom__read_room,mcp__veyloom__search_messages," +
 				"mcp__veyloom__search_wiki,mcp__veyloom__read_wiki,mcp__veyloom__related_wiki,mcp__veyloom__write_wiki,mcp__veyloom__patch_wiki,mcp__veyloom__deprecate_wiki," +
 				"mcp__veyloom__remember,mcp__veyloom__forget"
 			if got := flagValue(args, "--allowedTools"); got != want {

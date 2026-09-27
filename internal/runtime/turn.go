@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"math"
 	"time"
 )
@@ -138,6 +139,18 @@ const (
 	// the request back, as Claude Code does when one of its hooks settles a
 	// permission first. People stop being asked.
 	EventApprovalWithdrawn EventKind = "approval_withdrawn"
+	// EventSteer reports that the runtime took in, while the turn ran, what
+	// Turn.Steer passed it as SteerID: Text is what it was given
+	// (design.md 5.23.2).
+	EventSteer EventKind = "steer"
+	// EventSteerDropped reports that what Turn.Steer passed as SteerID will
+	// not reach the agent in this turn: it was taken, but the turn ended
+	// before the agent got to it (or, said by the machine, it was refused).
+	EventSteerDropped EventKind = "steer_dropped"
+	// EventQuota reports where the runtime's account stands against its
+	// usage limits (Event.Quota), whenever the runtime tells of it
+	// (design.md 5.23.3).
+	EventQuota EventKind = "quota"
 )
 
 // Approval kinds, as carried in Event.ApprovalKind. Empty means tool_use.
@@ -173,6 +186,20 @@ type Event struct {
 	Tool  string    `json:"tool,omitempty"`
 	Input string    `json:"input,omitempty"`
 	Path  string    `json:"path,omitempty"`
+	// CallID is set on EventToolCall and EventToolResult when the runtime
+	// names its calls: a result carries its call's, so calls made at once,
+	// as when Claude Code reads two files, are told apart.
+	CallID string `json:"call_id,omitempty"`
+	// Seq numbers the turn's events from 1 in the order the hub takes them
+	// in; the hub sets it, a runtime leaves it alone. The transcript and
+	// the room's stream carry the same numbers, so a reader can lay what
+	// it heard live over what it read of the transcript.
+	Seq int64 `json:"seq,omitempty"`
+	// SteerID is set on EventSteer and EventSteerDropped: the id Turn.Steer
+	// was given.
+	SteerID string `json:"steer_id,omitempty"`
+	// Quota is set on EventQuota.
+	Quota *Quota `json:"quota,omitempty"`
 	// SessionRef is set on EventSession.
 	SessionRef string `json:"session_ref,omitempty"`
 	// Phase is set on EventCompaction: one of the Compaction constants.
@@ -269,6 +296,26 @@ type Result struct {
 	Usage Usage `json:"usage"`
 	// Failure names why the turn failed, when the runtime could tell.
 	Failure FailureKind `json:"failure,omitempty"`
+	// RetryAt is, for a failure of the account's (FailureKind.Account),
+	// when it is expected to pass, when the runtime said: the reset of the
+	// usage limit that was reached.
+	RetryAt time.Time `json:"retry_at,omitzero"`
+}
+
+// Quota is where a runtime's account stands against its usage limits, as
+// the runtime reported it: the limit nearest to being reached, or the one
+// reached.
+type Quota struct {
+	// Limited says the account takes no more turns until the limit resets,
+	// or, without a reset time, until a person sees to it.
+	Limited bool `json:"limited,omitempty"`
+	// Window names the limit by its span: "5h", "7d", "7d opus", or the
+	// runtime's own word for it; empty when the runtime did not say.
+	Window string `json:"window,omitempty"`
+	// UsedPercent is how much of it is used, 0 to 100; nil when not known.
+	UsedPercent *int `json:"used_percent,omitempty"`
+	// ResetsAt is when it resets; zero when not known.
+	ResetsAt time.Time `json:"resets_at,omitzero"`
 }
 
 // Usage is the tokens a turn spent, in parts that do not overlap: fresh
@@ -319,7 +366,16 @@ type Turn interface {
 	Result() (Result, error)
 	Cancel()
 	Answer(approvalID string, d Decision) error
+	// Steer passes text to the agent while the turn runs, the runtime's own
+	// way (design.md 5.23.2), naming it id: an EventSteer tells when the
+	// runtime takes it in, an EventSteerDropped that the turn ended before
+	// the agent got to it. ErrSteerRefused when the turn cannot take it
+	// now, being about to end say, or the runtime takes nothing mid-turn.
+	Steer(id, text string) error
 }
+
+// ErrSteerRefused is what Turn.Steer says of text the turn cannot take.
+var ErrSteerRefused = errors.New("the turn takes no more input now")
 
 // Runner starts turns for one runtime. Real runtimes wrap a CLI; Fake needs
 // nothing and is used in tests and demos.

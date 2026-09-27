@@ -123,12 +123,16 @@ func (h *Hub) Branches(ctx context.Context, projectID string) (Branches, error) 
 	}
 	out.Main.Git, out.Main.Branch, out.Main.Changed = true, res.Repo.Branch, res.Repo.Changed
 
+	names := make([]string, len(members))
+	for i, m := range members {
+		names[i] = m.DisplayName
+	}
 	out.Members = make([]MemberBranch, len(employees))
 	var wg sync.WaitGroup
 	for i, m := range employees {
 		out.Members[i] = MemberBranch{
 			MemberID: m.ID, Name: m.DisplayName, Branch: m.Branch, Dir: m.WorktreeDir, Prepared: m.PreparedAt != nil,
-			Busy: h.turns.busy(m.ID), Draft: h.mergeDraft(ctx, project, m),
+			Busy: h.turns.busy(m.ID), Draft: h.mergeDraft(ctx, project, m, names),
 		}
 		if m.WorktreeDir == "" {
 			continue
@@ -230,8 +234,9 @@ func (h *Hub) overlaps(ctx context.Context, members []store.Member, branches []M
 }
 
 // mergeDraft is a first line for the commit that puts a member's work on
-// the main line: what it was last asked in the chat, the mention left out.
-func (h *Hub) mergeDraft(ctx context.Context, project store.Project, member store.Member) string {
+// the main line: what it was last asked in the chat, without the @s of
+// the names, the room's given, it began with.
+func (h *Hub) mergeDraft(ctx context.Context, project store.Project, member store.Member, names []string) string {
 	turns, err := h.store.ListRoomTurns(ctx, project.MainRoomID, turnsLooked)
 	if err != nil {
 		return ""
@@ -244,8 +249,8 @@ func (h *Hub) mergeDraft(ctx context.Context, project store.Project, member stor
 		if err != nil {
 			return ""
 		}
-		line, _, _ := strings.Cut(strings.TrimSpace(asked.Body), "\n")
-		line = strings.TrimSpace(strings.TrimPrefix(line, "@"+member.DisplayName))
+		line, _, _ := strings.Cut(store.StripAsk(asked.Body, names), "\n")
+		line = strings.TrimSpace(line)
 		if runes := []rune(line); len(runes) > 72 {
 			line = strings.TrimSpace(string(runes[:72]))
 		}

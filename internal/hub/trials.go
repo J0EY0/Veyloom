@@ -34,7 +34,7 @@ func mayChangeSkill(at *activeTurn, tw *turnWiki, name, owner string) bool {
 	if at.upkeep != nil && owner != "" && owner == tw.project.WikiSlug {
 		return true
 	}
-	return at.spec.Skills != nil && slices.ContainsFunc(at.spec.Skills.Skills, func(s runtime.Skill) bool { return s.Name == name })
+	return at.spec.Skills != nil && slices.ContainsFunc(at.spec.Skills.Skills, func(s runtime.Skill) bool { return !s.Builtin && s.Name == name })
 }
 
 // startTrial puts the skill called name on trial for the change the turn

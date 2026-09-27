@@ -16,19 +16,23 @@ import (
 // SessionEndReason says why a member's session is over.
 type SessionEndReason string
 
-// The reasons a session ends. The first three are found when a turn starts
-// and the member no longer matches what the session was opened on; the next
-// three come from a turn that could not resume it; the last two are people's
-// doing.
+// The reasons a session ends. The first four are found when a turn starts
+// and the member no longer matches what the session was opened on, or its
+// runtime was told when the session started; the next three come from a
+// turn that could not resume it; the last three are people's doing.
 const (
 	SessionRuntimeChanged  SessionEndReason = "runtime_changed"
 	SessionMachineChanged  SessionEndReason = "machine_changed"
 	SessionDirChanged      SessionEndReason = "dir_changed"
+	SessionRoleCardChanged SessionEndReason = "role_card_changed"
 	SessionNotFound        SessionEndReason = "not_found"
 	SessionContextOverflow SessionEndReason = "context_overflow"
 	SessionResumeFailed    SessionEndReason = "resume_failed"
 	SessionManual          SessionEndReason = "manual"
-	SessionMemberRemoved   SessionEndReason = "member_removed"
+	// SessionCancelled: a person cancelled a turn asking for a new session
+	// with it (design.md 5.23.8).
+	SessionCancelled     SessionEndReason = "cancelled"
+	SessionMemberRemoved SessionEndReason = "member_removed"
 )
 
 // MemberSession is one conversation of a member with its runtime. A member
@@ -48,6 +52,12 @@ type MemberSession struct {
 	// Ref is the runtime's own reference, stored as soon as the runtime
 	// reports it. Empty means the session has not run a turn yet.
 	Ref string `json:"session_ref,omitempty"`
+	// RoleCardDigest is a digest of the role card the session started
+	// with, set with Ref, for a runtime that fixes its system prompt when a
+	// session starts and ignores what a resume passes (Codex): a turn whose
+	// agent's role card differs opens a new session. Empty for a runtime
+	// that takes its system prompt with every run.
+	RoleCardDigest string `json:"role_card_digest,omitempty"`
 	// RoomSeen and ThreadSeen are how far the session has read, as
 	// messages.seq: where the room stood when its last brief was put
 	// together, and the same per topic it was briefed in. A brief tells a
@@ -61,6 +71,11 @@ type MemberSession struct {
 	// pages changed since. Nil until the first, and again after a
 	// compaction, so that the next brief lists them all.
 	WikiSeen *time.Time `json:"wiki_seen,omitempty"`
+	// BriefSeen is what the session was last shown of the parts of a brief
+	// that change now and then (design.md 5.23.1), a digest by part: a
+	// brief leaves out a part the session saw as it is. Empty in a new
+	// session, and again after a compaction.
+	BriefSeen map[string]string `json:"brief_seen,omitempty"`
 	// Compactions counts the times the runtime compacted the session.
 	Compactions int              `json:"compactions"`
 	StartedAt   time.Time        `json:"started_at"`
@@ -82,8 +97,9 @@ type NewMemberSession struct {
 	MachineID string
 	WorkDir   string
 	// Ref is set when the runtime reported its reference before the row
-	// existed.
-	Ref string
+	// existed, and RoleCardDigest with it (see MemberSession).
+	Ref            string
+	RoleCardDigest string
 	// Replaces says why the member's open session, if it has one, ends
 	// here. Empty means the member is expected to have none open; when it
 	// does, StartSession is ErrConflict.
@@ -156,12 +172,13 @@ func (s *Store) StartSession(ctx context.Context, n NewMemberSession) (MemberSes
 		}
 	}
 	row, err := q.CreateSession(ctx, db.CreateSessionParams{
-		ID:         id,
-		MemberID:   memberID,
-		Runtime:    n.Runtime,
-		MachineID:  machineID,
-		WorkDir:    n.WorkDir,
-		SessionRef: n.Ref,
+		ID:             id,
+		MemberID:       memberID,
+		Runtime:        n.Runtime,
+		MachineID:      machineID,
+		WorkDir:        n.WorkDir,
+		SessionRef:     n.Ref,
+		RoleCardDigest: n.RoleCardDigest,
 	})
 	if err != nil {
 		return MemberSession{}, mapPGError("start session", err)
@@ -185,13 +202,15 @@ func (s *Store) EndOpenSession(ctx context.Context, memberID string, reason Sess
 	return nil
 }
 
-// SetSessionRef stores the runtime's own reference to a session.
-func (s *Store) SetSessionRef(ctx context.Context, id, ref string) error {
+// SetSessionRef stores the runtime's own reference to a session, with the
+// digest of the role card the run that reported it was given (see
+// MemberSession.RoleCardDigest).
+func (s *Store) SetSessionRef(ctx context.Context, id, ref, roleCardDigest string) error {
 	uid, err := parseUUID(id)
 	if err != nil {
 		return err
 	}
-	n, err := s.q.SetSessionRef(ctx, db.SetSessionRefParams{ID: uid, SessionRef: ref})
+	n, err := s.q.SetSessionRef(ctx, db.SetSessionRefParams{ID: uid, SessionRef: ref, RoleCardDigest: roleCardDigest})
 	if err != nil {
 		return fmt.Errorf("set ref of session %s: %w", id, err)
 	}
@@ -223,13 +242,20 @@ func (s *Store) ListMemberSessions(ctx context.Context, memberID string) ([]Memb
 type Reading struct {
 	// Position is where the room stood when the brief was put together, as
 	// messages.seq; the room's position and that of the topic ThreadID,
-	// the one the turn was in, move up to it.
-	Position int64
-	ThreadID string
+	// the one the turn was in, move up to it. ThreadPosition, when later,
+	// is how far into that topic the turn read as it ran, passed what was
+	// said there meanwhile: the topic's position moves up to it, the
+	// room's does not.
+	Position       int64
+	ThreadID       string
+	ThreadPosition int64
 	// Wiki is where the project wiki stood: its newest change the brief
 	// knew of. Zero when the brief showed no wiki, which leaves the
 	// session's position in it as it was.
 	Wiki time.Time
+	// Parts is what the brief showed of its parts that change now and
+	// then, by part; nil leaves what the session saw as it was.
+	Parts map[string]string
 }
 
 // AdvanceSession moves a session's reading positions forward to where
@@ -243,9 +269,16 @@ func (s *Store) AdvanceSession(ctx context.Context, id string, r Reading) error 
 	if _, err := parseUUID(r.ThreadID); err != nil {
 		return err
 	}
+	var parts []byte
+	if r.Parts != nil {
+		if parts, err = json.Marshal(r.Parts); err != nil {
+			return fmt.Errorf("advance session %s: %w", id, err)
+		}
+	}
 	n, err := s.q.AdvanceSession(ctx, db.AdvanceSessionParams{
-		ID: uid, RoomSeen: r.Position, ThreadID: r.ThreadID, ThreadSeen: r.Position,
-		WikiSeen: pgtype.Timestamptz{Time: r.Wiki, Valid: !r.Wiki.IsZero()},
+		ID: uid, RoomSeen: r.Position, ThreadID: r.ThreadID, ThreadSeen: max(r.Position, r.ThreadPosition),
+		WikiSeen:  pgtype.Timestamptz{Time: r.Wiki, Valid: !r.Wiki.IsZero()},
+		BriefSeen: parts,
 	})
 	if err != nil {
 		return fmt.Errorf("advance session %s: %w", id, err)
@@ -259,8 +292,8 @@ func (s *Store) AdvanceSession(ctx context.Context, id string, r Reading) error 
 // NoteSessionCompactions counts compactions the runtime reported. A
 // compaction forgets detail, so what the session had read of each topic is
 // forgotten with it: topics are shown in full again the next time the
-// session is briefed in them, and so is the wiki's catalog. Its place in
-// the room stays.
+// session is briefed in them, and so are the wiki's catalog and the parts
+// of a brief that change now and then. Its place in the room stays.
 func (s *Store) NoteSessionCompactions(ctx context.Context, id string, count int) error {
 	if count <= 0 {
 		return nil
@@ -337,20 +370,22 @@ func (s *Store) ResetSession(ctx context.Context, memberID string) error {
 
 func toMemberSession(row db.MemberSession) MemberSession {
 	out := MemberSession{
-		ID:          uuidString(row.ID),
-		MemberID:    uuidString(row.MemberID),
-		Runtime:     row.Runtime,
-		MachineID:   uuidString(row.MachineID),
-		WorkDir:     row.WorkDir,
-		Ref:         row.SessionRef,
-		RoomSeen:    row.RoomSeen,
-		Compactions: int(row.Compactions),
-		StartedAt:   row.StartedAt.Time,
-		EndReason:   SessionEndReason(row.EndReason),
+		ID:             uuidString(row.ID),
+		MemberID:       uuidString(row.MemberID),
+		Runtime:        row.Runtime,
+		MachineID:      uuidString(row.MachineID),
+		WorkDir:        row.WorkDir,
+		Ref:            row.SessionRef,
+		RoleCardDigest: row.RoleCardDigest,
+		RoomSeen:       row.RoomSeen,
+		Compactions:    int(row.Compactions),
+		StartedAt:      row.StartedAt.Time,
+		EndReason:      SessionEndReason(row.EndReason),
 	}
 	// The column is written by this package alone; should it ever hold
 	// something else, the session has simply read no topic.
 	_ = json.Unmarshal(row.ThreadSeen, &out.ThreadSeen)
+	_ = json.Unmarshal(row.BriefSeen, &out.BriefSeen)
 	if row.WikiSeen.Valid {
 		seen := row.WikiSeen.Time
 		out.WikiSeen = &seen

@@ -2,6 +2,8 @@ package hub
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -16,7 +18,9 @@ import (
 type sessionStore interface {
 	GetOpenSession(ctx context.Context, memberID string) (store.MemberSession, error)
 	StartSession(ctx context.Context, n store.NewMemberSession) (store.MemberSession, error)
-	SetSessionRef(ctx context.Context, id, ref string) error
+	SetSessionRef(ctx context.Context, id, ref, roleCardDigest string) error
+	EndOpenSession(ctx context.Context, memberID string, reason store.SessionEndReason) error
+	TurnAtSessionEnd(ctx context.Context, memberID, sessionID string) (store.Turn, error)
 	LatestSession(ctx context.Context, memberID string) (store.MemberSession, error)
 	AdvanceSession(ctx context.Context, id string, r store.Reading) error
 	NoteSessionCompactions(ctx context.Context, id string, count int) error
@@ -38,6 +42,10 @@ type newSession struct {
 	// the room is told: nobody asked for it. A person who asked for a new
 	// session needs no telling.
 	Announce bool
+	// Stopped is the turn a person cancelled asking for the new session
+	// (quiet.go): the agent is told what it was doing was stopped on
+	// purpose, lest it take that up again.
+	Stopped *stoppedTurn
 }
 
 func (m *TurnManager) sessionFor(ctx context.Context, member store.Member, agent store.Agent, dir string) (store.MemberSession, newSession, error) {
@@ -56,6 +64,9 @@ func (m *TurnManager) sessionFor(ctx context.Context, member store.Member, agent
 		// person asked for a new session. The agent is told all the same.
 		if last, err := m.store.LatestSession(ctx, member.ID); err == nil {
 			follows = newSession{Reason: last.EndReason}
+			if last.EndReason == store.SessionCancelled {
+				follows.Stopped = m.stoppedIn(ctx, member, last.ID)
+			}
 		} else if !errors.Is(err, store.ErrNotFound) {
 			return store.MemberSession{}, newSession{}, fmt.Errorf("find session: %w", err)
 		}
@@ -79,7 +90,9 @@ func (m *TurnManager) sessionFor(ctx context.Context, member store.Member, agent
 // in dir, or "" when it can. A session belongs to the runtime, the machine
 // and the directory it was opened on: no runtime resumes another's session,
 // session files do not travel between machines, and resuming in another
-// directory fails or stalls depending on the CLI.
+// directory fails or stalls depending on the CLI. A runtime that fixed the
+// role card when the session started is told a new one only in a new
+// session.
 func staleReason(open store.MemberSession, member store.Member, agent store.Agent, dir string) store.SessionEndReason {
 	switch {
 	case open.Runtime != agent.Runtime:
@@ -88,8 +101,27 @@ func staleReason(open store.MemberSession, member store.Member, agent store.Agen
 		return store.SessionMachineChanged
 	case !sameDir(open.WorkDir, dir):
 		return store.SessionDirChanged
+	case open.Started() && open.RoleCardDigest != "" && open.RoleCardDigest != roleCardDigest(agent.Runtime, agent.RoleCard):
+		return store.SessionRoleCardChanged
 	}
 	return ""
+}
+
+// roleCardDigest is what a session keeps of the role card it started with
+// (store.MemberSession.RoleCardDigest), for a runtime that fixes its system
+// prompt when a session starts and ignores what a resume passes: Codex
+// fixes a thread's developer instructions, which systemPrompt makes the
+// role card alone for it, the standing instructions going in the brief
+// (design.md 5.6, 5.23.1). Empty for a runtime that takes its system
+// prompt with every run: its sessions fix nothing. An empty role card has
+// a digest like any other, so that writing one where there was none
+// counts as a change.
+func roleCardDigest(runtimeName, roleCard string) string {
+	if runtime.TraitsOf(runtimeName).SystemPromptEachRun {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(roleCard))
+	return hex.EncodeToString(sum[:8])
 }
 
 // sameDir compares two directories as written. The paths belong to the
@@ -130,14 +162,15 @@ func (m *TurnManager) noteSessionRef(at *activeTurn, ref string) {
 	at.enqueue(func() { m.saveSessionRef(at, ref) })
 }
 
-// saveSessionRef stores ref on the turn's session. Runs on the executor.
+// saveSessionRef stores ref on the turn's session, with the role card the
+// run that reported it was given. Runs on the executor.
 func (m *TurnManager) saveSessionRef(at *activeTurn, ref string) {
 	if at.turn.SessionID == "" {
 		return
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), m.storeTimeout)
 	defer cancel()
-	if err := m.store.SetSessionRef(ctx, at.turn.SessionID, ref); err != nil {
+	if err := m.store.SetSessionRef(ctx, at.turn.SessionID, ref, roleCardDigest(at.agent.Runtime, at.agent.RoleCard)); err != nil {
 		m.logger.Error("save session ref", "member", at.member.ID, "session", at.turn.SessionID, "err", err)
 	}
 }
@@ -152,12 +185,19 @@ func sessionEndPhrase(reason store.SessionEndReason) string {
 		return "the agent now runs on a different machine"
 	case store.SessionDirChanged:
 		return "its working directory changed"
+	case store.SessionRoleCardChanged:
+		return "its role card changed"
 	case store.SessionNotFound:
 		return "the runtime no longer has it"
 	case store.SessionContextOverflow:
 		return "it outgrew the model's context window"
 	case store.SessionManual:
 		return "a person asked for a new one"
+	case store.SessionCancelled:
+		// The one reason told to the new session alone: what the turn was
+		// doing was stopped on purpose, maybe stuck, and is not to be taken
+		// up again of its own accord.
+		return "a person cancelled your last turn and asked for a new one; what that turn was doing was stopped on purpose, so do not take it up again unless asked"
 	default:
 		return "resuming it failed"
 	}
@@ -204,14 +244,17 @@ func endReasonOf(kind runtime.FailureKind) store.SessionEndReason {
 // the brief could not be built) are not retried: a new session changes
 // nothing about them.
 func (m *TurnManager) retryFresh(at *activeTurn, done protocol.TurnDone) bool {
-	if done.Error == "" || done.Cancelled {
+	// The account's failure is no session's: a new one would fail alike
+	// (design.md 5.23.3).
+	if done.Error == "" || done.Cancelled || done.Result.Failure.Account() {
 		return false
 	}
 	at.mu.Lock()
 	acted := at.output.Len() > 0 || at.toolActivity || at.segments > 0
-	ok := at.resumed && !acted && !at.retried && !at.noRetry && !at.closed
+	ok := at.resumed && !acted && !at.retried && !at.noRetry && !at.closed && !at.cancelAsked
 	if ok {
-		at.retried = true
+		// Passed nothing until the second run is under way (rerun).
+		at.retried, at.noSteer = true, true
 	}
 	at.mu.Unlock()
 	if !ok {
@@ -231,6 +274,13 @@ func (m *TurnManager) rerun(at *activeTurn, first protocol.TurnDone) {
 		m.OnDone(at.turn.ID, first)
 	}
 
+	// Cancelled while it waited to run again: it ends so.
+	if m.cancelledMeanwhile(at, first) {
+		return
+	}
+	// What the first run was passed waits for the turn after: the second
+	// run's brief is put together anew.
+	m.restartSteers(ctx, at)
 	fresh := &freshSession{id: store.NewID(), reason: endReasonOf(first.Result.Failure)}
 	m.logger.Info("session would not resume; running the turn again in a new one",
 		"member", at.member.ID, "turn", at.turn.ID, "session", at.turn.SessionID, "reason", fresh.reason, "err", first.Error)
@@ -248,8 +298,10 @@ func (m *TurnManager) rerun(at *activeTurn, first protocol.TurnDone) {
 
 	// A session that has read nothing: the brief is the whole story.
 	b, err := m.brief.Build(ctx, briefInput{
-		Member: at.member, Thread: at.thread, Triggers: at.triggers, NewSession: endReasonOf(first.Result.Failure),
-		Busy: m.busyIn(at.thread.RoomID, at.member.ID), Dir: at.dir, Relays: at.relays, HandedOn: at.handedOn, HandedBy: at.handedBy,
+		Member: at.member, Runtime: at.agent.Runtime, Thread: at.thread, Triggers: at.triggers, NewSession: endReasonOf(first.Result.Failure),
+		Skills: at.spec.Skills.LibraryNames(), BuiltinSkills: at.spec.Skills.BuiltinNames(), Busy: m.busyIn(at.thread.RoomID, at.member.ID), Dir: at.dir,
+		Relays: at.relays, HandedOn: at.handedOn,
+		HandedBy: at.handedBy,
 	})
 	if err != nil {
 		giveUp("brief", err)
@@ -263,19 +315,23 @@ func (m *TurnManager) rerun(at *activeTurn, first protocol.TurnDone) {
 	}
 
 	at.mu.Lock()
+	// The run in flight's: asking it for a reply goes on in its session.
+	at.spec = spec
 	at.fresh = fresh
 	at.resumed = false
 	at.sessionRef = ""
-	at.position, at.wikiPosition = b.Position, b.Wiki
+	at.position, at.wikiPosition, at.briefParts = b.Position, b.Wiki, b.Parts
 	at.spent = at.spent.Plus(first.Result.Usage)
 	if at.transcript != nil {
 		if err := at.transcript.write(transcriptLine{Kind: "restart", TurnID: at.turn.ID, Runtime: at.agent.Runtime, Spec: transcriptSpec(spec), Error: first.Error}); err != nil {
 			m.logger.Warn("transcript", "turn", at.turn.ID, "err", err)
 		}
 	}
+	// For the room only: the transcript tells of it as the restart.
+	note := runtime.Event{Kind: runtime.EventStatus, At: time.Now(), Text: "could not resume the session; starting a new one"}
+	at.number(&note)
 	at.mu.Unlock()
 
-	note := runtime.Event{Kind: runtime.EventStatus, At: time.Now(), Text: "could not resume the session; starting a new one"}
 	m.publish(Event{Kind: EventTurnEvent, RoomID: at.thread.RoomID, At: note.At, TurnID: at.turn.ID, TurnEvent: &note})
 
 	conn, ok := m.connFor(at.member.MachineID)
@@ -285,13 +341,18 @@ func (m *TurnManager) rerun(at *activeTurn, first protocol.TurnDone) {
 	}
 	if err := conn.Send(ctx, protocol.StartTurn{TurnID: at.turn.ID, Runtime: at.agent.Runtime, Spec: spec}); err != nil {
 		giveUp("dispatch", err)
+		return
 	}
+	m.sentRun(ctx, conn, at)
+	at.mu.Lock()
+	at.noSteer = false
+	at.mu.Unlock()
 }
 
 // adopt makes a session on trial the member's session: the one that would
 // not resume ends, for the reason found, and the turn moves to the new one.
 func (m *TurnManager) adopt(ctx context.Context, at *activeTurn, fresh *freshSession) error {
-	session, err := m.store.StartSession(ctx, store.NewMemberSession{
+	n := store.NewMemberSession{
 		ID:        fresh.id,
 		MemberID:  at.member.ID,
 		Runtime:   at.agent.Runtime,
@@ -299,7 +360,14 @@ func (m *TurnManager) adopt(ctx context.Context, at *activeTurn, fresh *freshSes
 		WorkDir:   at.dir,
 		Ref:       fresh.ref,
 		Replaces:  fresh.reason,
-	})
+	}
+	if fresh.ref != "" {
+		// Started already: by the run with the turn's role card. One not
+		// started yet is told its role card as saveSessionRef stores its
+		// reference.
+		n.RoleCardDigest = roleCardDigest(at.agent.Runtime, at.agent.RoleCard)
+	}
+	session, err := m.store.StartSession(ctx, n)
 	if err != nil {
 		return err
 	}
@@ -326,7 +394,7 @@ func (m *TurnManager) adopt(ctx context.Context, at *activeTurn, fresh *freshSes
 func (m *TurnManager) settleReading(ctx context.Context, at *activeTurn) {
 	at.mu.Lock()
 	sessionID := at.turn.SessionID
-	reading := store.Reading{Position: at.position, ThreadID: at.thread.ID, Wiki: at.wikiPosition}
+	reading := store.Reading{Position: at.position, ThreadID: at.thread.ID, ThreadPosition: at.steerRead, Wiki: at.wikiPosition, Parts: at.briefParts}
 	acted := at.output.Len() > 0 || at.toolActivity || at.segments > 0
 	compactions := at.compactions
 	at.mu.Unlock()

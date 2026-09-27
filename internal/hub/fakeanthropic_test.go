@@ -8,6 +8,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeAnthropic is a scripted stand-in for the Anthropic Messages API, so
@@ -15,14 +16,19 @@ import (
 // account: point ANTHROPIC_BASE_URL at it. The newest user message decides
 // the reply. A line holding `USE_TOOL <name> <json input>` makes the model
 // call that tool with that input (the last such line counts); tool results
-// come back as `RESULT <json>`; anything else gets "ok". It keeps how many messages each request carried, which shows
-// whether a turn resumed the conversation before it.
+// come back as `RESULT <json>`; anything else gets "ok". `WAIT_MS <n>` in
+// the newest message holds the answer back n milliseconds, as a model
+// thinking would; `API_ERROR <status> <type> <message>` answers with that
+// HTTP status and Anthropic error instead. It keeps how many messages each request carried, which
+// shows whether a turn resumed the conversation before it.
 type fakeAnthropic struct {
 	*httptest.Server
 	mu       sync.Mutex
 	tools    int
 	replies  int
 	messages []int
+	// held counts the answers held back by WAIT_MS so far.
+	held int
 	// shapes are the last requests, one line each, told when a test fails.
 	shapes []string
 }
@@ -131,7 +137,19 @@ func (f *fakeAnthropic) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	f.mu.Unlock()
 
+	if status, kind, message, ok := apiErrorIn(body.Messages); ok {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		json.NewEncoder(w).Encode(map[string]any{"type": "error", "error": map[string]any{"type": kind, "message": message}})
+		return
+	}
 	blocks, stop := f.reply(body.Messages)
+	if wait := waitIn(body.Messages); wait > 0 {
+		f.mu.Lock()
+		f.held++
+		f.mu.Unlock()
+		time.Sleep(wait)
+	}
 	msg := map[string]any{
 		"id": id, "type": "message", "role": "assistant", "model": body.Model, "content": []any{},
 		"stop_reason": nil, "stop_sequence": nil, "usage": map[string]int{"input_tokens": 10, "output_tokens": 1},
@@ -213,6 +231,79 @@ func (f *fakeAnthropic) reply(messages []fakeAnthropicMessage) ([]map[string]any
 		return []map[string]any{{"type": "text", "text": "RESULT " + string(data)}}, "end_turn"
 	}
 	return []map[string]any{{"type": "text", "text": "ok"}}, "end_turn"
+}
+
+// waitIn is how long the newest message's WAIT_MS asks the answer to be
+// held back; zero without one.
+func waitIn(messages []fakeAnthropicMessage) time.Duration {
+	if len(messages) == 0 {
+		return 0
+	}
+	var text string
+	if json.Unmarshal(messages[len(messages)-1].Content, &text) != nil {
+		var blocks []fakeAnthropicBlock
+		json.Unmarshal(messages[len(messages)-1].Content, &blocks)
+		for _, b := range blocks {
+			if b.Type == "text" {
+				text += b.Text
+			}
+		}
+	}
+	at := strings.LastIndex(text, "WAIT_MS ")
+	if at < 0 {
+		return 0
+	}
+	var ms int
+	fmt.Sscanf(text[at+len("WAIT_MS "):], "%d", &ms)
+	return time.Duration(ms) * time.Millisecond
+}
+
+// apiErrorIn is the error the newest message's API_ERROR asks for.
+func apiErrorIn(messages []fakeAnthropicMessage) (status int, kind, message string, ok bool) {
+	if len(messages) == 0 {
+		return 0, "", "", false
+	}
+	var text string
+	if json.Unmarshal(messages[len(messages)-1].Content, &text) != nil {
+		var blocks []fakeAnthropicBlock
+		json.Unmarshal(messages[len(messages)-1].Content, &blocks)
+		for _, b := range blocks {
+			if b.Type == "text" {
+				text += b.Text
+			}
+		}
+	}
+	at := strings.LastIndex(text, "API_ERROR ")
+	if at < 0 {
+		return 0, "", "", false
+	}
+	line, _, _ := strings.Cut(text[at+len("API_ERROR "):], "\n")
+	fields := strings.SplitN(strings.TrimSpace(line), " ", 3)
+	if len(fields) < 3 {
+		return 0, "", "", false
+	}
+	fmt.Sscanf(fields[0], "%d", &status)
+	return status, fields[1], fields[2], status > 0
+}
+
+// heldBack is how many answers WAIT_MS has held back so far.
+func (f *fakeAnthropic) heldBack() int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.held
+}
+
+// asked reports whether the newest message of a request so far ended
+// with part, as shapeOf shows it.
+func (f *fakeAnthropic) asked(part string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, shape := range f.shapes {
+		if at := strings.LastIndex(shape, " | user: "); at >= 0 && strings.Contains(shape[at:], part) {
+			return true
+		}
+	}
+	return false
 }
 
 // lastDirective is what follows the last "USE_TOOL " in text, up to the end

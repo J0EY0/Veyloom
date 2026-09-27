@@ -84,6 +84,7 @@ func TestPi_ParsesEventStream(t *testing.T) {
 	if results := byKind[EventToolResult]; results[0].Text != "# Veyloom" || results[1].Text != "ok" || results[2].Text != "error: exit 1" {
 		t.Errorf("tool results: %+v", results)
 	}
+	checkCallIDs(t, events)
 	if byKind[EventFileChanged][0].Path != "notes.md" {
 		t.Errorf("file change: %+v", byKind[EventFileChanged])
 	}

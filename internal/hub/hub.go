@@ -7,6 +7,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io/fs"
 	"log/slog"
 	"slices"
 	"sort"
@@ -72,6 +73,11 @@ type Config struct {
 	// before it is denied. Zero takes the default; a negative value waits
 	// forever.
 	ApprovalTimeout time.Duration `mapstructure:"approval_timeout"`
+	// TurnQuietAfter is how long a turn on its machine, waiting on no
+	// person, may show no sign of life before people are told it may be
+	// stuck (docs/design.md 5.23.8). Zero takes the default; a negative
+	// value never tells.
+	TurnQuietAfter time.Duration `mapstructure:"turn_quiet_after"`
 	// UpkeepIdle is how long a topic stays quiet before the wiki maintainer
 	// of a project that runs it on quiet topics goes over it (docs/design.md
 	// 5.12); also the least time between two such upkeeps.
@@ -112,6 +118,7 @@ func DefaultConfig() Config {
 		MemoryPersonalChars: 2000,
 		MemoryProjectChars:  3000,
 		ApprovalTimeout:     15 * time.Minute,
+		TurnQuietAfter:      10 * time.Minute,
 		UpkeepIdle:          30 * time.Minute,
 		UpkeepCheck:         time.Minute,
 		UpkeepTurns:         20,
@@ -157,6 +164,9 @@ func (c Config) withDefaults() Config {
 	if c.ApprovalTimeout == 0 {
 		c.ApprovalTimeout = def.ApprovalTimeout
 	}
+	if c.TurnQuietAfter == 0 {
+		c.TurnQuietAfter = def.TurnQuietAfter
+	}
 	if c.UpkeepIdle <= 0 {
 		c.UpkeepIdle = def.UpkeepIdle
 	}
@@ -188,6 +198,9 @@ var ErrAlreadyConnected = errors.New("hub: machine already connected")
 // ErrUnknownTurn is returned when a turn ID is not running.
 var ErrUnknownTurn = errors.New("hub: unknown turn")
 
+// ErrUnknownPause is returned when lifting a pause that is not in effect.
+var ErrUnknownPause = errors.New("hub: unknown pause")
+
 // MachineStore persists machine registrations. The hub keeps live connections
 // in memory; the store is the durable record that survives restarts and
 // hands out machine IDs. *store.Store satisfies it.
@@ -202,6 +215,8 @@ type MachineStore interface {
 	UpdateMachineRuntimes(ctx context.Context, id string, runtimes []runtime.Info) error
 	// MarkMachineDisconnected records that the machine's connection ended.
 	MarkMachineDisconnected(ctx context.Context, id string) error
+	// GetMachine reads a machine, connected or not.
+	GetMachine(ctx context.Context, id string) (store.MachineRecord, error)
 }
 
 // MachineInfo is the hub's view of one connected machine.
@@ -215,6 +230,10 @@ type MachineInfo struct {
 	// carries them, and at every runtimes report after that. Whoever asked
 	// for a probe knows it is answered once this moves.
 	ProbedAt time.Time `json:"probed_at"`
+	// Quotas is how each runtime's account stands against its usage
+	// limits, by runtime, as its turns last reported (design.md 5.23.3);
+	// only runtimes that report it, since the hub started.
+	Quotas map[string]runtime.Quota `json:"quotas,omitempty"`
 }
 
 // connectedMachine pairs a machine's info with the connection used to reach it.
@@ -239,6 +258,10 @@ type Hub struct {
 	person func() string
 	// memoryPrefs are the account's memory switches (design.md 5.19).
 	memoryPrefs func() store.MemoryPrefs
+	// skills holds Veyloom's own skills, which every agent has, and
+	// builtinSkills what people see of them (design.md 5.23.6).
+	skills        fs.FS
+	builtinSkills []BuiltinSkill
 
 	mu       sync.Mutex
 	machines map[string]*connectedMachine
@@ -309,6 +332,10 @@ func New(st Store, cfg Config, opts ...Option) *Hub {
 	h.turns.upkeepTurns, h.turns.residentBudget = h.cfg.UpkeepTurns, h.cfg.BriefResidentChars
 	h.turns.attachmentDir = h.cfg.AttachmentDir
 	h.turns.trialUses = h.cfg.SkillTrialUses
+	h.turns.quietAfter = h.cfg.TurnQuietAfter
+	if h.skills != nil {
+		h.turns.builtin, h.builtinSkills = readBuiltinSkills(h.skills, h.logger)
+	}
 	// A person changing a skill on trial by hand keeps their version.
 	h.wikis.edited = func(ctx context.Context, projectID string, pages []string) {
 		if person := h.wikis.human(); projectID == "" && person != "" {
@@ -339,6 +366,8 @@ func (h *Hub) SubscribeInbox(userID string) Subscription {
 			return true
 		case EventInboxRead:
 			return ev.UserID == userID
+		case EventPause:
+			return true
 		}
 		return false
 	})
@@ -386,6 +415,10 @@ func (h *Hub) Serve(ctx context.Context, conn protocol.Conn) error {
 	if err := conn.Send(ctx, welcome); err != nil {
 		return fmt.Errorf("send welcome: %w", err)
 	}
+	// Its members may have been asked for things the last hub never began,
+	// and have reminders to come due, some while it was away.
+	go h.turns.resumeQueued(ctx, id)
+	go h.turns.scheduleReminders(ctx, id)
 
 	for {
 		m, err := conn.Recv(ctx)
@@ -563,9 +596,34 @@ func (h *Hub) dispatch(ctx context.Context, msg store.Message) {
 	}
 }
 
-// CancelTurn stops a running turn. ErrUnknownTurn means it is not running.
-func (h *Hub) CancelTurn(ctx context.Context, turnID string) error {
-	return h.turns.Cancel(ctx, turnID)
+// TranscriptSoFar writes out a running turn's transcript and says how many
+// bytes of it are whole records; false when the turn is not running.
+func (h *Hub) TranscriptSoFar(turnID string) (int64, bool) {
+	return h.turns.TranscriptSoFar(turnID)
+}
+
+// CancelTurn stops a running turn, and with newSession has the member's
+// next turn start a new session (design.md 5.23.8). ErrUnknownTurn means it
+// is not running.
+func (h *Hub) CancelTurn(ctx context.Context, turnID string, newSession bool) error {
+	return h.turns.Cancel(ctx, turnID, newSession)
+}
+
+// QuietSince says, of the turns given, which went quiet and since when
+// (design.md 5.23.8).
+func (h *Hub) QuietSince(turnIDs []string) map[string]time.Time {
+	return h.turns.QuietSince(turnIDs)
+}
+
+// Pauses returns what keeps turns from starting now (design.md 5.23.3).
+func (h *Hub) Pauses(ctx context.Context) []store.Pause {
+	return h.turns.Pauses(ctx)
+}
+
+// LiftPause lifts a pause at a person's asking, and what it held up goes
+// on. ErrUnknownPause when it is not in effect.
+func (h *Hub) LiftPause(ctx context.Context, id, userID string) error {
+	return h.turns.LiftPause(ctx, id, userID)
 }
 
 // TurnRunning reports whether a turn is in flight.
@@ -597,6 +655,7 @@ func (h *Hub) Machines() []MachineInfo {
 	for _, w := range h.machines {
 		info := w.info
 		info.Runtimes = append([]runtime.Info(nil), w.info.Runtimes...)
+		info.Quotas = h.turns.Quotas(info.ID)
 		out = append(out, info)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })

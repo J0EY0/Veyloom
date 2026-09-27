@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -35,6 +36,9 @@ type CodexConfig struct {
 	// MCP bridge to the turn's room tools. Empty means there is none, and
 	// turns run without the room tools.
 	ProxyBinary string
+	// RecordDir keeps the CLI's output as printed, a file a turn, for the
+	// replay tests (docs/design.md 5.23.9); empty records nothing.
+	RecordDir string
 }
 
 // DefaultCodexConfig returns the defaults every CodexConfig is completed
@@ -174,6 +178,8 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 		Env:         spec.Env,
 		StderrBytes: r.cfg.StderrBytes,
 		WaitDelay:   r.cfg.WaitDelay,
+		RecordDir:   r.cfg.RecordDir,
+		RecordName:  "codex",
 	})
 	if err != nil {
 		stopProc()
@@ -219,10 +225,146 @@ type codexRPCError struct {
 	Data    json.RawMessage `json:"data,omitempty"`
 }
 
-// codexTurnEnd is what turn/completed reported.
+// codexTurnEnd is what turn/completed reported: how the turn ended, and
+// for a failure what went wrong, in words and as Codex names it.
 type codexTurnEnd struct {
 	status string
 	err    string
+	info   json.RawMessage
+}
+
+// codexFailures are the kinds of failure Codex names (codexErrorInfo, as
+// a string), as the hub tells them. Those it names as an object are all
+// of reaching the provider: server.
+var codexFailures = map[string]FailureKind{
+	"contextWindowExceeded": FailureContextOverflow,
+	"usageLimitExceeded":    FailureQuota,
+	"rateLimitExceeded":     FailureRateLimit,
+	"serverOverloaded":      FailureServer,
+	"internalServerError":   FailureServer,
+	"unauthorized":          FailureAuth,
+}
+
+// codexFailure names why a turn failed from what Codex said: its own name
+// for it first, then the words.
+func codexFailure(end codexTurnEnd) FailureKind {
+	var name string
+	switch {
+	case json.Unmarshal(end.info, &name) == nil:
+		if kind, ok := codexFailures[name]; ok {
+			return kind
+		}
+	case len(end.info) > 0 && end.info[0] == '{':
+		return FailureServer
+	}
+	return classifyFailure(end.err)
+}
+
+// codexLimits is a snapshot of an account's usage limits, as
+// account/rateLimits/updated and account/rateLimits/read tell it (0.155.1):
+// a sparse update leaves out what did not change. Limits are metered in
+// buckets (limitId): codexBucket is the one Codex's turns spend, the others
+// are those of other models' aliases. Credits go on when a window is used
+// up, while there are some.
+type codexLimits struct {
+	LimitID              *string           `json:"limitId"`
+	Primary              *codexLimitWindow `json:"primary"`
+	Secondary            *codexLimitWindow `json:"secondary"`
+	RateLimitReachedType *string           `json:"rateLimitReachedType"`
+	Credits              *codexCredits     `json:"credits"`
+}
+
+type codexCredits struct {
+	HasCredits bool `json:"hasCredits"`
+	Unlimited  bool `json:"unlimited"`
+}
+
+// codexBucket names the limit Codex's own turns spend.
+const codexBucket = "codex"
+
+// ofCodex reports whether l tells of the limit Codex's turns spend: one
+// named so, or named nothing, as before there were buckets.
+func (l codexLimits) ofCodex() bool {
+	return l.LimitID == nil || *l.LimitID == "" || *l.LimitID == codexBucket
+}
+
+type codexLimitWindow struct {
+	UsedPercent        int   `json:"usedPercent"`
+	WindowDurationMins int64 `json:"windowDurationMins"`
+	// ResetsAt is in Unix seconds.
+	ResetsAt int64 `json:"resetsAt"`
+}
+
+// merge lays an update over what was known: credits unsaid in it are as
+// they were.
+func (l codexLimits) merge(update codexLimits) codexLimits {
+	if update.Primary != nil {
+		l.Primary = update.Primary
+	}
+	if update.Secondary != nil {
+		l.Secondary = update.Secondary
+	}
+	if update.Credits != nil {
+		l.Credits = update.Credits
+	}
+	l.RateLimitReachedType = update.RateLimitReachedType
+	return l
+}
+
+// tight is the tightest of the windows: the one used up that resets last,
+// or else the one most used.
+func (l codexLimits) tight() *codexLimitWindow {
+	var tight *codexLimitWindow
+	for _, w := range []*codexLimitWindow{l.Primary, l.Secondary} {
+		switch {
+		case w == nil:
+		case tight == nil,
+			w.UsedPercent >= 100 && (tight.UsedPercent < 100 || w.ResetsAt > tight.ResetsAt),
+			tight.UsedPercent < 100 && w.UsedPercent > tight.UsedPercent:
+			tight = w
+		}
+	}
+	return tight
+}
+
+// quota is the tightest of the windows, as Quota. It is limited when Codex
+// says the limit was reached, or the window is used up with no credits to
+// go on with: reported limited, the account pauses (design.md 5.23.3).
+func (l codexLimits) quota() (Quota, bool) {
+	tight := l.tight()
+	if tight == nil {
+		return Quota{}, false
+	}
+	used := tight.UsedPercent
+	credits := l.Credits != nil && (l.Credits.HasCredits || l.Credits.Unlimited)
+	q := Quota{Limited: l.RateLimitReachedType != nil || used >= 100 && !credits, Window: codexWindow(tight.WindowDurationMins), UsedPercent: &used}
+	if tight.ResetsAt > 0 {
+		q.ResetsAt = time.Unix(tight.ResetsAt, 0)
+	}
+	return q, true
+}
+
+// reset is when the limit resets that a turn ran into: the tightest
+// window's, used up or said to be reached; zero when neither.
+func (l codexLimits) reset() time.Time {
+	tight := l.tight()
+	if tight == nil || tight.ResetsAt <= 0 || tight.UsedPercent < 100 && l.RateLimitReachedType == nil {
+		return time.Time{}
+	}
+	return time.Unix(tight.ResetsAt, 0)
+}
+
+// codexWindow names a window by its span: "5h", "7d".
+func codexWindow(mins int64) string {
+	switch {
+	case mins <= 0:
+		return ""
+	case mins%(24*60) == 0:
+		return strconv.FormatInt(mins/(24*60), 10) + "d"
+	case mins%60 == 0:
+		return strconv.FormatInt(mins/60, 10) + "h"
+	}
+	return strconv.FormatInt(mins, 10) + "m"
 }
 
 // codexItem is what the runner remembers about a started item, to name
@@ -269,10 +411,25 @@ type codexTurn struct {
 	// prefixes are the commands the turn may run without asking: the
 	// member's rules, and what people allowed for the rest of the turn.
 	prefixes [][]string
+	// turnID is the turn's own id, known once turn/start is answered;
+	// steerable says texts Steer passes go to Codex now: not while the
+	// turn is being set up, when they wait in early, nor once it is over.
+	// steering are the texts sent that Codex has not taken in yet.
+	turnID    string
+	steerable bool
+	over      bool
+	early     []codexSteer
+	steering  []codexSteer
+
+	// limits is what the account's usage limits were last told to be.
+	limits codexLimits
 
 	eof       chan struct{}
 	completed chan codexTurnEnd
 }
+
+// codexSteer is text Steer passed, by the id it goes to Codex under.
+type codexSteer struct{ id, text string }
 
 // run holds the conversation and, once the turn is over, stops the server
 // before finishing so no event can be emitted after the channel closes.
@@ -284,11 +441,33 @@ func (t *codexTurn) run(spec TurnSpec) {
 
 	res, err := t.converse(spec)
 
+	for _, s := range t.endSteering() {
+		t.emit(t.ctx, Event{Kind: EventSteerDropped, SteerID: s.id})
+	}
 	t.stopProc()
 	<-t.eof
 	_ = t.proc.wait()
+	// Reaped, the server's stderr is read to its end: what it said as it
+	// went, the reason it exited, if that is why.
+	var exited *codexExited
+	if errors.As(err, &exited) {
+		exited.stderr = strings.TrimSpace(t.proc.stderrTail())
+	}
 	t.release()
 	t.finish(t.ctx, res, err)
+}
+
+// codexExited is the app-server ending before it answered: during a
+// request, or before the turn completed. What it said on stderr is filled
+// in once the process is reaped, when all of it has been read: until then
+// the copy of it may lag behind its end.
+type codexExited struct {
+	when   string
+	stderr string
+}
+
+func (e *codexExited) Error() string {
+	return fmt.Sprintf("codex: app-server exited %s: %s", e.when, e.stderr)
 }
 
 // converse performs the handshake, sets up the thread, starts the turn and
@@ -388,15 +567,27 @@ func (t *codexTurn) converse(spec TurnSpec) (Result, error) {
 	if spec.WorkDir != "" {
 		turnParams["cwd"] = spec.WorkDir
 	}
-	if _, err := t.call(t.ctx, "turn/start", turnParams); err != nil {
+	raw, err = t.call(t.ctx, "turn/start", turnParams)
+	if err != nil {
 		return Result{}, err
+	}
+	var started struct {
+		Turn struct {
+			ID string `json:"id"`
+		} `json:"turn"`
+	}
+	_ = json.Unmarshal(raw, &started)
+	for _, s := range t.startSteering(started.Turn.ID) {
+		if t.steer(s) != nil {
+			t.emit(t.ctx, Event{Kind: EventSteerDropped, SteerID: s.id})
+		}
 	}
 
 	var end codexTurnEnd
 	select {
 	case end = <-t.completed:
 	case <-t.eof:
-		return Result{Usage: t.usage()}, fmt.Errorf("codex: app-server exited before the turn completed: %s", strings.TrimSpace(t.proc.stderrTail()))
+		return Result{Usage: t.usage()}, &codexExited{when: "before the turn completed"}
 	case <-t.ctx.Done():
 		return Result{Usage: t.usage()}, ErrTurnCancelled
 	}
@@ -418,9 +609,35 @@ func (t *codexTurn) converse(spec TurnSpec) (Result, error) {
 		if reason == "" {
 			reason = "turn " + end.status
 		}
-		return Result{Usage: usage}, fmt.Errorf("codex: %s", reason)
+		res := Result{Usage: usage, Failure: codexFailure(end)}
+		if res.Failure == FailureQuota {
+			res.RetryAt = t.limitReset()
+		}
+		return res, fmt.Errorf("codex: %s", reason)
 	}
 	return Result{Output: output, SessionRef: thread.Thread.ID, Usage: usage}, nil
+}
+
+// limitReset is when the usage limit the turn ran into resets: as last
+// told, or else as Codex answers when asked; zero when neither says.
+func (t *codexTurn) limitReset() time.Time {
+	t.mu.Lock()
+	at := t.limits.reset()
+	t.mu.Unlock()
+	if !at.IsZero() {
+		return at
+	}
+	ctx, cancel := context.WithTimeout(t.ctx, 5*time.Second)
+	defer cancel()
+	raw, err := t.call(ctx, "account/rateLimits/read", map[string]any{})
+	var read struct {
+		// The limit Codex's turns spend, as before there were buckets.
+		RateLimits codexLimits `json:"rateLimits"`
+	}
+	if err != nil || json.Unmarshal(raw, &read) != nil {
+		return time.Time{}
+	}
+	return read.RateLimits.reset()
 }
 
 // policy resolves the preset and the agent's overrides.
@@ -471,7 +688,7 @@ func (t *codexTurn) call(ctx context.Context, method string, params any) (json.R
 		return resp.Result, nil
 	case <-t.eof:
 		forget()
-		return nil, fmt.Errorf("codex: app-server exited during %s: %s", method, strings.TrimSpace(t.proc.stderrTail()))
+		return nil, &codexExited{when: "during " + method}
 	case <-ctx.Done():
 		forget()
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -572,6 +789,8 @@ type codexItemView struct {
 	// A subagent's coming and going: started, interacted, completed.
 	Kind      string `json:"kind"`
 	AgentPath string `json:"agentPath"`
+	// ClientID is the id a user message was sent under.
+	ClientID string `json:"clientId"`
 }
 
 // ours reports whether a notification is about the turn's own thread
@@ -648,7 +867,8 @@ func (t *codexTurn) notification(msg codexMessage) {
 			Turn struct {
 				Status string `json:"status"`
 				Error  *struct {
-					Message string `json:"message"`
+					Message        string          `json:"message"`
+					CodexErrorInfo json.RawMessage `json:"codexErrorInfo"`
 				} `json:"error"`
 			} `json:"turn"`
 		}
@@ -657,11 +877,29 @@ func (t *codexTurn) notification(msg codexMessage) {
 		}
 		end := codexTurnEnd{status: p.Turn.Status}
 		if p.Turn.Error != nil {
-			end.err = p.Turn.Error.Message
+			end.err, end.info = p.Turn.Error.Message, p.Turn.Error.CodexErrorInfo
 		}
+		t.mu.Lock()
+		t.steerable = false
+		t.mu.Unlock()
 		select {
 		case t.completed <- end:
 		default:
+		}
+	case "account/rateLimits/updated":
+		var p struct {
+			RateLimits codexLimits `json:"rateLimits"`
+		}
+		if json.Unmarshal(msg.Params, &p) != nil || !p.RateLimits.ofCodex() {
+			// Another model's limit is none of this turn's.
+			break
+		}
+		t.mu.Lock()
+		t.limits = t.limits.merge(p.RateLimits)
+		q, ok := t.limits.quota()
+		t.mu.Unlock()
+		if ok {
+			t.emit(t.ctx, Event{Kind: EventQuota, Quota: &q})
 		}
 	case "item/autoApprovalReview/started":
 		t.mu.Lock()
@@ -776,6 +1014,10 @@ func (t *codexTurn) item(params json.RawMessage) (codexItemView, bool) {
 // session's, and what it says is none of the reply.
 func (t *codexTurn) itemStarted(item codexItemView, ours bool) {
 	switch item.Type {
+	case "userMessage":
+		if ours && item.ClientID != "" {
+			t.tookIn(item.ClientID)
+		}
 	case "contextCompaction":
 		if ours {
 			t.emit(t.ctx, Event{Kind: EventCompaction, Phase: CompactionStart})
@@ -786,11 +1028,11 @@ func (t *codexTurn) itemStarted(item codexItemView, ours bool) {
 		}
 	case "commandExecution":
 		t.remember(item.ID, codexItem{tool: "commandExecution"})
-		t.emit(t.ctx, Event{Kind: EventToolCall, Tool: "commandExecution", Input: truncate(item.Command, t.cfg.MaxEventBytes)})
+		t.emit(t.ctx, Event{Kind: EventToolCall, Tool: "commandExecution", CallID: item.ID, Input: truncate(item.Command, t.cfg.MaxEventBytes)})
 	case "mcpToolCall":
 		tool := item.Server + "/" + item.Tool
 		t.remember(item.ID, codexItem{tool: tool})
-		t.emit(t.ctx, Event{Kind: EventToolCall, Tool: tool, Input: truncate(compactJSON(item.Arguments), t.cfg.MaxEventBytes)})
+		t.emit(t.ctx, Event{Kind: EventToolCall, Tool: tool, CallID: item.ID, Input: truncate(compactJSON(item.Arguments), t.cfg.MaxEventBytes)})
 	case "fileChange":
 		paths := make([]string, 0, len(item.Changes))
 		for _, c := range item.Changes {
@@ -820,7 +1062,7 @@ func (t *codexTurn) itemCompleted(item codexItemView, ours bool) {
 		case item.ExitCode != nil && *item.ExitCode != 0:
 			text = strings.TrimRight(text, "\n") + fmt.Sprintf("\n[exit code %d]", *item.ExitCode)
 		}
-		t.emit(t.ctx, Event{Kind: EventToolResult, Tool: "commandExecution", Text: truncate(text, t.cfg.MaxEventBytes)})
+		t.emit(t.ctx, Event{Kind: EventToolResult, Tool: "commandExecution", CallID: item.ID, Text: truncate(text, t.cfg.MaxEventBytes)})
 	case "mcpToolCall":
 		tool := item.Server + "/" + item.Tool
 		text := mcpResultText(item.Result)
@@ -833,7 +1075,7 @@ func (t *codexTurn) itemCompleted(item codexItemView, ours bool) {
 			}
 			text = "error: " + e.Message
 		}
-		t.emit(t.ctx, Event{Kind: EventToolResult, Tool: tool, Text: truncate(text, t.cfg.MaxEventBytes)})
+		t.emit(t.ctx, Event{Kind: EventToolResult, Tool: tool, CallID: item.ID, Text: truncate(text, t.cfg.MaxEventBytes)})
 	case "fileChange":
 		if item.Status != "completed" {
 			return
@@ -862,6 +1104,104 @@ func (t *codexTurn) remember(id string, item codexItem) {
 	t.mu.Lock()
 	t.items[id] = item
 	t.mu.Unlock()
+}
+
+// Steer implements Turn. The text goes to Codex with turn/steer, which
+// hands it to the agent at its next step and answers it within the turn,
+// even when it comes with the turn's last words; the user message Codex
+// records for it, under the id it was sent with, says it was taken in
+// (0.155.1, design.md 5.23.2). Text passed while the turn is being set up
+// goes as soon as it has started.
+func (t *codexTurn) Steer(id, text string) error {
+	s := codexSteer{id: id, text: text}
+	t.mu.Lock()
+	switch {
+	case t.over || (t.turnID != "" && !t.steerable):
+		t.mu.Unlock()
+		return ErrSteerRefused
+	case t.turnID == "":
+		t.early = append(t.early, s)
+		t.mu.Unlock()
+		return nil
+	}
+	t.mu.Unlock()
+	return t.steer(s)
+}
+
+// startSteering notes the turn's id once it has started and returns the
+// texts passed before. Without an id nothing can be sent: those texts and
+// any to come are left for the turn's end to report and refuse.
+func (t *codexTurn) startSteering(turnID string) []codexSteer {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if turnID == "" {
+		t.over = true
+		return nil
+	}
+	t.turnID, t.steerable = turnID, true
+	early := t.early
+	t.early = nil
+	return early
+}
+
+// steer sends s with turn/steer. It counts as sent before it goes, as
+// Codex may take it in before its answer is read.
+func (t *codexTurn) steer(s codexSteer) error {
+	t.mu.Lock()
+	t.steering = append(t.steering, s)
+	params := map[string]any{
+		"threadId":            t.thread,
+		"expectedTurnId":      t.turnID,
+		"input":               []map[string]any{{"type": "text", "text": s.text}},
+		"clientUserMessageId": s.id,
+	}
+	t.mu.Unlock()
+	if _, err := t.call(t.ctx, "turn/steer", params); err != nil {
+		if t.unsend(s.id) {
+			return ErrSteerRefused
+		}
+		// The turn ended meanwhile and reported it dropped.
+	}
+	return nil
+}
+
+// unsend takes back text Codex would not take, which is still counted as
+// sent unless the turn ended meanwhile.
+func (t *codexTurn) unsend(id string) bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	i := slices.IndexFunc(t.steering, func(s codexSteer) bool { return s.id == id })
+	if i < 0 {
+		return false
+	}
+	t.steering = slices.Delete(t.steering, i, i+1)
+	return true
+}
+
+// tookIn reports that Codex took in the text sent as id.
+func (t *codexTurn) tookIn(id string) {
+	t.mu.Lock()
+	i := slices.IndexFunc(t.steering, func(s codexSteer) bool { return s.id == id })
+	var took codexSteer
+	if i >= 0 {
+		took = t.steering[i]
+		t.steering = slices.Delete(t.steering, i, i+1)
+	}
+	t.mu.Unlock()
+	if i >= 0 {
+		t.emit(t.ctx, Event{Kind: EventSteer, SteerID: took.id, Text: took.text})
+	}
+}
+
+// endSteering ends the turn's steering: it returns the texts passed that
+// Codex never took in, whether sent or not.
+func (t *codexTurn) endSteering() []codexSteer {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.over, t.steerable = true, false
+	left := append(t.early, t.steering...)
+	t.early, t.steering = nil, nil
+	return left
 }
 
 // serveRequest answers a request from the server. Approvals go through the

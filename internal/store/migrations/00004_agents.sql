@@ -116,12 +116,24 @@ CREATE TABLE member_sessions (
     -- When the session was last shown the project wiki's catalog: the next
     -- brief lists only the pages changed since. NULL until the first.
     wiki_seen   timestamptz,
+    -- What the session was last shown of the parts of a brief that change
+    -- now and then (design.md 5.23.1), {"<part>": "<digest>"}: a brief
+    -- leaves out a part the session saw as it is. Emptied by a compaction,
+    -- like thread_seen, so the next brief shows them all.
+    brief_seen  jsonb       NOT NULL DEFAULT '{}'::jsonb,
+    -- A digest of the role card the session started with, for a runtime
+    -- that fixes its system prompt when a session starts and ignores what a
+    -- resume passes (Codex; design.md 5.6): a turn whose agent's role card
+    -- differs starts a new session, the only way the runtime is told it.
+    -- Set with session_ref; empty for a runtime that takes its system
+    -- prompt with every run, and until the runtime reports the session.
+    role_card_digest text   NOT NULL DEFAULT '',
     started_at  timestamptz NOT NULL DEFAULT now(),
     ended_at    timestamptz,
     -- Why it ended; empty while open.
     end_reason  text        NOT NULL DEFAULT '' CHECK (end_reason IN (
-        '', 'runtime_changed', 'machine_changed', 'dir_changed',
-        'not_found', 'context_overflow', 'resume_failed', 'manual', 'member_removed')),
+        '', 'runtime_changed', 'machine_changed', 'dir_changed', 'role_card_changed',
+        'not_found', 'context_overflow', 'resume_failed', 'manual', 'cancelled', 'member_removed')),
     CONSTRAINT member_sessions_ended_has_reason CHECK ((ended_at IS NULL) = (end_reason = ''))
 );
 

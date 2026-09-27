@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"time"
@@ -74,6 +75,20 @@ func (t *transcript) write(line transcriptLine) error {
 		return fmt.Errorf("write transcript %s: %w", t.path, err)
 	}
 	return nil
+}
+
+// flush writes out what the buffer holds and says how long the file is
+// then: whole records alone, since callers serialise access and a record
+// is written whole.
+func (t *transcript) flush() (int64, error) {
+	if err := t.buf.Flush(); err != nil {
+		return 0, fmt.Errorf("flush transcript %s: %w", t.path, err)
+	}
+	n, err := t.file.Seek(0, io.SeekCurrent)
+	if err != nil {
+		return 0, fmt.Errorf("size transcript %s: %w", t.path, err)
+	}
+	return n, nil
 }
 
 // close flushes and closes the file.

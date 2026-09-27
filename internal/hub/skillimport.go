@@ -67,6 +67,10 @@ func (h *Hub) ImportSkill(ctx context.Context, folder, team, userID string) (Wik
 	if !wikiSlug(name) {
 		return WikiPageView{}, store.Invalid("skillBadName", store.Params{"name": name}, "%q is no skill name: lowercase letters, digits and hyphens", name)
 	}
+	if h.turns.isBuiltin(name) {
+		// A runtime could not load both under the one name (design.md 5.23.6).
+		return WikiPageView{}, store.Conflicting("skillBuiltin", store.Params{"name": name}, "Veyloom gives every agent a skill called %s already", name)
+	}
 	if t := d.Type(); t != "" && t != "Skill" {
 		return WikiPageView{}, store.Invalid("skillUnreadable", store.Params{"path": folder}, "the %s in %s is a %s, not a skill", okf.SkillFile, folder, t)
 	}

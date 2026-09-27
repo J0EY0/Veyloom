@@ -36,14 +36,17 @@ func TestSessions_StartGetSetRef(t *testing.T) {
 		t.Errorf("a fresh session is neither started nor ended: %+v", sess)
 	}
 
-	if err := f.s.SetSessionRef(ctx, sess.ID, "ref-1"); err != nil {
+	if sess.RoleCardDigest != "" {
+		t.Errorf("no role card is known before the session starts: %+v", sess)
+	}
+	if err := f.s.SetSessionRef(ctx, sess.ID, "ref-1", "d1"); err != nil {
 		t.Fatal(err)
 	}
 	open, err := f.s.GetOpenSession(ctx, f.member.ID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if open.ID != sess.ID || open.Ref != "ref-1" || !open.Started() {
+	if open.ID != sess.ID || open.Ref != "ref-1" || !open.Started() || open.RoleCardDigest != "d1" {
 		t.Errorf("open session = %+v", open)
 	}
 	got, err := f.s.GetSession(ctx, sess.ID)
@@ -51,7 +54,7 @@ func TestSessions_StartGetSetRef(t *testing.T) {
 		t.Errorf("GetSession = %+v, %v", got, err)
 	}
 
-	if err := f.s.SetSessionRef(ctx, store.NewID(), "x"); !errors.Is(err, store.ErrNotFound) {
+	if err := f.s.SetSessionRef(ctx, store.NewID(), "x", ""); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("set ref of an unknown session: got %v, want ErrNotFound", err)
 	}
 	if _, err := f.s.GetSession(ctx, store.NewID()); !errors.Is(err, store.ErrNotFound) {
@@ -64,13 +67,39 @@ func TestSessions_CallerPicksTheID(t *testing.T) {
 	ctx := context.Background()
 
 	n := f.newSession()
-	n.ID, n.Ref = store.NewID(), "reported-early"
+	n.ID, n.Ref, n.RoleCardDigest = store.NewID(), "reported-early", "d1"
 	sess, err := f.s.StartSession(ctx, n)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if sess.ID != n.ID || sess.Ref != "reported-early" {
-		t.Errorf("session = %+v, want id %s and the ref", sess, n.ID)
+	if sess.ID != n.ID || sess.Ref != "reported-early" || sess.RoleCardDigest != "d1" {
+		t.Errorf("session = %+v, want id %s, the ref and its role card", sess, n.ID)
+	}
+}
+
+// Every reason the hub ends a session for is one the table takes.
+func TestSessions_EveryEndReasonIsStored(t *testing.T) {
+	f := newTurnFixture(t)
+	ctx := context.Background()
+
+	prev, err := f.s.StartSession(ctx, f.newSession())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, reason := range []store.SessionEndReason{
+		store.SessionRuntimeChanged, store.SessionMachineChanged, store.SessionDirChanged, store.SessionRoleCardChanged,
+		store.SessionNotFound, store.SessionContextOverflow, store.SessionResumeFailed, store.SessionManual, store.SessionCancelled, store.SessionMemberRemoved,
+	} {
+		n := f.newSession()
+		n.Replaces = reason
+		next, err := f.s.StartSession(ctx, n)
+		if err != nil {
+			t.Fatalf("%s: %v", reason, err)
+		}
+		if old, err := f.s.GetSession(ctx, prev.ID); err != nil || old.EndReason != reason {
+			t.Errorf("ended as %q, want %q (%v)", old.EndReason, reason, err)
+		}
+		prev = next
 	}
 }
 

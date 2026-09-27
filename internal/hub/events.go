@@ -35,6 +35,19 @@ const (
 	// another tab: whoever shows it counts again. It names the person, and
 	// goes to their inbox streams only.
 	EventInboxRead EventKind = "inbox_read"
+	// EventPause says a pause came into effect or was lifted (Lifted), by
+	// a person when UserID is set (design.md 5.23.3). It goes to every
+	// inbox stream: a pause of an account holds members of many rooms up.
+	EventPause EventKind = "pause"
+	// EventReminder carries a member's reminder to itself that was set,
+	// came due, was cancelled or dropped (design.md 5.23.4).
+	EventReminder EventKind = "reminder"
+	// EventDraft carries a draft for a person to run that was drafted,
+	// run, turned down or replaced (design.md 5.23.5).
+	EventDraft EventKind = "draft"
+	// EventTurnQuiet says a running turn went quiet, since QuietSince, or
+	// showed a sign of life again, QuietSince unset (design.md 5.23.8).
+	EventTurnQuiet EventKind = "turn_quiet"
 )
 
 // Event is one thing that happened in a room, as pushed to live
@@ -59,8 +72,17 @@ type Event struct {
 	// changed; Scope is library instead when it was the skill library.
 	ProjectID string `json:"project_id,omitempty"`
 	Scope     string `json:"scope,omitempty"`
-	// UserID accompanies inbox_read, naming the person.
+	// UserID accompanies inbox_read, naming the person, and pause, naming
+	// the person who lifted it.
 	UserID string `json:"user_id,omitempty"`
+	// Pause accompanies pause; Lifted says it no longer holds.
+	Pause  *store.Pause `json:"pause,omitempty"`
+	Lifted bool         `json:"lifted,omitempty"`
+	// Reminder accompanies reminder, as it stands now; Draft draft.
+	Reminder *store.Reminder `json:"reminder,omitempty"`
+	Draft    *store.Draft    `json:"draft,omitempty"`
+	// QuietSince accompanies turn_quiet, with TurnID.
+	QuietSince *time.Time `json:"quiet_since,omitempty"`
 }
 
 // topicSummary is what a message event says of the topic its message

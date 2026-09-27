@@ -21,6 +21,10 @@ type RunnerOptions struct {
 	// their turns run without the room tools, and a Claude turn that would
 	// ask for approval does not start.
 	ProxyBinary string
+	// RecordDir keeps what each CLI prints, as it prints it, a file a
+	// turn: the real output the replay tests are made of (docs/design.md
+	// 5.23.9). Empty records nothing.
+	RecordDir string
 }
 
 // BuiltinRunners returns the runtimes that can execute turns, keyed by name,
@@ -35,13 +39,16 @@ func BuiltinRunnersWith(opts RunnerOptions) map[string]Runner {
 	fake := NewFake()
 	claudeCfg := DefaultClaudeConfig()
 	claudeCfg.ProxyBinary = opts.ProxyBinary
+	claudeCfg.RecordDir = opts.RecordDir
 	claude := NewClaudeRunner(claudeCfg)
 	codexCfg := DefaultCodexConfig()
 	codexCfg.ProxyBinary = opts.ProxyBinary
+	codexCfg.RecordDir = opts.RecordDir
 	codex := NewCodexRunner(codexCfg)
 	piCfg := DefaultPiConfig()
 	piCfg.SessionDir = opts.SessionDir
 	piCfg.ToolDir = opts.ToolDir
+	piCfg.RecordDir = opts.RecordDir
 	pi := NewPiRunner(piCfg)
 	return map[string]Runner{fake.Name(): fake, claude.Name(): claude, codex.Name(): codex, pi.Name(): pi}
 }

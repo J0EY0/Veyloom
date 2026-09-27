@@ -333,17 +333,28 @@ func sumUpNote(asked string, members []string) string {
 	return fmt.Sprintf("The work %s handed on is done (%s); back to %s.", asked, strings.Join(members, ", "), asked)
 }
 
-// chainPerson is the person whose message started a piece of work, ""
-// when none did.
+// chainPerson is the person a piece of work is for: whose message started
+// it; for one a person let go on from a note of the hub's (a wake a limit
+// held back, design.md 5.22), the person the note was addressed to; for
+// one a person started by running a draft (5.23.5), that person. "" when
+// there is none.
 func (m *TurnManager) chainPerson(ctx context.Context, chain string) string {
 	if chain == "" {
 		return ""
 	}
 	msg, err := m.store.GetMessage(ctx, chain)
-	if err != nil {
-		return ""
+	if err != nil || msg.UserID != "" || msg.SenderKind != store.SenderSystem {
+		return msg.UserID
 	}
-	return msg.UserID
+	for _, mention := range msg.Mentions {
+		if mention.Kind == store.MentionUser {
+			return mention.ID
+		}
+	}
+	if d, err := m.store.GetDraftByMessage(ctx, msg.ID); err == nil && d.ResultMessageID == msg.ID {
+		return d.DecidedBy
+	}
+	return ""
 }
 
 // handedOnSection tells a member summing up what came of the work it

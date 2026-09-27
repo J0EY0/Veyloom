@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+	"time"
 
 	"github.com/J0EY0/veyloom/internal/hub"
 	"github.com/J0EY0/veyloom/internal/store"
@@ -71,16 +72,88 @@ func newFakeMessages(rooms *fakeProjects, users *fakeUsers) *fakeMessages {
 // fakeChat stands in for the hub: it stores the message and remembers what
 // was cancelled.
 type fakeChat struct {
-	messages   *fakeMessages
-	posted     []store.NewMessage
-	running    map[string]bool
-	cancelled  []string
-	continued  []string
-	approvals  fakeApprovals
-	decided    []string
-	untrusted  []string
-	sub        *fakeSub
-	subscribed []string
+	messages  *fakeMessages
+	posted    []store.NewMessage
+	running   map[string]bool
+	cancelled []string
+	// startedOver are the turns cancelled asking for a new session; quiet
+	// the running turns gone quiet, and since when.
+	startedOver []string
+	quiet       map[string]time.Time
+	continued   []string
+	approvals   fakeApprovals
+	decided     []string
+	untrusted   []string
+	sub         *fakeSub
+	subscribed  []string
+	// written is how much of each running turn's transcript is whole.
+	written map[string]int64
+	// pauses are those in effect; lifted those lifted, by who.
+	pauses []store.Pause
+	lifted []string
+	// reminders are the members' reminders, by id; drafts their drafts,
+	// and ran the messages they were run with.
+	reminders map[string]store.Reminder
+	drafts    map[string]store.Draft
+	ran       []string
+}
+
+func (c *fakeChat) RunDraft(_ context.Context, id, userID string, edit hub.DraftEdit) (store.Draft, error) {
+	d, ok := c.drafts[id]
+	switch {
+	case !ok:
+		return store.Draft{}, fmt.Errorf("draft %s: %w", id, store.ErrNotFound)
+	case d.Status != store.DraftPending:
+		return store.Draft{}, store.Conflicting("draftSettled", store.Params{"status": string(d.Status)}, "the draft is %s already", d.Status)
+	}
+	c.ran = append(c.ran, edit.Message)
+	d.Status, d.DecidedBy, d.Result = store.DraftDone, userID, store.DraftResult{Commit: "abc1234def"}
+	c.drafts[id] = d
+	return d, nil
+}
+
+func (c *fakeChat) DeclineDraft(_ context.Context, id, userID string) (store.Draft, error) {
+	d, ok := c.drafts[id]
+	switch {
+	case !ok:
+		return store.Draft{}, fmt.Errorf("draft %s: %w", id, store.ErrNotFound)
+	case d.Status != store.DraftPending:
+		return store.Draft{}, store.Conflicting("draftSettled", store.Params{"status": string(d.Status)}, "the draft is %s already", d.Status)
+	}
+	d.Status, d.DecidedBy = store.DraftDeclined, userID
+	c.drafts[id] = d
+	return d, nil
+}
+
+func (c *fakeChat) CancelReminder(_ context.Context, id, userID string) (store.Reminder, error) {
+	r, ok := c.reminders[id]
+	switch {
+	case !ok:
+		return store.Reminder{}, fmt.Errorf("reminder %s: %w", id, store.ErrNotFound)
+	case r.Status != store.ReminderPending:
+		return store.Reminder{}, store.Conflicting("reminderSettled", store.Params{"status": string(r.Status)}, "the reminder is %s already", r.Status)
+	}
+	r.Status, r.CancelledBy = store.ReminderCancelled, userID
+	c.reminders[id] = r
+	return r, nil
+}
+
+func (c *fakeChat) Pauses(context.Context) []store.Pause { return c.pauses }
+
+func (c *fakeChat) LiftPause(_ context.Context, id, userID string) error {
+	for i, p := range c.pauses {
+		if p.ID == id {
+			c.pauses = append(c.pauses[:i:i], c.pauses[i+1:]...)
+			c.lifted = append(c.lifted, id+" by "+userID)
+			return nil
+		}
+	}
+	return fmt.Errorf("%w: %s", hub.ErrUnknownPause, id)
+}
+
+func (c *fakeChat) TranscriptSoFar(turnID string) (int64, bool) {
+	n, ok := c.written[turnID]
+	return n, ok
 }
 
 func (c *fakeChat) PostUserMessage(ctx context.Context, m store.NewMessage) (store.Message, error) {
@@ -97,12 +170,25 @@ func (c *fakeChat) ContinueRelay(_ context.Context, noteID string) error {
 	return nil
 }
 
-func (c *fakeChat) CancelTurn(_ context.Context, turnID string) error {
+func (c *fakeChat) CancelTurn(_ context.Context, turnID string, newSession bool) error {
 	if !c.running[turnID] {
 		return fmt.Errorf("%w: %s", hub.ErrUnknownTurn, turnID)
 	}
 	c.cancelled = append(c.cancelled, turnID)
+	if newSession {
+		c.startedOver = append(c.startedOver, turnID)
+	}
 	return nil
+}
+
+func (c *fakeChat) QuietSince(turnIDs []string) map[string]time.Time {
+	out := map[string]time.Time{}
+	for _, id := range turnIDs {
+		if since, ok := c.quiet[id]; ok {
+			out[id] = since
+		}
+	}
+	return out
 }
 
 func (c *fakeChat) UntrustTurn(_ context.Context, turnID string) (store.Turn, error) {

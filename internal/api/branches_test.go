@@ -68,7 +68,7 @@ func (f *fakeWorktrees) StartSetup(_ context.Context, projectID string) error {
 	return nil
 }
 
-func (f *fakeWorktrees) SettleWorkspaceSteps(_ context.Context, _ string, adopt bool) error {
+func (f *fakeWorktrees) SettleWorkspaceSteps(_ context.Context, _, _ string, adopt bool) error {
 	f.adopted = &adopt
 	return nil
 }

@@ -184,7 +184,7 @@ func TestLoop_CancelWhileApprovalPending(t *testing.T) {
 	l.say("@Careful build it", "", careful)
 	a := l.waitApproval()
 
-	if err := l.h.CancelTurn(l.ctx, a.TurnID); err != nil {
+	if err := l.h.CancelTurn(l.ctx, a.TurnID, false); err != nil {
 		t.Fatal(err)
 	}
 

@@ -7,6 +7,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -66,7 +67,7 @@ func fakeClaudeMain() {
 		os.Exit(2)
 	}
 
-	f := &claudeScript{in: lines, answers: map[string]json.RawMessage{}}
+	f := &claudeScript{in: lines, answers: map[string]json.RawMessage{}, replay: slices.Contains(os.Args[1:], "--replay-user-messages")}
 	if path := os.Getenv("VEYLOOM_FAKE_CLAUDE_OUTPUT"); path != "" {
 		data, _ := os.ReadFile(path)
 		os.Stdout.Write(data)
@@ -87,7 +88,11 @@ func fakeClaudeMain() {
 // server's form and link, a write to the wiki, and a request of a kind
 // the runner does not answer. [withdraw] asks about rm -rf build and takes the request back;
 // [both] asks [bash] and [rm] at once; [wait] holds the turn open until the
-// file named by VEYLOOM_FAKE_CLAUDE_GO appears.
+// file named by VEYLOOM_FAKE_CLAUDE_GO appears. [steer] runs a tool until
+// a user message comes in, which it takes in with the tool's result, and
+// [deaf] makes the fake lose user messages that come once its answer is
+// in; others it answers as turns of their own, as the CLI does, unless
+// [crash] has it die in the midst of the first such turn.
 var fakeClaudeExchanges = map[string]string{
 	"[bash]":   `{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"make test","description":"run the tests"},"permission_suggestions":[{"type":"addRules","rules":[{"toolName":"Bash","ruleContent":"make test"}],"behavior":"allow","destination":"localSettings"}],"decision_reason":"This command requires approval","tool_use_id":"tu-bash"}`,
 	"[rm]":     `{"subtype":"can_use_tool","tool_name":"Bash","input":{"command":"rm -rf build"},"tool_use_id":"tu-rm"}`,
@@ -104,6 +109,15 @@ type claudeScript struct {
 	answers map[string]json.RawMessage
 	denials []map[string]any
 	n       int
+	// replay echoes what is taken in from the input, as
+	// --replay-user-messages asks.
+	replay bool
+	// said are user messages read while waiting for something else, to be
+	// taken in at the next chance.
+	said []string
+	// deaf loses user messages that come once the answer is in; crash dies
+	// answering the first.
+	deaf, crash bool
 }
 
 func (f *claudeScript) send(v any) {
@@ -139,6 +153,9 @@ func (f *claudeScript) await(wait time.Duration, keywords map[string]string) {
 				} `json:"response"`
 			}
 			if json.Unmarshal(raw, &msg) != nil || msg.Type != "control_response" {
+				if text, ok := userMessage(raw); ok {
+					f.said = append(f.said, text)
+				}
 				continue
 			}
 			keyword, ok := keywords[msg.Response.RequestID]
@@ -178,8 +195,23 @@ func (f *claudeScript) noteDenial(keyword string, answer json.RawMessage) {
 
 func (f *claudeScript) play(prompt, mode string) {
 	f.send(map[string]any{"type": "system", "subtype": "init", "session_id": "sess-1", "model": "claude-test", "permissionMode": mode, "mcp_servers": []any{}})
+	f.takeIn(prompt)
 	for _, keyword := range strings.Fields(prompt) {
 		switch keyword {
+		case "[steer]":
+			f.send(map[string]any{"type": "assistant", "message": map[string]any{"id": "m-steer", "role": "assistant",
+				"content": []any{map[string]any{"type": "tool_use", "id": "tu-steer", "name": "Bash", "input": map[string]any{"command": "sleep 1"}}}}})
+			// The CLI echoes it right after the tool's result, which it
+			// is handed over with.
+			text, _ := f.heard(10 * time.Second)
+			f.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": []any{map[string]any{"type": "tool_result", "tool_use_id": "tu-steer",
+				"content": "slept\n\n<system-reminder>\nThe user sent a new message while you were working:\n" + text + "\n</system-reminder>"}}}})
+			f.takeIn(text)
+			f.answers["[steer]"], _ = json.Marshal(text)
+		case "[deaf]":
+			f.deaf = true
+		case "[crash]":
+			f.crash = true
 		case "[both]":
 			f.await(10*time.Second, map[string]string{f.ask("[bash]"): "[bash]", f.ask("[rm]"): "[rm]"})
 		case "[wait]":
@@ -207,7 +239,78 @@ func (f *claudeScript) play(prompt, mode string) {
 	text, _ := json.Marshal(f.answers)
 	f.send(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": string(text), "session_id": "sess-1",
 		"usage": map[string]any{"input_tokens": 1, "output_tokens": 1}, "permission_denials": append([]map[string]any{}, f.denials...)})
-	f.drain()
+	f.idle()
+}
+
+// idle answers each user message that comes once the answer is in as a
+// turn of its own, as the CLI does, until the input closes: announced
+// like the first, and echoed only once the answer is under way (2.1.85,
+// streaming partial messages).
+func (f *claudeScript) idle() {
+	for {
+		text, ok := f.heard(time.Hour)
+		if !ok {
+			return
+		}
+		if f.deaf {
+			continue
+		}
+		out, _ := json.Marshal(map[string]string{"[extra]": text})
+		f.send(map[string]any{"type": "system", "subtype": "init", "session_id": "sess-1", "model": "claude-test", "mcp_servers": []any{}})
+		f.send(map[string]any{"type": "assistant", "message": map[string]any{"id": "m-extra", "role": "assistant", "content": []any{map[string]any{"type": "text", "text": "extra"}}}})
+		f.takeIn(text)
+		if f.crash {
+			os.Stderr.WriteString("FATAL ERROR: Reached heap limit Allocation failed - JavaScript heap out of memory\n")
+			os.Exit(134)
+		}
+		f.send(map[string]any{"type": "result", "subtype": "success", "is_error": false, "result": string(out), "session_id": "sess-1",
+			"usage": map[string]any{"input_tokens": 1, "output_tokens": 1}})
+	}
+}
+
+// heard is the next user message: one read before, or the next to come
+// within wait. False when none comes, or the input closed.
+func (f *claudeScript) heard(wait time.Duration) (string, bool) {
+	if len(f.said) > 0 {
+		text := f.said[0]
+		f.said = f.said[1:]
+		return text, true
+	}
+	deadline := time.After(wait)
+	for {
+		select {
+		case raw, ok := <-f.in:
+			if !ok {
+				return "", false
+			}
+			if text, ok := userMessage(raw); ok {
+				return text, true
+			}
+		case <-deadline:
+			return "", false
+		}
+	}
+}
+
+// takeIn echoes text as taken in, when asked to.
+func (f *claudeScript) takeIn(text string) {
+	if f.replay {
+		f.send(map[string]any{"type": "user", "message": map[string]any{"role": "user", "content": text}, "session_id": "sess-1", "parent_tool_use_id": nil, "isReplay": true})
+	}
+}
+
+// userMessage is the text of a user message read from the input.
+func userMessage(raw []byte) (string, bool) {
+	var msg struct {
+		Type    string `json:"type"`
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	}
+	if json.Unmarshal(raw, &msg) != nil || msg.Type != "user" {
+		return "", false
+	}
+	return msg.Message.Content, true
 }
 
 // drain waits for the input to close.

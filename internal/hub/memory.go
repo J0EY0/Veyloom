@@ -212,35 +212,49 @@ func (s *wikiShelf) memoryPrefs() store.MemoryPrefs {
 
 // writeMemories writes the memories turns use into a brief (design.md
 // 5.19), the personal one first; project is the project's wiki, nil when
-// there is none to show. A memory past its budget, by an edit made outside
-// Veyloom or a budget lowered since, is carried as far as it fits.
-func (s *wikiShelf) writeMemories(ctx context.Context, w *briefWriter, project *wiki.Bundle) {
+// there is none to show or it could not be read. A memory past its budget,
+// by an edit made outside Veyloom or a budget lowered since, is carried as
+// far as it fits. It reports whether every memory in use was read.
+func (s *wikiShelf) writeMemories(ctx context.Context, w *briefWriter, project *wiki.Bundle) bool {
 	prefs := s.memoryPrefs()
+	read := true
 	if prefs.UsesPersonal() {
 		personal, err := s.personalMemory(ctx)
 		if err != nil {
 			s.logger.Warn("brief: open the personal memory", "err", err)
+			read = false
 		} else {
 			heading := "Personal memory, what the person you work for wants in every project:"
 			if prefs.UsesProject() {
 				heading = "Personal memory, what the person you work for wants in every project (where the project memory says otherwise, it wins):"
 			}
-			s.writeMemory(w, personal, heading, s.budgets.Personal)
+			read = s.writeMemory(w, personal, heading, s.budgets.Personal)
 		}
 	}
-	if project != nil && prefs.UsesProject() {
-		s.writeMemory(w, project, "Project memory, how to work in this project:", s.budgets.Project)
+	if prefs.UsesProject() {
+		read = project != nil && s.writeMemory(w, project, "Project memory, how to work in this project:", s.budgets.Project) && read
 	}
+	return read
 }
 
-func (s *wikiShelf) writeMemory(w *briefWriter, b *wiki.Bundle, heading string, budget int) {
+// memoriesText is the memories a brief carries whole, as writeMemories
+// writes them, and whether every one in use was read: one that was not has
+// not changed for all the brief knows, and is certainly not gone.
+func (s *wikiShelf) memoriesText(ctx context.Context, project *wiki.Bundle) (string, bool) {
+	w := &briefWriter{}
+	read := s.writeMemories(ctx, w, project)
+	return w.sb.String(), read
+}
+
+// writeMemory writes one memory, and reports whether it was read.
+func (s *wikiShelf) writeMemory(w *briefWriter, b *wiki.Bundle, heading string, budget int) bool {
 	entries, _, err := b.Memory()
 	if err != nil {
 		s.logger.Warn("brief: read a memory", "wiki", b.Dir(), "err", err)
-		return
+		return false
 	}
 	if len(entries) == 0 {
-		return
+		return true
 	}
 	w.section(heading)
 	room := budget
@@ -253,11 +267,12 @@ func (s *wikiShelf) writeMemory(w *briefWriter, b *wiki.Bundle, heading string, 
 				more = fmt.Sprintf("%d more entries", left)
 			}
 			fmt.Fprintf(&w.sb, "(%s did not fit in the %d characters it may take)\n", more, budget)
-			return
+			return true
 		}
 		room -= n
 		w.sb.WriteString(line)
 	}
+	return true
 }
 
 // MemoryView is a memory as the UI shows it.

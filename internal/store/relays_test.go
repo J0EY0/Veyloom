@@ -84,3 +84,40 @@ func TestRelays_PieceOfWork(t *testing.T) {
 		}
 	}
 }
+
+// What a busy member was asked waits in the store, once a message, in the
+// order it was asked, for the machine the member runs on; it is gone once
+// its turn starts.
+func TestRelays_QueuedWakes(t *testing.T) {
+	f := newTurnFixture(t)
+	ctx := context.Background()
+	later, err := f.s.CreateMessage(ctx, store.NewMessage{RoomID: f.room.ID, SenderKind: store.SenderUser, UserID: f.user.ID, Body: "@agent and this"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, w := range []store.QueuedWake{
+		{MemberID: f.member.ID, MessageID: f.root.ID, ThreadID: f.thread.ID},
+		{MemberID: f.member.ID, MessageID: later.ID, AnchorID: later.ID},
+		{MemberID: f.member.ID, MessageID: f.root.ID, ThreadID: f.thread.ID},
+	} {
+		if err := f.s.QueueWake(ctx, w); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := f.s.ListQueuedWakes(ctx, f.machineID)
+	if err != nil || len(got) != 2 {
+		t.Fatalf("queued once each: %+v %v", got, err)
+	}
+	if got[0].MessageID != f.root.ID || got[0].ThreadID != f.thread.ID || got[1].MessageID != later.ID || got[1].ThreadID != "" || got[1].AnchorID != later.ID {
+		t.Errorf("in the order asked, with where each is answered: %+v", got)
+	}
+	if other, err := f.s.ListQueuedWakes(ctx, "00000000-0000-0000-0000-000000000001"); err != nil || len(other) != 0 {
+		t.Errorf("another machine's members wait for nothing: %+v %v", other, err)
+	}
+	if err := f.s.UnqueueWakes(ctx, f.member.ID, []string{f.root.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := f.s.ListQueuedWakes(ctx, f.machineID); len(got) != 1 || got[0].MessageID != later.ID {
+		t.Errorf("the one whose turn started is gone: %+v", got)
+	}
+}

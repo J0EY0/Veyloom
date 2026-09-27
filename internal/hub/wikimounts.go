@@ -192,12 +192,29 @@ func readOnlyMount(p string) error {
 // searchMounted finds pages of a wiki and of the bundles it mounts by their
 // text, best first; a page of the wiki's own wins a tie.
 func searchMounted(own *wiki.Bundle, mounts []mountedWiki, query string, limit int) []wiki.Hit {
-	hits := own.Search(query, limit)
+	return acrossMounts(own, mounts, limit, func(b *wiki.Bundle) []wiki.Hit { return b.Search(query, limit) })
+}
+
+// nearMounted finds the pages of a wiki and of the bundles it mounts that
+// share words with text, best first, the way a brief finds related pages
+// (wiki.Bundle.Relevant): what a search no page matches as written can
+// offer, a question asked whole in Chinese above all, which has no spaces
+// to split its words at.
+func nearMounted(own *wiki.Bundle, mounts []mountedWiki, text string, limit int) []wiki.Hit {
+	r := wiki.Relevance{Text: text}
+	return acrossMounts(own, mounts, limit, func(b *wiki.Bundle) []wiki.Hit { return b.Relevant(r, limit) })
+}
+
+// acrossMounts gathers what find gives for a wiki and for each bundle it
+// mounts, the mounted pages under their mounts' paths, best first; a page
+// of the wiki's own wins a tie.
+func acrossMounts(own *wiki.Bundle, mounts []mountedWiki, limit int, find func(*wiki.Bundle) []wiki.Hit) []wiki.Hit {
+	hits := find(own)
 	for _, m := range mounts {
 		if m.bundle == nil {
 			continue
 		}
-		for _, h := range m.bundle.Search(query, limit) {
+		for _, h := range find(m.bundle) {
 			h.Path = mountPath(m.name, h.Path)
 			hits = append(hits, h)
 		}

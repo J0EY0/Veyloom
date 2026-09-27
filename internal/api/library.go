@@ -184,6 +184,21 @@ func (h *handlers) transferSkill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, WikiPageResponse{Page: page})
 }
 
+// BuiltinSkillsResponse is the body of GET /api/v1/skills/builtin:
+// Veyloom's own skills, which every agent has, apart from those installed
+// from the library (docs/design.md 5.23.6).
+type BuiltinSkillsResponse struct {
+	Skills []hub.BuiltinSkill `json:"skills"`
+}
+
+func (h *handlers) builtinSkills(w http.ResponseWriter, _ *http.Request) {
+	skills := []hub.BuiltinSkill{}
+	if h.deps.Wikis != nil {
+		skills = append(skills, h.deps.Wikis.BuiltinSkills()...)
+	}
+	writeJSON(w, http.StatusOK, BuiltinSkillsResponse{Skills: skills})
+}
+
 func (h *handlers) importSkill(w http.ResponseWriter, r *http.Request) {
 	wikis, ok := h.wikis(w)
 	if !ok {

@@ -191,7 +191,7 @@ func BuildWork(ask Message, turns []TaskTurn, waits []ChainWait, members []Membe
 	}
 
 	w := Work{
-		Chain: ask.ID, RoomID: ask.Room, Title: AskLine(ask.Body, names), Ask: stripAsk(ask.Body, names), AskedBy: ask.UserID,
+		Chain: ask.ID, RoomID: ask.Room, Title: AskLine(ask.Body, names), Ask: StripAsk(ask.Body, names), AskedBy: ask.UserID,
 		Asked: []string{}, StartedAt: turns[0].StartedAt, Turns: make([]WorkTurn, 0, len(turns)), Events: []WorkEvent{},
 	}
 	lastChange := map[string]time.Time{}
@@ -325,9 +325,9 @@ func workEvents(lastChange map[string]time.Time, members []Member, events []Bran
 	return res
 }
 
-// stripAsk is what a message asks, whole, without the @s of the names it
-// began with.
-func stripAsk(body string, names []string) string {
+// StripAsk is what a message asks, whole, without the @s of the names it
+// began with, the longest name taken first.
+func StripAsk(body string, names []string) string {
 	text := strings.TrimSpace(body)
 	names = slices.Clone(names)
 	slices.SortFunc(names, func(a, b string) int { return len(b) - len(a) })

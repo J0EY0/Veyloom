@@ -15,6 +15,8 @@ docs/
 
 # Build output
 bin/
+# `go build ./cmd/veyloom` run in the repository root
+/veyloom
 
 # Web client: dependencies and build output
 web/node_modules/

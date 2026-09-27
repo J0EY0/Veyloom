@@ -54,7 +54,7 @@ var wikiToolSpecs = []roomToolSpec{
 			"With scope library, search the skill library instead: patterns of how tasks go wrong or right, and the skills made of them. " +
 			"Each word is matched as written, ignoring case, in titles, descriptions, tags, paths and text; the best matches come first. Read a page with read_wiki.",
 		Params: []roomToolParam{
-			{Name: "query", Type: "string", Description: "The words to look for: names, paths, identifiers or error text work as well as plain words.", Required: true},
+			{Name: "query", Type: "string", Description: "The words to look for: names, paths, identifiers or error text work as well as plain words. Words are split at spaces only, so give Chinese as short words with spaces between (审批 超时), not as a whole question.", Required: true},
 			{Name: "limit", Type: "integer", Description: "How many pages to show at most."},
 			paramWikiScope,
 		},

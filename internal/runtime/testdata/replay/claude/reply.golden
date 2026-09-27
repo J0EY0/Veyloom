@@ -1,0 +1,12 @@
+{"kind":"session","session_ref":"3cf94326-17a2-4a2f-a8a8-64d82f79176c"}
+{"kind":"status","text":"session started (model claude-haiku-4-5-20251001)"}
+{"kind":"text","text":"读"}
+{"kind":"text","text":"取了"}
+{"kind":"text","text":" NOTES."}
+{"kind":"text","text":"md 文件"}
+{"kind":"text","text":"，内"}
+{"kind":"text","text":"容为：\""}
+{"kind":"text","text":"The build is green"}
+{"kind":"text","text":".\""}
+{"kind":"quota","quota":{"resets_at":"2026-09-27T17:00:00Z","used_percent":93,"window":"7d"}}
+result {"output":"读取了 NOTES.md 文件，内容为：\"The build is green.\"","session_ref":"3cf94326-17a2-4a2f-a8a8-64d82f79176c","usage":{"input_tokens":10,"cache_read_tokens":10889,"cache_write_tokens":8740,"output_tokens":148}}

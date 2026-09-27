@@ -22,6 +22,7 @@ func TestMarshalRoundTrip(t *testing.T) {
 		Probe{},
 		StartTurn{TurnID: "t1", Runtime: "fake", Spec: runtime.TurnSpec{Prompt: "hi", Options: map[string]any{"reply": "yo"}}},
 		CancelTurn{TurnID: "t1"},
+		SteerTurn{TurnID: "t1", SteerID: "s1", Text: "New in topic #3:\n>> [Alice] use blue"},
 		TurnEvent{TurnID: "t1", Event: runtime.Event{Kind: runtime.EventText, Text: "chunk", At: time.Date(2026, 9, 13, 0, 0, 0, 0, time.UTC)}},
 		TurnDone{TurnID: "t1", Result: runtime.Result{Output: "yo", SessionRef: "s1", Usage: runtime.Usage{InputTokens: 12, OutputTokens: 3}}},
 		TurnDone{TurnID: "t2", Error: "boom"},
@@ -63,7 +64,7 @@ func TestMarshalRoundTrip(t *testing.T) {
 func TestMarshal_CoversEveryKind(t *testing.T) {
 	// Every kind constant must have a decoder, otherwise a message could be
 	// sent but never received.
-	for _, kind := range []Kind{KindHello, KindHeartbeat, KindRuntimesReport, KindWelcome, KindProbe, KindStartTurn, KindCancelTurn, KindTurnEvent, KindTurnDone, KindApprovalRequest, KindApprovalDecision, KindRoomQuery, KindRoomResult, KindWorkspaceRequest, KindWorkspaceResult} {
+	for _, kind := range []Kind{KindHello, KindHeartbeat, KindRuntimesReport, KindWelcome, KindProbe, KindStartTurn, KindCancelTurn, KindSteerTurn, KindTurnEvent, KindTurnDone, KindApprovalRequest, KindApprovalDecision, KindRoomQuery, KindRoomResult, KindWorkspaceRequest, KindWorkspaceResult} {
 		if _, ok := decoders[kind]; !ok {
 			t.Errorf("no decoder registered for %q", kind)
 		}

@@ -38,7 +38,10 @@ type turnRunner struct {
 	// and query id; queries numbers them.
 	waiting map[string]chan protocol.RoomResult
 	queries atomic.Uint64
-	wg      sync.WaitGroup
+	// steers are the texts to pass to each turn, in the order the hub sent
+	// them, while one of them is being passed (steer).
+	steers map[string][]protocol.SteerTurn
+	wg     sync.WaitGroup
 }
 
 func newTurnRunner(runners map[string]runtime.Runner, conn protocol.Conn, flush time.Duration, skillRoot string) *turnRunner {
@@ -49,6 +52,7 @@ func newTurnRunner(runners map[string]runtime.Runner, conn protocol.Conn, flush 
 		skillRoot: skillRoot,
 		active:    make(map[string]runtime.Turn),
 		waiting:   make(map[string]chan protocol.RoomResult),
+		steers:    make(map[string][]protocol.SteerTurn),
 	}
 }
 
@@ -107,6 +111,57 @@ func (r *turnRunner) start(ctx context.Context, req protocol.StartTurn) {
 func (r *turnRunner) cancel(turnID string) {
 	if turn := r.lookup(turnID); turn != nil {
 		turn.Cancel()
+	}
+}
+
+// steer passes text to a running turn, its runtime's own way (design.md
+// 5.23.2). The turn's events tell what became of it; text the turn cannot
+// take, or a turn not running here, is reported dropped at once, and the
+// hub puts what the text carried back in the member's queue. A runtime may
+// wait on its CLI to take the text, so the loop does not; the texts for a
+// turn go to it one after another, in the order they came, as the hub
+// reads the topic for each on from where the one before stopped.
+func (r *turnRunner) steer(ctx context.Context, req protocol.SteerTurn) {
+	r.mu.Lock()
+	passing := len(r.steers[req.TurnID]) > 0
+	r.steers[req.TurnID] = append(r.steers[req.TurnID], req)
+	r.mu.Unlock()
+	if passing {
+		return
+	}
+	r.wg.Add(1)
+	go func() {
+		defer r.wg.Done()
+		r.passSteers(ctx, req.TurnID)
+	}()
+}
+
+// passSteers passes the texts for turnID in order, until none is left.
+func (r *turnRunner) passSteers(ctx context.Context, turnID string) {
+	for {
+		r.mu.Lock()
+		line := r.steers[turnID]
+		if len(line) == 0 {
+			delete(r.steers, turnID)
+			r.mu.Unlock()
+			return
+		}
+		req, turn := line[0], r.active[turnID]
+		r.mu.Unlock()
+		err := runtime.ErrSteerRefused
+		if turn != nil {
+			err = turn.Steer(req.SteerID, req.Text)
+		}
+		if err != nil {
+			_ = r.conn.Send(ctx, protocol.TurnEvent{TurnID: turnID, Event: runtime.Event{
+				Kind: runtime.EventSteerDropped, SteerID: req.SteerID, Text: err.Error(), At: time.Now(),
+			}})
+		}
+		// Taken off only once passed: one that comes meanwhile waits its
+		// turn behind it rather than start a pass of its own.
+		r.mu.Lock()
+		r.steers[turnID] = r.steers[turnID][1:]
+		r.mu.Unlock()
 	}
 }
 

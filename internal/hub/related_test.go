@@ -96,7 +96,7 @@ func TestUpkeepHealthPart_Unlinked(t *testing.T) {
 		t.Errorf("health:\n%s", got)
 	}
 	var steps briefWriter
-	upkeepSteps(&steps, &upkeep{}, store.DefaultMemoryPrefs, true, false)
+	upkeepSteps(&steps, &upkeep{}, store.DefaultMemoryPrefs, upkeepFound{unhealthy: true})
 	if !strings.Contains(steps.sb.String(), "Where two pages name the same path and one bears on the other, link it from the other") {
 		t.Errorf("steps:\n%s", steps.sb.String())
 	}

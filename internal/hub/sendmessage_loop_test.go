@@ -36,11 +36,9 @@ func TestLoop_SendMessageWakesAMemberAtOnce(t *testing.T) {
 	if leadTurn.EndedAt == nil || !coderTurn.StartedAt.Before(*leadTurn.EndedAt) {
 		t.Errorf("Coder should start while Lead still works: started %v, Lead ended %v", coderTurn.StartedAt, leadTurn.EndedAt)
 	}
-	sent := slices.IndexFunc(l.replies(thread.ID, store.SenderAgent), func(m store.Message) bool {
-		return m.MemberID == lead.ID && m.Body == "@Coder please build the API" && slices.Contains(m.Mentions, store.Mention{Kind: store.MentionAgent, ID: coder.ID})
-	})
-	if sent < 0 {
-		t.Errorf("Lead's message is not in the topic: %+v", l.replies(thread.ID, store.SenderAgent))
+	// Sent before Lead said a thing, it heads the topic Lead opened.
+	if root := l.root(thread); root.MemberID != lead.ID || root.Body != "@Coder please build the API" || !slices.Contains(root.Mentions, store.Mention{Kind: store.MentionAgent, ID: coder.ID}) {
+		t.Errorf("Lead's message is not in the topic: %+v", root)
 	}
 	if tx := transcriptOf(t, leadTurn); !strings.Contains(tx, "Posted in this topic. Woken, working alongside you now: Coder.") {
 		t.Errorf("what Lead was told:\n%s", tx)
@@ -114,7 +112,7 @@ func TestLoop_SendMessageLimitsAndReachesThePerson(t *testing.T) {
 	turns := l.waitTurns(1, store.TurnDone, "Lead's turn")
 	thread := l.topic(msg)
 	var sent []store.Message
-	for _, m := range l.replies(thread.ID, store.SenderAgent) {
+	for _, m := range l.saidIn(thread) {
 		if m.Body == "@alice have a look" || m.Body == "one more note" {
 			sent = append(sent, m)
 		}

@@ -410,6 +410,22 @@ func (s *Store) UpdateMessageBody(ctx context.Context, id, body, turnID string, 
 	return toMessage(row)
 }
 
+// SetMessageTitle names the task a message hands on.
+func (s *Store) SetMessageTitle(ctx context.Context, id, title string) (Message, error) {
+	uid, err := parseUUID(id)
+	if err != nil {
+		return Message{}, err
+	}
+	row, err := s.q.SetMessageTitle(ctx, db.SetMessageTitleParams{ID: uid, Title: title})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Message{}, fmt.Errorf("message %s: %w", id, ErrNotFound)
+	}
+	if err != nil {
+		return Message{}, mapMessageError(err)
+	}
+	return toMessage(row)
+}
+
 // ThreadSummaries returns the topic summary for each of the given
 // top-level messages that has one, keyed by message id. Messages without
 // a thread are simply absent from the result.

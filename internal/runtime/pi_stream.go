@@ -72,6 +72,17 @@ type piBlock struct {
 	Text string `json:"text"`
 }
 
+// text is the message's text blocks joined, as pi reads a user message.
+func (m *piMessage) text() string {
+	var b strings.Builder
+	for _, block := range m.Content {
+		if block.Type == "text" {
+			b.WriteString(block.Text)
+		}
+	}
+	return b.String()
+}
+
 // piUsage is one assistant message's tokens. Pi reports cached input apart
 // from fresh input, as Anthropic does.
 type piUsage struct {
@@ -163,7 +174,7 @@ func (p *piParser) handle(ev piEvent) {
 			}
 		}
 	case "tool_execution_start":
-		p.emit(Event{Kind: EventToolCall, Tool: ev.ToolName, Input: truncate(compactJSON(ev.Args), p.cfg.MaxEventBytes)})
+		p.emit(Event{Kind: EventToolCall, Tool: ev.ToolName, CallID: ev.ToolCallID, Input: truncate(compactJSON(ev.Args), p.cfg.MaxEventBytes)})
 		if piEditTools[ev.ToolName] {
 			if path := piArgPath(ev.Args); path != "" {
 				p.edits[ev.ToolCallID] = path
@@ -174,7 +185,7 @@ func (p *piParser) handle(ev piEvent) {
 		if ev.IsError {
 			text = "error: " + text
 		}
-		p.emit(Event{Kind: EventToolResult, Tool: ev.ToolName, Text: text})
+		p.emit(Event{Kind: EventToolResult, Tool: ev.ToolName, CallID: ev.ToolCallID, Text: text})
 		if path, ok := p.edits[ev.ToolCallID]; ok {
 			delete(p.edits, ev.ToolCallID)
 			if !ev.IsError {

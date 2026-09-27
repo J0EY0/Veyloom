@@ -1,7 +1,11 @@
 package hub
 
 import (
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -36,6 +40,64 @@ func kinds(events []Event) []EventKind {
 		out[i] = ev.Kind
 	}
 	return out
+}
+
+// A running turn's transcript reads as far as it is written whole, and its
+// events carry the numbers the room heard them by, from 1: what a page
+// opened late lays under the live events.
+func TestLoop_ARunningTurnsTranscriptReadsAsFarAsItIsWritten(t *testing.T) {
+	l := newLoop(t)
+	slow := l.member("Slow", map[string]any{"tool": true, "reply": "done", "delay_ms": 1500})
+	sub := l.h.Subscribe(l.room.ID)
+	defer sub.Close()
+	l.say("@Slow go", "", slow)
+
+	// The call and its result are heard while the turn waits.
+	var turnID string
+	var heard []runtime.Event
+	for !slices.ContainsFunc(heard, func(ev runtime.Event) bool { return ev.Kind == runtime.EventToolResult }) {
+		for _, ev := range collectUntil(t, sub, EventTurnEvent) {
+			switch ev.Kind {
+			case EventTurnStarted:
+				turnID = ev.Turn.ID
+			case EventTurnEvent:
+				heard = append(heard, *ev.TurnEvent)
+			}
+		}
+	}
+
+	n, ok := l.h.TranscriptSoFar(turnID)
+	if !ok {
+		t.Fatal("a running turn has a transcript so far")
+	}
+	data, err := os.ReadFile(filepath.Join(l.h.cfg.TranscriptDir, turnID+".jsonl"))
+	if err != nil || n == 0 || int64(len(data)) < n || data[n-1] != '\n' {
+		t.Fatalf("the transcript is whole records up to %d: %q %v", n, data, err)
+	}
+	var kinds []runtime.EventKind
+	var numbers []int64
+	for line := range strings.SplitSeq(strings.TrimSpace(string(data[:n])), "\n") {
+		var rec transcriptLine
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("a torn record %q: %v", line, err)
+		}
+		if rec.Event != nil {
+			kinds, numbers = append(kinds, rec.Event.Kind), append(numbers, rec.Event.Seq)
+		}
+	}
+	// The session, which only the transcript keeps, then what the room heard.
+	if !slices.Equal(numbers, []int64{1, 2, 3, 4}) || kinds[0] != runtime.EventSession {
+		t.Errorf("the transcript's events: %v numbered %v", kinds, numbers)
+	}
+	for i, ev := range heard {
+		if ev.Seq != int64(i+2) || ev.Kind != kinds[i+1] {
+			t.Errorf("the room heard %s as %d", ev.Kind, ev.Seq)
+		}
+	}
+	l.waitTurns(1, store.TurnDone, "the slow turn")
+	if _, ok := l.h.TranscriptSoFar(turnID); ok {
+		t.Error("a finished turn is read whole, as it was written")
+	}
 }
 
 func TestLoop_SubscribersSeeTheWholeTurn(t *testing.T) {
@@ -141,7 +203,7 @@ func TestLoop_CancelledTurnResolvesApprovalsLive(t *testing.T) {
 	l.say("@Careful build", "", careful)
 	events := collectUntil(t, sub, EventApprovalRequested)
 	a := events[len(events)-1].Approval
-	if err := l.h.CancelTurn(l.ctx, a.TurnID); err != nil {
+	if err := l.h.CancelTurn(l.ctx, a.TurnID, false); err != nil {
 		t.Fatal(err)
 	}
 	events = collectUntil(t, sub, EventTurnFinished)

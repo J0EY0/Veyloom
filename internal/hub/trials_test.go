@@ -109,9 +109,12 @@ func TestLoop_SkillsEvolveOnTrial(t *testing.T) {
 	if page.Trial == nil || page.Trial.Status != store.TrialOpen || page.Trial.Needed != 3 || page.Trial.Uses != 0 || page.Trial.TopicNumber != l.topic(again).Number {
 		t.Errorf("the skill's page shows the trial %+v", page.Trial)
 	}
-	// The brief of an agent it is installed for says it may improve it.
-	if brief := promptOf(t, turns[0]); !strings.Contains(brief, "Installed for you: go-table-tests. Those you improve as you use them") {
+	// An agent it is installed for is told so, and that it may improve it.
+	if brief := promptOf(t, turns[0]); !strings.Contains(brief, "Installed for you from the skill library: go-table-tests.") {
 		t.Errorf("the brief:\n%s", brief)
+	}
+	if standing := systemPromptOf(t, turns[0]); !strings.Contains(standing, "The skills installed for you, which the brief names, you improve as you use them") {
+		t.Errorf("the standing instructions:\n%s", standing)
 	}
 
 	// Turns that use it since: a failure does not count, three that end

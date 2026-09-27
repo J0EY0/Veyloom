@@ -147,6 +147,8 @@ func (w *Machine) handle(ctx context.Context, conn protocol.Conn, turns *turnRun
 		turns.start(ctx, m)
 	case protocol.CancelTurn:
 		turns.cancel(m.TurnID)
+	case protocol.SteerTurn:
+		turns.steer(ctx, m)
 	case protocol.ApprovalDecision:
 		turns.answer(m.TurnID, m.ApprovalID, m.Decision)
 	case protocol.RoomResult:

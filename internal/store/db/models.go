@@ -45,14 +45,18 @@ type Approval struct {
 }
 
 type Attachment struct {
-	ID        pgtype.UUID
-	RoomID    pgtype.UUID
-	MessageID pgtype.UUID
-	Filename  string
-	MediaType string
-	Size      int64
-	Path      string
-	CreatedAt pgtype.Timestamptz
+	ID            pgtype.UUID
+	RoomID        pgtype.UUID
+	MessageID     pgtype.UUID
+	Filename      string
+	MediaType     string
+	Kind          string
+	Size          int64
+	Width         int32
+	Height        int32
+	Path          string
+	ThumbnailPath string
+	CreatedAt     pgtype.Timestamptz
 }
 
 type BranchEvent struct {
@@ -63,6 +67,27 @@ type BranchEvent struct {
 	Ref         string
 	ViaMemberID pgtype.UUID
 	CreatedAt   pgtype.Timestamptz
+}
+
+type Draft struct {
+	ID              pgtype.UUID
+	ProjectID       pgtype.UUID
+	RoomID          pgtype.UUID
+	ThreadID        pgtype.UUID
+	MemberID        pgtype.UUID
+	TurnID          pgtype.UUID
+	Kind            string
+	TargetID        pgtype.UUID
+	Subject         string
+	Params          []byte
+	ThenNote        string
+	Status          string
+	Result          []byte
+	MessageID       pgtype.UUID
+	ResultMessageID pgtype.UUID
+	DecidedBy       pgtype.UUID
+	CreatedAt       pgtype.Timestamptz
+	SettledAt       pgtype.Timestamptz
 }
 
 type InboxRead struct {
@@ -111,19 +136,21 @@ type MemberRule struct {
 }
 
 type MemberSession struct {
-	ID          pgtype.UUID
-	MemberID    pgtype.UUID
-	Runtime     string
-	MachineID   pgtype.UUID
-	WorkDir     string
-	SessionRef  string
-	RoomSeen    int64
-	ThreadSeen  []byte
-	Compactions int32
-	WikiSeen    pgtype.Timestamptz
-	StartedAt   pgtype.Timestamptz
-	EndedAt     pgtype.Timestamptz
-	EndReason   string
+	ID             pgtype.UUID
+	MemberID       pgtype.UUID
+	Runtime        string
+	MachineID      pgtype.UUID
+	WorkDir        string
+	SessionRef     string
+	RoomSeen       int64
+	ThreadSeen     []byte
+	Compactions    int32
+	WikiSeen       pgtype.Timestamptz
+	BriefSeen      []byte
+	RoleCardDigest string
+	StartedAt      pgtype.Timestamptz
+	EndedAt        pgtype.Timestamptz
+	EndReason      string
 }
 
 type Message struct {
@@ -139,6 +166,17 @@ type Message struct {
 	CreatedAt  pgtype.Timestamptz
 	TurnID     pgtype.UUID
 	Title      string
+}
+
+type Pause struct {
+	ID        pgtype.UUID
+	MachineID pgtype.UUID
+	Runtime   string
+	MemberID  pgtype.UUID
+	Reason    string
+	Detail    string
+	EndsAt    pgtype.Timestamptz
+	CreatedAt pgtype.Timestamptz
 }
 
 type Project struct {
@@ -166,6 +204,14 @@ type Project struct {
 	WorkspacePendingMessageID pgtype.UUID
 }
 
+type QueuedWake struct {
+	MemberID  pgtype.UUID
+	MessageID pgtype.UUID
+	ThreadID  pgtype.UUID
+	AnchorID  pgtype.UUID
+	QueuedAt  pgtype.Timestamptz
+}
+
 type RelayHold struct {
 	MessageID        pgtype.UUID
 	MemberID         pgtype.UUID
@@ -174,6 +220,22 @@ type RelayHold struct {
 	Reason           string
 	CreatedAt        pgtype.Timestamptz
 	ContinuedAt      pgtype.Timestamptz
+}
+
+type Reminder struct {
+	ID             pgtype.UUID
+	MemberID       pgtype.UUID
+	RoomID         pgtype.UUID
+	ThreadID       pgtype.UUID
+	TurnID         pgtype.UUID
+	Note           string
+	DueAt          pgtype.Timestamptz
+	Status         string
+	SetMessageID   pgtype.UUID
+	FiredMessageID pgtype.UUID
+	CancelledBy    pgtype.UUID
+	CreatedAt      pgtype.Timestamptz
+	SettledAt      pgtype.Timestamptz
 }
 
 type Room struct {
@@ -242,6 +304,17 @@ type Turn struct {
 type User struct {
 	ID        pgtype.UUID
 	Name      string
+	CreatedAt pgtype.Timestamptz
+}
+
+type WikiLookup struct {
+	ID        int64
+	ProjectID pgtype.UUID
+	TurnID    pgtype.UUID
+	Scope     string
+	Query     string
+	Hits      int32
+	Path      string
 	CreatedAt pgtype.Timestamptz
 }
 

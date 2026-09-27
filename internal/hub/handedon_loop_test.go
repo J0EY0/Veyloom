@@ -182,8 +182,8 @@ func TestLoop_NamingTheMemberAskedReportsBack(t *testing.T) {
 	if !strings.Contains(prompt, "- Coder (topic #1): @Lead Built. Low or high by default?") || !strings.Contains(prompt, "answer a question") {
 		t.Errorf("the brief summing up:\n%s", prompt)
 	}
-	if leadSpec := specOf(t, turns[2]); !strings.Contains(leadSpec.Prompt, "you are woken once with what they came to") {
-		t.Errorf("the brief of the member asked:\n%s", leadSpec.Prompt)
+	if leadSpec := specOf(t, turns[2]); !strings.Contains(leadSpec.SystemPrompt, "you are woken once with what the members you handed it to came to") {
+		t.Errorf("the standing instructions of the member asked:\n%s", leadSpec.SystemPrompt)
 	}
 }
 

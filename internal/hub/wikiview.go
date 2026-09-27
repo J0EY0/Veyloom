@@ -489,18 +489,24 @@ func (h *Hub) InstallSkill(ctx context.Context, name, agentID string, installed 
 // CheckSkills refuses a name that is no current skill of the library, one
 // it never had or has retired: what can be installed for an agent.
 func (h *Hub) CheckSkills(ctx context.Context, names []string) error {
+	return h.wikis.checkSkills(ctx, names)
+}
+
+// checkSkills is CheckSkills, for whoever holds the shelf.
+func (s *wikiShelf) checkSkills(ctx context.Context, names []string) error {
 	if len(names) == 0 {
 		return nil
 	}
-	r, err := h.openLibrary(ctx)
+	b, err := s.library(ctx)
 	if err != nil {
 		return err
 	}
+	s.sync(ctx, b, "", "")
 	for _, name := range names {
 		if !wikiSlug(name) {
 			return store.Missing("skillUnknown", store.Params{"name": name}, "the skill library has no skill %s", name)
 		}
-		if s, err := r.bundle.Page(wiki.SkillPath(name)); err != nil || s.Type != "Skill" || s.Status == okf.Deprecated {
+		if page, err := b.Page(wiki.SkillPath(name)); err != nil || page.Type != "Skill" || page.Status == okf.Deprecated {
 			return store.Missing("skillUnknown", store.Params{"name": name}, "the skill library has no skill %s", name)
 		}
 	}

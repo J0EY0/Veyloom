@@ -20,15 +20,16 @@ import (
 // MCP tools on the turn's endpoint, Pi through an extension that posts to
 // the endpoint's plain JSON route. All of them end in TurnHost.QueryRoom.
 const (
-	RoomToolListTopics = "list_topics"
-	RoomToolReadTopic  = "read_topic"
-	RoomToolReadTurn   = "read_turn"
-	RoomToolReadRoom   = "read_room"
-	RoomToolSearch     = "search_messages"
+	RoomToolListTopics  = "list_topics"
+	RoomToolReadTopic   = "read_topic"
+	RoomToolReadTurn    = "read_turn"
+	RoomToolReadMessage = "read_message"
+	RoomToolReadRoom    = "read_room"
+	RoomToolSearch      = "search_messages"
 )
 
 // RoomToolNames lists the room tools in the order they are presented.
-var RoomToolNames = []string{RoomToolListTopics, RoomToolReadTopic, RoomToolReadTurn, RoomToolReadRoom, RoomToolSearch}
+var RoomToolNames = []string{RoomToolListTopics, RoomToolReadTopic, RoomToolReadTurn, RoomToolReadMessage, RoomToolReadRoom, RoomToolSearch}
 
 // AgentToolNames lists every tool a turn gets from Veyloom: the room tools,
 // then the wiki tools (wikitools.go). The memory tools (memorytools.go)
@@ -118,6 +119,14 @@ var roomToolSpecs = []roomToolSpec{
 			"read_topic gives each agent turn's id. A wiki maintainer also reads other projects' turns that used a skill its team owns.",
 		Params: []roomToolParam{
 			{Name: "turn", Type: "string", Required: true, Description: "The turn's id, as read_topic, list_turns or a brief gives it."},
+		},
+	},
+	{
+		Name: RoomToolReadMessage, ReadOnly: true, RawArgs: true,
+		Description: "Read one message of this project's chat whole, by its id: who said it, when, where, all of its text and the files it carries. " +
+			"A brief or another tool cuts a long message short and gives its id for this.",
+		Params: []roomToolParam{
+			{Name: "message", Type: "string", Required: true, Description: "The message's id, as the message cut short gives it."},
 		},
 	},
 	{

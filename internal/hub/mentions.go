@@ -2,6 +2,7 @@ package hub
 
 import (
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -43,7 +44,27 @@ func prose(markdown string) string {
 	return b.String()
 }
 
-// mentionsName says whether markdown names name with an @ in its prose.
-func mentionsName(markdown, name string) bool {
-	return name != "" && strings.Contains(prose(markdown), "@"+name)
+// namedAt finds which of names the prose text @-mentions. At each @ the
+// longest of names that follows is the one meant: with Coder and Coder2
+// both given, "@Coder2" names Coder2 and not Coder; with Coder alone it
+// names Coder, as "@Coder请看" does, since nothing marks where a name
+// ends. So every name an @ may mean must be given, the name of a member
+// taken out of the project too.
+func namedAt(text string, names []string) map[string]bool {
+	if !strings.Contains(text, "@") {
+		return nil
+	}
+	longest := slices.Clone(names)
+	slices.SortFunc(longest, func(a, b string) int { return len(b) - len(a) })
+	found := make(map[string]bool)
+	for rest := text; ; {
+		i := strings.IndexByte(rest, '@')
+		if i < 0 {
+			return found
+		}
+		rest = rest[i+1:]
+		if j := slices.IndexFunc(longest, func(n string) bool { return n != "" && strings.HasPrefix(rest, n) }); j >= 0 {
+			found[longest[j]] = true
+		}
+	}
 }

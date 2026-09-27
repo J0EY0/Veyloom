@@ -25,6 +25,8 @@ var ErrTurnCancelled = errors.New("runtime: turn cancelled")
 //
 //	reply    string  reply text; default echoes the last line of the prompt
 //	delay_ms number  how long the turn takes before replying
+//	steer    string  "refuse": Steer is refused; "drop": what Steer passes
+//	                 is taken but never got to, and reported dropped
 //	fail     bool    end the turn with an error instead of a reply
 //	preamble string  with tool: text emitted before the tool call
 //	tool     bool    emit a tool_call / tool_result pair first
@@ -43,6 +45,11 @@ var ErrTurnCancelled = errors.New("runtime: turn cancelled")
 //	fail_on_resume bool  fail at once, before any event, whenever the turn
 //	                 resumes a session: a session that will not resume
 //	failure  string  the FailureKind reported with either kind of failure
+//	retry_in_ms number  with failure: report it passing this long from now
+//	                 (Result.RetryAt)
+//	quota    object  report the account's standing before replying: limited
+//	                 (bool), used_percent (number), window (string) and
+//	                 resets_in_ms (number)
 //	compact  bool    compact the session before replying
 //	changes  []string report these files as written, before replying
 //	write    []string write these files for real, relative to the working
@@ -67,9 +74,14 @@ var ErrTurnCancelled = errors.New("runtime: turn cancelled")
 //	                 its preamble
 //	summary_reply string  in a turn summing up the work it handed on, reply
 //	                 with this and do nothing else
+//	when_asked string  asked for the reply a turn did not give (ReplyAsk),
+//	                 give this; without it, say nothing again
 //	withdraw_ms number  ask permission to run a command, take the request
 //	                 back after this long unless answered, and reply with
 //	                 what became of it
+//
+// What Steer passes before the reply is taken in, at once while the turn
+// waits out its delay, and the reply ends with the last line of each.
 type Fake struct{}
 
 // NewFake returns the fake runtime.
@@ -86,83 +98,174 @@ func (*Fake) Detect(context.Context) Info {
 // StartTurn implements Runner.
 func (*Fake) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error) {
 	ctx, cancel := context.WithCancel(ctx)
-	t := &fakeTurn{turnBase: newTurnBase(ctx, cancel)}
+	t := &fakeTurn{turnBase: newTurnBase(ctx, cancel), steerMode: optString(spec.Options, "steer"), working: true, heard: make(chan struct{}, 1)}
 	go t.run(ctx, spec)
 	return t, nil
 }
 
 type fakeTurn struct {
 	*turnBase
+	steerMode string
+	// While working, the turn takes steering: said holds what Steer
+	// passed until the turn gets to it, and heard tells it there is some.
+	steerMu sync.Mutex
+	working bool
+	said    []fakeSteer
+	heard   chan struct{}
 }
 
-// run plays the scripted turn. Every emit checks ctx so Cancel takes effect
-// at the next step; finish always closes the channels and unblocks Result.
+// fakeSteer is text Steer passed.
+type fakeSteer struct{ id, text string }
+
+// Steer implements Turn: the turn takes text while it works.
+func (t *fakeTurn) Steer(id, text string) error {
+	t.steerMu.Lock()
+	defer t.steerMu.Unlock()
+	if !t.working || t.steerMode == "refuse" {
+		return ErrSteerRefused
+	}
+	t.said = append(t.said, fakeSteer{id: id, text: text})
+	select {
+	case t.heard <- struct{}{}:
+	default:
+	}
+	return nil
+}
+
+// work takes as long as delay, taking in what Steer passes meanwhile. It
+// returns the texts taken in, and false when the turn was cancelled.
+func (t *fakeTurn) work(ctx context.Context, delay time.Duration) ([]string, bool) {
+	var took []string
+	done := time.After(delay)
+	for {
+		select {
+		case <-t.heard:
+			texts, ok := t.takeIn(ctx, false)
+			if !ok {
+				return nil, false
+			}
+			took = append(took, texts...)
+		case <-done:
+			return took, true
+		case <-ctx.Done():
+			return nil, false
+		}
+	}
+}
+
+// takeIn takes in what Steer passed so far, and with stop, stops taking
+// more: the reply is on its way. It returns the texts taken in, and false
+// when the turn was cancelled.
+func (t *fakeTurn) takeIn(ctx context.Context, stop bool) ([]string, bool) {
+	t.steerMu.Lock()
+	said := t.said
+	if t.steerMode == "drop" {
+		said = nil
+	} else {
+		t.said = nil
+	}
+	if stop {
+		t.working = false
+	}
+	t.steerMu.Unlock()
+	var took []string
+	for _, s := range said {
+		if !t.emit(ctx, Event{Kind: EventSteer, SteerID: s.id, Text: s.text}) {
+			return nil, false
+		}
+		took = append(took, s.text)
+	}
+	return took, true
+}
+
+// stopSteering stops the turn taking steering and returns what it never
+// got to.
+func (t *fakeTurn) stopSteering() []fakeSteer {
+	t.steerMu.Lock()
+	defer t.steerMu.Unlock()
+	t.working = false
+	left := t.said
+	t.said = nil
+	return left
+}
+
+// run plays the scripted turn and finishes it, which always closes the
+// channels and unblocks Result. What Steer passed that the turn never got
+// to is reported dropped first.
 func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
+	res, err := t.play(ctx, spec)
+	for _, s := range t.stopSteering() {
+		t.emit(ctx, Event{Kind: EventSteerDropped, SteerID: s.id})
+	}
+	t.finish(ctx, res, err)
+}
+
+// play plays the scripted turn. Every emit checks ctx so Cancel takes
+// effect at the next step.
+func (t *fakeTurn) play(ctx context.Context, spec TurnSpec) (Result, error) {
 	// A session that will not resume: the turn fails before it says a
 	// thing, the way a CLI does that cannot find the session it was given.
 	if spec.Session.Resume && optBool(spec.Options, "fail_on_resume") {
-		t.finish(ctx, Result{Failure: FailureKind(optString(spec.Options, "failure"))}, errors.New("fake runtime: cannot resume the session"))
-		return
+		return fakeFailure(spec), errors.New("fake runtime: cannot resume the session")
 	}
 	session := spec.Session.resumeID()
 	if session == "" {
 		session = "fake-" + randomHex(4)
 	}
 	if !t.emit(ctx, Event{Kind: EventSession, SessionRef: session}) || !t.emit(ctx, Event{Kind: EventStatus, Text: "thinking"}) {
-		t.finish(ctx, Result{}, ErrTurnCancelled)
-		return
+		return Result{}, ErrTurnCancelled
+	}
+	if spec.Prompt == ReplyAsk {
+		// Asked for the reply it did not give: what when_asked says, or
+		// nothing again.
+		text := optString(spec.Options, "when_asked")
+		if text != "" && !t.emit(ctx, Event{Kind: EventText, Text: text}) {
+			return Result{}, ErrTurnCancelled
+		}
+		return Result{Output: text, SessionRef: session, Usage: fakeUsage(spec.Prompt, text)}, nil
 	}
 	if text := optString(spec.Options, "summary_reply"); text != "" && strings.Contains(spec.Prompt, HandedOnHeading) {
 		// Summing up the work it handed on: said, and nothing more done.
 		if !t.emit(ctx, Event{Kind: EventText, Text: text}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
-		t.finish(ctx, Result{Output: text, SessionRef: session}, nil)
-		return
+		return Result{Output: text, SessionRef: session}, nil
 	}
 	if optBool(spec.Options, "tool") {
 		// A preamble is text said before the tool runs, so a turn has two
 		// text segments around a tool call, as real agents do.
 		if pre := optString(spec.Options, "preamble"); pre != "" && !t.emit(ctx, Event{Kind: EventText, Text: pre}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: "read_file", Input: "README.md"}) ||
 			!t.emit(ctx, Event{Kind: EventToolResult, Tool: "read_file", Text: "# Veyloom"}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 	}
 	if optBool(spec.Options, "compact") {
 		if !t.emit(ctx, Event{Kind: EventCompaction, Phase: CompactionStart}) || !t.emit(ctx, Event{Kind: EventCompaction, Phase: CompactionEnd}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 	}
 	for _, path := range optStrings(spec.Options, "changes") {
 		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: "write_file", Input: path}) ||
 			!t.emit(ctx, Event{Kind: EventFileChanged, Path: path}) ||
 			!t.emit(ctx, Event{Kind: EventToolResult, Tool: "write_file", Text: "ok"}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 	}
 	for _, path := range optStrings(spec.Options, "write") {
 		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: "write_file", Input: path}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 		result := "ok"
 		if err := writeInto(spec.WorkDir, path); err != nil {
 			result = "error: " + err.Error()
 		} else if !t.emit(ctx, Event{Kind: EventFileChanged, Path: path}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 		if !t.emit(ctx, Event{Kind: EventToolResult, Tool: "write_file", Text: result}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 	}
 	reply := optString(spec.Options, "reply")
@@ -176,8 +279,7 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 		}
 		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: "read", Input: string(input)}) ||
 			!t.emit(ctx, Event{Kind: EventToolResult, Tool: "read", Text: text}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 		reply = text
 	}
@@ -186,13 +288,11 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 		q := RoomQuery{Tool: tool, Topic: int(optFloat(spec.Options, "room_topic")), Text: optString(spec.Options, "room_text")}
 		input, _ := json.Marshal(q)
 		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: tool, Input: string(input)}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 		answer := runRoomTool(ctx, spec.Host, tool, input)
 		if !t.emit(ctx, Event{Kind: EventToolResult, Tool: tool, Text: answer}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 		if reply == "" {
 			reply = answer
@@ -204,8 +304,7 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 	var answers []string
 	for _, call := range optCalls(spec.Options, "tool_calls") {
 		if !t.emit(ctx, Event{Kind: EventToolCall, Tool: call.tool, Input: string(call.args)}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 		// A runtime has only the tools its turn was given.
 		answer := "error: this turn has no tool " + call.tool
@@ -213,8 +312,7 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 			answer = runRoomTool(ctx, spec.Host, call.tool, call.args)
 		}
 		if !t.emit(ctx, Event{Kind: EventToolResult, Tool: call.tool, Text: answer}) {
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+			return Result{}, ErrTurnCancelled
 		}
 		answers = append(answers, answer)
 	}
@@ -225,13 +323,11 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 		reply = "Echo: " + lastLine(spec.Prompt)
 	}
 	if text := optString(spec.Options, "notice"); text != "" && !t.notice(ctx, NoticeWarning, text) {
-		t.finish(ctx, Result{}, ErrTurnCancelled)
-		return
+		return Result{}, ErrTurnCancelled
 	}
 	if verdict := optString(spec.Options, "reviewed"); verdict != "" &&
 		!t.reviewed(ctx, fakeApprovalTool, fakeReviewedInput, fakeReviewer, verdict, "the fake reviewer's reasons", json.RawMessage(`{"risk":"low"}`)) {
-		t.finish(ctx, Result{}, ErrTurnCancelled)
-		return
+		return Result{}, ErrTurnCancelled
 	}
 	if q := optString(spec.Options, "question"); q != "" {
 		d, err := t.askQuestions(ctx, "AskUserQuestion", []Question{
@@ -239,8 +335,7 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 			{ID: "2", Question: "The passphrase?", Other: true, Secret: true},
 		})
 		if err != nil {
-			t.finish(ctx, Result{}, err)
-			return
+			return Result{}, err
 		}
 		if a := d.Answers(); len(a["1"]) > 0 {
 			reply = "Answer: " + answerText(a["1"])
@@ -255,8 +350,7 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 	if message := optString(spec.Options, "form"); message != "" {
 		d, err := t.askForm(ctx, "elicitation", FormRequest{Server: "fake", Message: message, Schema: json.RawMessage(fakeFormSchema)})
 		if err != nil {
-			t.finish(ctx, Result{}, err)
-			return
+			return Result{}, err
 		}
 		if content := d.Content(); content != nil {
 			reply = "Form: " + compactJSON(content)
@@ -267,8 +361,7 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 	if url := optString(spec.Options, "link"); url != "" {
 		d, err := t.askLink(ctx, "elicitation", LinkRequest{Server: "fake", Message: "Sign in to continue", URL: url})
 		if err != nil {
-			t.finish(ctx, Result{}, err)
-			return
+			return Result{}, err
 		}
 		if d.Allow {
 			reply = "Link done"
@@ -282,8 +375,7 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 		stop()
 		switch {
 		case ctx.Err() != nil:
-			t.finish(ctx, Result{}, err)
-			return
+			return Result{}, err
 		case err != nil:
 			reply = "Withdrawn"
 		default:
@@ -293,39 +385,59 @@ func (t *fakeTurn) run(ctx context.Context, spec TurnSpec) {
 	if optBool(spec.Options, "approval") {
 		var err error
 		if reply, err = t.approve(ctx, spec, reply); err != nil {
-			t.finish(ctx, Result{}, err)
-			return
+			return Result{}, err
 		}
 	}
+	var steered []string
 	if delay := optDuration(spec.Options, "delay_ms"); delay > 0 {
-		select {
-		case <-time.After(delay):
-		case <-ctx.Done():
-			t.finish(ctx, Result{}, ErrTurnCancelled)
-			return
+		var ok bool
+		if steered, ok = t.work(ctx, delay); !ok {
+			return Result{}, ErrTurnCancelled
+		}
+	}
+	if q, ok := spec.Options["quota"].(map[string]any); ok {
+		quota := Quota{Limited: optBool(q, "limited"), Window: optString(q, "window")}
+		if _, known := q["used_percent"]; known {
+			used := int(optFloat(q, "used_percent"))
+			quota.UsedPercent = &used
+		}
+		if in := optDuration(q, "resets_in_ms"); in > 0 {
+			quota.ResetsAt = time.Now().Add(in).Truncate(time.Second)
+		}
+		if !t.emit(ctx, Event{Kind: EventQuota, Quota: &quota}) {
+			return Result{}, ErrTurnCancelled
 		}
 	}
 	if optBool(spec.Options, "fail") {
 		t.emit(ctx, Event{Kind: EventError, Text: "scripted failure"})
-		t.finish(ctx, Result{Failure: FailureKind(optString(spec.Options, "failure"))}, errors.New("fake runtime: scripted failure"))
-		return
+		return fakeFailure(spec), errors.New("fake runtime: scripted failure")
 	}
 
 	if optBool(spec.Options, "quiet") {
-		t.finish(ctx, Result{SessionRef: session}, nil)
-		return
+		return Result{SessionRef: session, Usage: fakeUsage(spec.Prompt, "")}, nil
+	}
+
+	late, ok := t.takeIn(ctx, true)
+	if !ok {
+		return Result{}, ErrTurnCancelled
+	}
+	for _, text := range append(steered, late...) {
+		reply += "\nSteered: " + lastLine(text)
 	}
 
 	// Two chunks so consumers see that text arrives incrementally.
 	half := len(reply) / 2
 	if !t.emit(ctx, Event{Kind: EventText, Text: reply[:half]}) || !t.emit(ctx, Event{Kind: EventText, Text: reply[half:]}) {
-		t.finish(ctx, Result{}, ErrTurnCancelled)
-		return
+		return Result{}, ErrTurnCancelled
 	}
 
-	// Characters stand in for tokens: the prompt as input, the reply as output.
-	usage := Usage{InputTokens: int64(len([]rune(spec.Prompt))), OutputTokens: int64(len([]rune(reply)))}
-	t.finish(ctx, Result{Output: reply, SessionRef: session, Usage: usage}, nil)
+	return Result{Output: reply, SessionRef: session, Usage: fakeUsage(spec.Prompt, reply)}, nil
+}
+
+// fakeUsage is what a fake turn spends: characters stand in for tokens,
+// the prompt as input and the reply as output.
+func fakeUsage(prompt, reply string) Usage {
+	return Usage{InputTokens: int64(len([]rune(prompt))), OutputTokens: int64(len([]rune(reply)))}
 }
 
 // approve plays the approval option: the same command asked for as many
@@ -526,4 +638,14 @@ func firstBodyLine(text string) string {
 		}
 	}
 	return ""
+}
+
+// fakeFailure is the failure the options script: its kind, and when it
+// passes.
+func fakeFailure(spec TurnSpec) Result {
+	res := Result{Failure: FailureKind(optString(spec.Options, "failure"))}
+	if in := optDuration(spec.Options, "retry_in_ms"); in > 0 {
+		res.RetryAt = time.Now().Add(in)
+	}
+	return res
 }

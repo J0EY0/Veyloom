@@ -74,6 +74,31 @@ func (f *briefWiki) page(author, p, typ, title, description, body string, tags .
 	}
 }
 
+// edit gives the page at p a new body.
+func (f *briefWiki) edit(author, p, body string) {
+	f.t.Helper()
+	page, err := f.bundle.Page(p)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	d := page.Doc
+	d.SetBody(body)
+	w, err := f.bundle.Writer(author)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	if _, err := w.Put(p, d, page.Hash); err != nil {
+		f.t.Fatal(err)
+	}
+	if _, err := w.Commit(context.Background(), "test"); err != nil {
+		f.t.Fatal(err)
+	}
+	f.clock = f.clock.Add(time.Minute)
+	if err := os.Chtimes(f.bundle.Dir()+p, f.clock, f.clock); err != nil {
+		f.t.Fatal(err)
+	}
+}
+
 func (f *briefWiki) build() brief {
 	f.t.Helper()
 	b, err := f.b.Build(context.Background(), f.in)
@@ -96,9 +121,11 @@ func TestBriefWiki_TheFirstBriefListsEveryPage(t *testing.T) {
 	w.Commit(context.Background(), "test")
 
 	b := f.build()
+	if !strings.Contains(b.Standing, "The project keeps a wiki of what the team has learned") || strings.Contains(b.Prompt, "The project keeps a wiki") {
+		t.Errorf("how the wiki is used is standing, not told in the brief:\n%s", b.Prompt)
+	}
 	wantInOrder(t, b.Prompt,
-		"The project keeps a wiki of what the team has learned",
-		"Resident pages of the project wiki, carried in every turn:",
+		"Resident pages of the project wiki, carried whole whenever they change:",
 		"--- /conventions/naming.md: 命名规范\n文件名用小写 ASCII 短横线。\n\n标题照常写中文。\n",
 		"The project wiki's pages (read one with read_wiki):",
 		"   /decisions/payload-json.md: 审批的 payload 用 json (Decision) - jsonb 会重排键。\n",
@@ -150,11 +177,12 @@ func TestBriefWiki_CapsAreCounted(t *testing.T) {
 	}
 	b := f.build()
 	// The latest confirmed first; a page that does not fit ends the part,
-	// so the one after it is named too even though it would fit.
+	// so the one after it is named too even though it would fit. Those are
+	// the catalog's, like any page not carried whole.
 	wantInOrder(t, b.Prompt,
 		"--- /conventions/last.md: Last\nShort too.\n",
 		"(2 more resident pages did not fit here; read_wiki has them: /conventions/long.md, /conventions/first.md)",
-		"The project wiki's pages, the 2 changed last of 3 (search_wiki finds the others; read one with read_wiki):",
+		"The project wiki's pages, the 2 changed last of 5 (search_wiki finds the others; read one with read_wiki):",
 		"   /facts/b.md: B (Fact)\n   /facts/c.md: C (Fact)\n",
 	)
 	if strings.Contains(b.Prompt, "长长长") || strings.Contains(b.Prompt, "/facts/a.md") {
@@ -166,7 +194,17 @@ func TestBriefWiki_CapsAreCounted(t *testing.T) {
 	b = f.build()
 	wantInOrder(t, b.Prompt,
 		"Pages of the project wiki added or changed since you last looked:",
-		"   (and 1 more; search_wiki finds them)",
+		"   (and 3 more; search_wiki finds them)",
+	)
+
+	// A resident page that did not fit, changed, is told as changed.
+	seen = b.Wiki
+	f.in.Session = store.MemberSession{ID: "s1", WikiSeen: &seen, BriefSeen: b.Parts}
+	f.edit("human:alice", "/conventions/long.md", strings.Repeat("长", 201))
+	b = f.build()
+	wantInOrder(t, b.Prompt,
+		"Pages of the project wiki added or changed since you last looked:",
+		"   /conventions/long.md: Long (Convention)",
 	)
 }
 
@@ -253,9 +291,12 @@ func (f *briefWiki) memory(scope store.WikiScope, entries ...wiki.MemoryEntry) {
 	}
 }
 
-// Every brief carries both memories whole, after what the project is and
-// before who is in the chat: the personal one first, and the project's,
-// which wins where they differ. Neither is listed again with the pages.
+// The memories are carried whole, after what the project is and before
+// who is in the chat: the personal one first, and the project's, which
+// wins where they differ; neither is listed again with the pages. Like the
+// other parts that change now and then (design.md 5.23.1), a session is
+// told them again only when they change, or it compacted; one emptied is
+// said to be.
 func TestBriefWiki_CarriesTheMemories(t *testing.T) {
 	f := newBriefWiki(t)
 	f.memory(store.WikiPersonal, wiki.MemoryEntry{Text: "提交说明用英文。", Date: "2026-09-20", Source: "alice"})
@@ -263,22 +304,63 @@ func TestBriefWiki_CarriesTheMemories(t *testing.T) {
 		wiki.MemoryEntry{Text: "Reply in Chinese.", Date: "2026-09-21", Source: "alice"},
 		wiki.MemoryEntry{Text: "Run make test-db before saying a change is done.", Date: "2026-09-22", Source: "Claude in topic #4"})
 	first := f.build()
-	if !strings.Contains(first.Prompt, "Project memory, how to work in this project:") || strings.Contains(first.Prompt, "/memory.md") {
-		t.Errorf("the first brief carries the memory, and does not list it with the pages:\n%s", first.Prompt)
-	}
-	// Later briefs carry them too, like the resident pages.
-	f.in.Session = store.MemberSession{ID: "s1", WikiSeen: &first.Wiki, ThreadSeen: map[string]int64{"t7": 80}, RoomSeen: 80}
-	b := f.build()
-	wantInOrder(t, b.Prompt,
+	wantInOrder(t, first.Prompt,
 		"About the project:",
 		"Personal memory, what the person you work for wants in every project (where the project memory says otherwise, it wins):\n- 提交说明用英文。 (2026-09-20, alice)\n",
 		"Project memory, how to work in this project:\n- Reply in Chinese. (2026-09-21, alice)\n- Run make test-db before saying a change is done. (2026-09-22, Claude in topic #4)\n",
 		"In this chat (mention one as @Name to hand something over):",
-		"note it with remember: in the project memory, or with scope personal when they mean every project",
 	)
+	if strings.Contains(first.Prompt, "/memory.md") {
+		t.Errorf("the memory is not listed with the pages:\n%s", first.Prompt)
+	}
+	if !strings.Contains(first.Standing, "note it with remember: in the project memory, or with scope personal when they mean every project") {
+		t.Errorf("how to note what a person wants kept is standing:\n%s", first.Standing)
+	}
+
+	// The session took the first brief in: the next leaves them out.
+	f.in.Session = store.MemberSession{ID: "s1", WikiSeen: &first.Wiki, ThreadSeen: map[string]int64{"t7": 80}, RoomSeen: 80, BriefSeen: first.Parts}
+	b := f.build()
+	if strings.Contains(b.Prompt, "Project memory") || !strings.Contains(b.Prompt, "unchanged and not repeated here: about the project, the memories, who is in the chat.") {
+		t.Errorf("unchanged, they are named and not repeated:\n%s", b.Prompt)
+	}
+
+	// The project wiki not read this time: the memories stand as the
+	// session saw them, not gone.
+	shelved := f.b.wikis.bundles[f.st.project.ID]
+	delete(f.b.wikis.bundles, f.st.project.ID)
+	f.st.project.WikiSlug = ""
+	b = f.build()
+	if strings.Contains(b.Prompt, "any more") || b.Parts[partMemories.key] != first.Parts[partMemories.key] {
+		t.Errorf("unread, the memories are kept as they were (%q, was %q):\n%s", b.Parts[partMemories.key], first.Parts[partMemories.key], b.Prompt)
+	}
+	f.b.wikis.bundles[f.st.project.ID], f.st.project.WikiSlug = shelved, "veyloom"
+
+	// A change is told whole again; what did not change is still not.
+	f.memory(store.WikiProject, wiki.MemoryEntry{Text: "Reply in Chinese.", Date: "2026-09-21", Source: "alice"})
+	b = f.build()
+	wantInOrder(t, b.Prompt,
+		"Personal memory, what the person you work for wants in every project",
+		"Project memory, how to work in this project:\n- Reply in Chinese. (2026-09-21, alice)\n",
+		"unchanged and not repeated here: about the project, who is in the chat.",
+	)
+	if strings.Contains(b.Prompt, "make test-db") {
+		t.Errorf("the entry taken out is gone:\n%s", b.Prompt)
+	}
+
+	// Emptied, they are said to be, or the session would keep to them.
+	f.in.Session.BriefSeen = b.Parts
+	f.memory(store.WikiPersonal)
+	f.memory(store.WikiProject)
+	if b = f.build(); !strings.Contains(b.Prompt, "The memories have no entries any more: what they said no longer holds.") {
+		t.Errorf("emptied memories are said to be:\n%s", b.Prompt)
+	}
 
 	// One past its budget, edited by hand say, is carried as far as it fits.
+	f.memory(store.WikiProject,
+		wiki.MemoryEntry{Text: "Reply in Chinese.", Date: "2026-09-21", Source: "alice"},
+		wiki.MemoryEntry{Text: "Run make test-db before saying a change is done.", Date: "2026-09-22", Source: "Claude in topic #4"})
 	f.b.wikis.budgets.Project = 45
+	f.in.Session = store.MemberSession{}
 	b = f.build()
 	wantInOrder(t, b.Prompt,
 		"Project memory, how to work in this project:\n- Reply in Chinese. (2026-09-21, alice)\n(1 more entry did not fit in the 45 characters it may take)\n",

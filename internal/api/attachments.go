@@ -14,6 +14,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/J0EY0/veyloom/internal/media"
 	"github.com/J0EY0/veyloom/internal/store"
 )
 
@@ -21,6 +22,9 @@ import (
 type AttachmentStore interface {
 	CreateAttachment(ctx context.Context, a store.NewAttachment) (store.Attachment, error)
 	GetAttachment(ctx context.Context, id string) (store.Attachment, error)
+	// The attachments tab (docs/webui.md 4.21).
+	ListRoomAttachments(ctx context.Context, roomID string, q store.AttachmentQuery) ([]store.RoomAttachment, int, error)
+	RoomAttachmentsByID(ctx context.Context, roomID string, ids []string) ([]store.Attachment, error)
 }
 
 // AttachmentResponse is the body of POST /api/v1/rooms/{id}/attachments.
@@ -98,15 +102,43 @@ func (h *handlers) uploadAttachment(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusInternalServerError, "internal error")
 		return
 	}
-	att, err := h.deps.Attachments.CreateAttachment(r.Context(), store.NewAttachment{
-		ID: id, RoomID: roomID, Filename: filename, MediaType: mediaType, Size: size, Path: filepath.ToSlash(rel),
-	})
+	in := store.NewAttachment{
+		ID: id, RoomID: roomID, Filename: filename, MediaType: mediaType, Kind: store.AttachmentKindOf(mediaType, filename),
+		Size: size, Path: filepath.ToSlash(rel),
+	}
+	thumb := h.describePicture(&in, abs)
+	att, err := h.deps.Attachments.CreateAttachment(r.Context(), in)
 	if err != nil {
 		_ = os.Remove(abs)
+		if thumb != "" {
+			_ = os.Remove(thumb)
+		}
 		h.writeStoreError(w, r, err)
 		return
 	}
 	writeJSON(w, http.StatusCreated, AttachmentResponse{Attachment: att})
+}
+
+// describePicture reads a picture's size in pixels into an upload's record
+// and makes the smaller copy the chat shows of a big one; it returns that
+// copy's path to remove should the record not be kept. A picture it cannot
+// read is kept without either.
+func (h *handlers) describePicture(in *store.NewAttachment, abs string) string {
+	if in.Kind != store.AttachmentImage {
+		return ""
+	}
+	if pic, ok := media.Inspect(abs); ok {
+		in.Width, in.Height = pic.Width, pic.Height
+	}
+	thumb, err := media.Thumbnail(abs, strings.TrimSuffix(abs, filepath.Ext(abs))+".thumb", in.Size)
+	if err != nil {
+		h.deps.Logger.Warn("make a thumbnail", "attachment", in.ID, "err", err)
+		return ""
+	}
+	if thumb != "" {
+		in.ThumbnailPath = filepath.ToSlash(filepath.Join(filepath.Dir(in.Path), filepath.Base(thumb)))
+	}
+	return thumb
 }
 
 // getAttachment serves the bytes. Only media a browser renders harmlessly
@@ -121,7 +153,39 @@ func (h *handlers) getAttachment(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	file, err := os.Open(filepath.Join(h.deps.AttachmentDir, filepath.FromSlash(att.Path)))
+	h.serveAttachment(w, r, att, att.Path, att.MediaType)
+}
+
+// getAttachmentThumbnail serves the smaller copy of a big picture, or the
+// picture itself when it is small enough to have none.
+func (h *handlers) getAttachmentThumbnail(w http.ResponseWriter, r *http.Request) {
+	if h.deps.Attachments == nil {
+		writeError(w, http.StatusNotFound, "attachment not found")
+		return
+	}
+	att, err := h.deps.Attachments.GetAttachment(r.Context(), r.PathValue("id"))
+	if err != nil {
+		h.writeStoreError(w, r, err)
+		return
+	}
+	switch {
+	case att.ThumbnailPath != "":
+		kind := "image/jpeg"
+		if strings.HasSuffix(att.ThumbnailPath, ".png") {
+			kind = "image/png"
+		}
+		h.serveAttachment(w, r, att, att.ThumbnailPath, kind)
+	case att.Kind == store.AttachmentImage:
+		h.serveAttachment(w, r, att, att.Path, att.MediaType)
+	default:
+		writeError(w, http.StatusNotFound, "no picture to show")
+	}
+}
+
+// serveAttachment sends a file of an attachment: rel under the attachment
+// directory, as the given media type.
+func (h *handlers) serveAttachment(w http.ResponseWriter, r *http.Request, att store.Attachment, rel, mediaType string) {
+	file, err := os.Open(filepath.Join(h.deps.AttachmentDir, filepath.FromSlash(rel)))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			writeError(w, http.StatusNotFound, "attachment file missing")
@@ -140,10 +204,10 @@ func (h *handlers) getAttachment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	disposition := "attachment"
-	if inlineSafe(att.MediaType) {
+	if inlineSafe(mediaType) {
 		disposition = "inline"
 	}
-	w.Header().Set("Content-Type", att.MediaType)
+	w.Header().Set("Content-Type", mediaType)
 	w.Header().Set("Content-Disposition", mime.FormatMediaType(disposition, map[string]string{"filename": att.Filename}))
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.Header().Set("Content-Security-Policy", "sandbox")

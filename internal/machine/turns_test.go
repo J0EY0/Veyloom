@@ -2,8 +2,10 @@ package machine
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -462,5 +464,75 @@ func TestRenamedSkills(t *testing.T) {
 	got := renamedSkills(map[string]string{"b": "veyloom-b", "a": "veyloom-a"})
 	if want := "In this turn the skill library's a goes by veyloom-a and b goes by veyloom-b, as skills of your own on this machine have their names."; got != want {
 		t.Errorf("got %q, want %q", got, want)
+	}
+}
+
+// nextTurnEvent reads until the next event of turnID arrives.
+func nextTurnEvent(t *testing.T, hubEnd protocol.Conn, turnID string) runtime.Event {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for {
+		m, err := hubEnd.Recv(ctx)
+		if err != nil {
+			t.Fatalf("recv: %v", err)
+		}
+		if ev, ok := m.(protocol.TurnEvent); ok && ev.TurnID == turnID {
+			return ev.Event
+		}
+	}
+}
+
+// What the hub passes a running turn reaches its runtime, whose events say
+// it was taken in; a turn not running here reports it dropped at once.
+func TestTurn_SteerReachesTheRunningTurn(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"delay_ms": float64(300)})
+	nextTurnEvent(t, hubEnd, "t1")
+	if err := hubEnd.Send(context.Background(), protocol.SteerTurn{TurnID: "t1", SteerID: "s1", Text: "New in topic #3:\n>> [Alice] use blue"}); err != nil {
+		t.Fatal(err)
+	}
+	events, done := collectTurn(t, hubEnd, "t1")
+	took := false
+	for _, ev := range events {
+		took = took || ev.Kind == runtime.EventSteer && ev.SteerID == "s1"
+	}
+	if !took || done.Error != "" || !strings.HasSuffix(done.Result.Output, "Steered: >> [Alice] use blue") {
+		t.Errorf("steer taken %v, done %+v", took, done)
+	}
+
+	if err := hubEnd.Send(context.Background(), protocol.SteerTurn{TurnID: "t404", SteerID: "s2", Text: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if ev := nextTurnEvent(t, hubEnd, "t404"); ev.Kind != runtime.EventSteerDropped || ev.SteerID != "s2" || ev.At.IsZero() {
+		t.Errorf("a turn not running here: %+v", ev)
+	}
+}
+
+// The texts passed to a turn reach it in the order the hub sent them: the
+// hub reads the topic for each on from where the one before stopped.
+func TestTurn_SteersReachTheTurnInOrder(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+
+	startFakeTurn(t, hubEnd, "t1", map[string]any{"delay_ms": float64(500)})
+	nextTurnEvent(t, hubEnd, "t1")
+	var want []string
+	for i := range 20 {
+		id := fmt.Sprintf("s%d", i)
+		want = append(want, id)
+		if err := hubEnd.Send(context.Background(), protocol.SteerTurn{TurnID: "t1", SteerID: id, Text: "more " + id}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	events, done := collectTurn(t, hubEnd, "t1")
+	var got []string
+	for _, ev := range events {
+		if ev.Kind == runtime.EventSteer {
+			got = append(got, ev.SteerID)
+		}
+	}
+	if !slices.Equal(got, want) || done.Error != "" {
+		t.Errorf("taken in the order %v, want %v (done %+v)", got, want, done)
 	}
 }

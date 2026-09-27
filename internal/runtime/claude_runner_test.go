@@ -83,6 +83,7 @@ func TestClaude_ParsesStreamJSON(t *testing.T) {
 	if results := byKind[EventToolResult]; results[0].Tool != "Read" || results[0].Text != "# Veyloom" || results[1].Tool != "Write" || results[1].Text != "ok" {
 		t.Errorf("tool results should be attributed by tool_use id: %+v", results)
 	}
+	checkCallIDs(t, events)
 	if byKind[EventFileChanged][0].Path != "notes.md" {
 		t.Errorf("file change: %+v", byKind[EventFileChanged])
 	}
@@ -97,6 +98,26 @@ func kindStrings(kinds []EventKind) []string {
 		out[i] = string(k)
 	}
 	return out
+}
+
+// checkCallIDs checks that every tool call carries its id and every result
+// the id of a call of the same tool made before it.
+func checkCallIDs(t *testing.T, events []Event) {
+	t.Helper()
+	calls := map[string]string{}
+	for _, ev := range events {
+		switch ev.Kind {
+		case EventToolCall:
+			if ev.CallID == "" {
+				t.Errorf("a tool call without its id: %+v", ev)
+			}
+			calls[ev.CallID] = ev.Tool
+		case EventToolResult:
+			if tool, ok := calls[ev.CallID]; !ok || tool != ev.Tool {
+				t.Errorf("a tool result not paired with its call: %+v", ev)
+			}
+		}
+	}
 }
 
 func TestClaude_ASubagentsWordsAreNotTheReply(t *testing.T) {
@@ -194,7 +215,7 @@ func TestClaude_ArgsAndStdin(t *testing.T) {
 	args, _ := os.ReadFile(argsPath)
 	got := strings.Split(strings.TrimSpace(string(args)), "\n")
 	want := []string{
-		"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--include-partial-messages",
+		"-p", "--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--replay-user-messages", "--include-partial-messages",
 		"--append-system-prompt", "You are the architect.",
 		"--model", "opus",
 		"--resume", "sess-prev",

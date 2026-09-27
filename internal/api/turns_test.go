@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/J0EY0/veyloom/internal/store"
 )
@@ -44,6 +45,23 @@ func (f fakeTurns) ListThreadRelayHolds(_ context.Context, threadID string) ([]s
 		return []store.RelayHold{}, nil
 	}
 	return []store.RelayHold{{MessageID: "n1", MemberID: "m1", ThreadID: "th1", Reason: store.HoldIdle}}, nil
+}
+
+// ListThreadReminders has one reminder, not yet due, in topic th1.
+func (f fakeTurns) ListThreadReminders(_ context.Context, threadID string) ([]store.Reminder, error) {
+	if threadID != "th1" {
+		return nil, nil
+	}
+	return []store.Reminder{{ID: "rm1", MemberID: "m1", ThreadID: "th1", Note: "check CI", Status: store.ReminderPending, SetMessageID: "n2"}}, nil
+}
+
+// ListThreadDrafts has one merge drafted, not yet run, in topic th1.
+func (f fakeTurns) ListThreadDrafts(_ context.Context, threadID string) ([]store.Draft, error) {
+	if threadID != "th1" {
+		return nil, nil
+	}
+	return []store.Draft{{ID: "d1", MemberID: "m1", TargetID: "m2", ThreadID: "th1", Kind: store.DraftMerge, Status: store.DraftPending,
+		Params: store.DraftParams{Message: "Add tags"}, MessageID: "n3"}}, nil
 }
 
 func (f fakeTurns) ListRunningTopics(context.Context) ([]store.RunningTopic, error) {
@@ -157,6 +175,34 @@ func TestTurns_Cancel(t *testing.T) {
 	if rec := do(t, handler, http.MethodPost, "/api/v1/turns/t404/cancel", "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("cancel unknown: status = %d, want 404", rec.Code)
 	}
+	// With a new session for the member's next turn (docs/design.md 5.23.8).
+	if rec := do(t, handler, http.MethodPost, "/api/v1/turns/t1/cancel", `{"new_session": true}`, nil); rec.Code != http.StatusAccepted || len(chat.startedOver) != 1 || chat.startedOver[0] != "t1" {
+		t.Errorf("cancel with a new session: %d %v", rec.Code, chat.startedOver)
+	}
+	if rec := do(t, handler, http.MethodPost, "/api/v1/turns/t1/cancel", `{"new_session": "yes"`, nil); rec.Code != http.StatusBadRequest {
+		t.Errorf("a body that does not parse: %d", rec.Code)
+	}
+}
+
+// A running turn gone quiet says since when; the store knows nothing of it.
+func TestTurns_Quiet(t *testing.T) {
+	handler, _, chat := turnsHandler(t)
+	since := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
+	chat.quiet = map[string]time.Time{"t1": since, "t2": since}
+	var list TurnsResponse
+	if rec := do(t, handler, http.MethodGet, "/api/v1/rooms/r1/turns", "", &list); rec.Code != http.StatusOK {
+		t.Fatalf("list: %d", rec.Code)
+	}
+	for _, turn := range list.Turns {
+		quiet := turn.QuietSince != nil && turn.QuietSince.Equal(since)
+		if quiet != (turn.ID == "t1") {
+			t.Errorf("%s (%s) quiet since %v", turn.ID, turn.Status, turn.QuietSince)
+		}
+	}
+	var one TurnResponse
+	if rec := do(t, handler, http.MethodGet, "/api/v1/turns/t1", "", &one); rec.Code != http.StatusOK || one.Turn.QuietSince == nil {
+		t.Errorf("the turn itself: %d %+v", rec.Code, one.Turn.QuietSince)
+	}
 }
 
 // A wake a limit held back, let go on by its note (docs/design.md 5.22).
@@ -180,7 +226,8 @@ func TestTurns_Transcript(t *testing.T) {
 	if err := os.WriteFile(finished, []byte("{\"kind\":\"start\"}\n{\"kind\":\"done\"}\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(dir, "t-run.jsonl"), []byte("{\"kind\":\"start\"}\n"), 0o600); err != nil {
+	// A running turn's file: one record whole, the next still being written.
+	if err := os.WriteFile(filepath.Join(dir, "t-run.jsonl"), []byte("{\"kind\":\"start\"}\n{\"kind\":\"ev"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	projects := newFakeProjects()
@@ -191,7 +238,7 @@ func TestTurns_Transcript(t *testing.T) {
 		"t-lost":    {ID: "t-lost", RoomID: room.ID, Status: store.TurnFailed, TranscriptPath: filepath.Join(dir, "gone.jsonl")},
 		"t-nowhere": {ID: "t-nowhere", RoomID: room.ID, Status: store.TurnRunning},
 	}
-	handler := NewHandler(Deps{Projects: projects, Turns: turns, Chat: &fakeChat{}, TranscriptDir: dir})
+	handler := NewHandler(Deps{Projects: projects, Turns: turns, Chat: &fakeChat{written: map[string]int64{"t-run": 17}}, TranscriptDir: dir})
 
 	rec := do(t, handler, http.MethodGet, "/api/v1/turns/t-done/transcript", "", nil)
 	if rec.Code != http.StatusOK || rec.Body.String() != "{\"kind\":\"start\"}\n{\"kind\":\"done\"}\n" {
@@ -200,8 +247,8 @@ func TestTurns_Transcript(t *testing.T) {
 	if ct := rec.Header().Get("Content-Type"); ct != "application/x-ndjson" {
 		t.Errorf("Content-Type = %q", ct)
 	}
-	if rec := do(t, handler, http.MethodGet, "/api/v1/turns/t-run/transcript", "", nil); rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" {
-		t.Errorf("running turn reads the conventional path: status = %d, cache = %q", rec.Code, rec.Header().Get("Cache-Control"))
+	if rec := do(t, handler, http.MethodGet, "/api/v1/turns/t-run/transcript", "", nil); rec.Code != http.StatusOK || rec.Header().Get("Cache-Control") != "no-store" || rec.Body.String() != "{\"kind\":\"start\"}\n" {
+		t.Errorf("running turn reads the conventional path, as far as it is whole: status = %d, cache = %q, body = %q", rec.Code, rec.Header().Get("Cache-Control"), rec.Body)
 	}
 	if rec := do(t, handler, http.MethodGet, "/api/v1/turns/t-lost/transcript", "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("missing file: status = %d, want 404", rec.Code)

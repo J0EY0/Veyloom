@@ -248,7 +248,7 @@ func TestLoop_UntrustTurn(t *testing.T) {
 	if ev := collectUntil(t, sub, EventTurnTrust); ev[len(ev)-1].Turn.TrustedBy != "" {
 		t.Errorf("turn_trust after taking it back: %+v", ev[len(ev)-1].Turn)
 	}
-	if err := l.h.CancelTurn(l.ctx, turn.ID); err != nil {
+	if err := l.h.CancelTurn(l.ctx, turn.ID, false); err != nil {
 		t.Fatal(err)
 	}
 	l.turnOf(msg)

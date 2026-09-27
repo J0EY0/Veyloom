@@ -162,9 +162,9 @@ func TestTaskTitles(t *testing.T) {
 	code := store.Member{ID: "m-code", DisplayName: "Code"}
 	people := []store.Member{coder, code}
 	for body, want := range map[string]string{
-		"@Coder 实现它，@Code 看一下": "实现它",
-		"@Code 看一下 @Coder 实现它": "实现它",
-		"@Coder @Code 一起看看这个问题": "一起看看这个问题",
+		"@Coder 实现它，@Code 看一下":         "实现它",
+		"@Code 看一下 @Coder 实现它":         "实现它",
+		"@Coder @Code 一起看看这个问题":        "一起看看这个问题",
 		"请 @Coder 修一下 README 的错字。然后提交": "修一下 README 的错字",
 	} {
 		turn := turn("x", "c", "t", 1, coder, 0, 1, func(t *store.TaskTurn) { t.TriggerKind, t.TriggerBody = string(store.SenderUser), body })
@@ -234,7 +234,9 @@ func TestSummarizeUsage(t *testing.T) {
 	shanghai := time.FixedZone("CST", 8*3600)
 	now := time.Date(2026, 9, 26, 15, 0, 0, 0, shanghai)
 	day := func(d, h int) time.Time { return time.Date(2026, 9, 26+d, h, 0, 0, 0, shanghai) }
-	use := func(in, out int64) runtime.Usage { return runtime.Usage{InputTokens: in, CacheReadTokens: in * 3, OutputTokens: out} }
+	use := func(in, out int64) runtime.Usage {
+		return runtime.Usage{InputTokens: in, CacheReadTokens: in * 3, OutputTokens: out}
+	}
 	end := func(t time.Time, minutes int) *time.Time { e := t.Add(time.Duration(minutes) * time.Minute); return &e }
 	turns := []store.UsageTurn{
 		{ID: "a", MemberID: "m1", Member: "Lead", RoomID: "r1", ThreadNumber: 1, Runtime: "claude", Kind: store.TurnChat, Chain: "c1",

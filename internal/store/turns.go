@@ -5,7 +5,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"strings"
 	"time"
 
@@ -70,6 +69,10 @@ type Turn struct {
 	TrustedAt *time.Time `json:"trusted_at,omitempty"`
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
+	// QuietSince is when a running turn last showed a sign of life, once
+	// it has shown none for a while (docs/design.md 5.23.8). It is the
+	// hub's to say, not stored: the store leaves it nil.
+	QuietSince *time.Time `json:"quiet_since,omitempty"`
 }
 
 // NewTurn is the input to CreateTurn.
@@ -298,6 +301,29 @@ func (s *Store) GetTurn(ctx context.Context, id string) (Turn, error) {
 	return toTurn(row), nil
 }
 
+// TurnAtSessionEnd returns the member's latest turn by the time one of its
+// sessions ended: the one going as the session ended, which may not have
+// got a session yet. ErrNotFound when there is none, or the session has
+// not ended.
+func (s *Store) TurnAtSessionEnd(ctx context.Context, memberID, sessionID string) (Turn, error) {
+	mid, err := parseUUID(memberID)
+	if err != nil {
+		return Turn{}, err
+	}
+	sid, err := parseUUID(sessionID)
+	if err != nil {
+		return Turn{}, err
+	}
+	row, err := s.q.TurnAtSessionEnd(ctx, db.TurnAtSessionEndParams{MemberID: mid, SessionID: sid})
+	if errors.Is(err, pgx.ErrNoRows) {
+		return Turn{}, fmt.Errorf("turn as session %s ended: %w", sessionID, ErrNotFound)
+	}
+	if err != nil {
+		return Turn{}, fmt.Errorf("turn as session %s ended: %w", sessionID, err)
+	}
+	return toTurn(row), nil
+}
+
 // ListRoomTurns returns a room's most recent turns, newest first.
 func (s *Store) ListRoomTurns(ctx context.Context, roomID string, limit int) ([]Turn, error) {
 	rid, err := parseUUID(roomID)
@@ -420,15 +446,7 @@ func AskLine(body string, names []string) string {
 			break
 		}
 	}
-	names = slices.Clone(names)
-	slices.SortFunc(names, func(a, b string) int { return len(b) - len(a) })
-	for {
-		i := slices.IndexFunc(names, func(n string) bool { return n != "" && strings.HasPrefix(line, "@"+n) })
-		if i < 0 {
-			break
-		}
-		line = strings.TrimSpace(line[len(names[i])+1:])
-	}
+	line = StripAsk(line, names)
 	if end := strings.IndexAny(line, "：:。！？!?；;"); end > 0 {
 		line = strings.TrimSpace(line[:end])
 	}

@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -41,8 +42,12 @@ func TestMain(m *testing.M) {
 // appended to the file named by VEYLOOM_FAKE_CODEX_RECORD so tests can
 // assert on what the runner sent. The turn's script is chosen by keywords
 // in the prompt, written as [hang], [fail], [approve], [filechange],
-// [permissions], [question], [elicit], [review] or [unsupported]; any other
-// prompt plays the default turn.
+// [permissions], [question], [elicit], [review], [unsupported], [steer],
+// [steer-refused], [steer-failed], [limit], [limit-read], [unauthorized]
+// or [disconnected]; any other prompt plays the default turn.
+// VEYLOOM_FAKE_CODEX_SLOW_START holds thread/start back that long.
+// VEYLOOM_FAKE_CODEX_OUTPUT instead plays what a real app-server printed
+// (codexReplay).
 func fakeCodexMain() {
 	if len(os.Args) < 2 || os.Args[1] != "app-server" {
 		fmt.Fprintf(os.Stderr, "fake codex: unexpected args %v\n", os.Args[1:])
@@ -61,6 +66,14 @@ func fakeCodexMain() {
 		}
 	}
 	srv := &fakeAppServer{in: bufio.NewReader(os.Stdin), out: os.Stdout, record: record}
+	if path := os.Getenv("VEYLOOM_FAKE_CODEX_OUTPUT"); path != "" {
+		replay, err := loadCodexReplay(path)
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "fake codex:", err)
+			os.Exit(2)
+		}
+		srv.replay = replay
+	}
 	srv.serve()
 }
 
@@ -68,6 +81,69 @@ type fakeAppServer struct {
 	in     *bufio.Reader
 	out    io.Writer
 	record io.Writer
+	// replay is a real app-server's output to play instead of a script.
+	replay *codexReplay
+}
+
+// codexReplay is what a real app-server printed in a turn (docs/design.md
+// 5.23.9), cut to follow the fake's own answers: the notifications that
+// came after the answer to initialize, to the thread's start and to the
+// turn's, with the thread and the turn the recording has. Its answers to
+// the runner's requests are the fake's to give, and requests of its own
+// are left out: a replay is of turns that asked nobody anything.
+type codexReplay struct {
+	thread, turn string
+	after        map[string][][]byte
+}
+
+func loadCodexReplay(path string) (*codexReplay, error) {
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	r := &codexReplay{after: map[string][][]byte{}}
+	at := "initialize"
+	for _, line := range bytes.Split(data, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var msg struct {
+			ID     json.RawMessage `json:"id"`
+			Method string          `json:"method"`
+			Result struct {
+				Thread struct {
+					ID string `json:"id"`
+				} `json:"thread"`
+				Turn struct {
+					ID string `json:"id"`
+				} `json:"turn"`
+			} `json:"result"`
+		}
+		if err := json.Unmarshal(line, &msg); err != nil {
+			return nil, fmt.Errorf("%s: %w", path, err)
+		}
+		switch {
+		case msg.Method != "" && len(msg.ID) > 0:
+			// The server asking the client something: not replayed.
+		case msg.Method == "" && msg.Result.Turn.ID != "":
+			r.turn, at = msg.Result.Turn.ID, "turn"
+		case msg.Method == "" && msg.Result.Thread.ID != "":
+			r.thread, at = msg.Result.Thread.ID, "thread"
+		case msg.Method != "":
+			r.after[at] = append(r.after[at], append(bytes.Clone(line), '\n'))
+		}
+	}
+	if r.thread == "" || r.turn == "" {
+		return nil, fmt.Errorf("%s: no thread or turn started", path)
+	}
+	return r, nil
+}
+
+// played writes what the recording printed after answering step.
+func (f *fakeAppServer) played(step string) {
+	for _, line := range f.replay.after[step] {
+		f.out.Write(line)
+	}
 }
 
 func (f *fakeAppServer) send(v any) {
@@ -117,11 +193,27 @@ func (f *fakeAppServer) serve() {
 		switch msg.Method {
 		case "initialize":
 			f.send(map[string]any{"id": msg.ID, "result": map[string]any{"userAgent": "fake-codex", "codexHome": "/tmp", "platformFamily": "unix", "platformOs": "macos"}})
+			if f.replay != nil {
+				f.played("initialize")
+			}
 		case "initialized":
 		case "skills/extraRoots/set":
 			f.send(map[string]any{"id": msg.ID, "result": map[string]any{}})
+		case "account/rateLimits/read":
+			// A five-hour window used up, which resets at a known time.
+			f.send(map[string]any{"id": msg.ID, "result": map[string]any{"rateLimits": map[string]any{
+				"limitId": "codex", "primary": map[string]any{"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1790507200},
+			}}})
 		case "thread/start", "thread/resume":
+			if wait, err := time.ParseDuration(os.Getenv("VEYLOOM_FAKE_CODEX_SLOW_START")); err == nil {
+				time.Sleep(wait)
+			}
 			id := "thr-new"
+			if f.replay != nil {
+				f.send(map[string]any{"id": msg.ID, "result": map[string]any{"thread": map[string]any{"id": f.replay.thread}, "model": "gpt-5-codex", "modelProvider": "openai", "cwd": "/tmp"}})
+				f.played("thread")
+				continue
+			}
 			if msg.Method == "thread/resume" {
 				var p struct {
 					ThreadID string `json:"threadId"`
@@ -144,6 +236,11 @@ func (f *fakeAppServer) serve() {
 				} `json:"input"`
 			}
 			json.Unmarshal(msg.Params, &p)
+			if f.replay != nil {
+				f.send(map[string]any{"id": msg.ID, "result": map[string]any{"turn": map[string]any{"id": f.replay.turn, "status": "inProgress", "items": []any{}}}})
+				f.played("turn")
+				continue
+			}
 			f.send(map[string]any{"id": msg.ID, "result": map[string]any{"turn": map[string]any{"id": "turn-1", "status": "inProgress", "items": []any{}}}})
 			prompt := ""
 			if len(p.Input) > 0 {
@@ -390,6 +487,75 @@ func (f *fakeAppServer) play(threadID, prompt string) bool {
 			f.notify("mcpServer/startupStatus/updated", map[string]any{"threadId": threadID, "name": "node_repl", "status": "failed", "error": "handshake failed"})
 		}
 		complete("completed", "", "reviewed")
+	case strings.Contains(prompt, "[steer]"), strings.Contains(prompt, "[steer-refused]"), strings.Contains(prompt, "[steer-failed]"):
+		// A command runs while a message comes in. Codex takes it in at the
+		// next step and answers it in the same turn; or it has no active
+		// turn to steer; or the turn fails before it gets to it.
+		f.notify("item/started", item("", map[string]any{"item": map[string]any{"type": "commandExecution", "id": "cmd-1", "command": "sleep 1", "status": "inProgress", "commandActions": []any{}}}))
+		msg, ok := f.awaitRequest("turn/steer")
+		if !ok {
+			return false
+		}
+		var p struct {
+			ThreadID            string `json:"threadId"`
+			ExpectedTurnID      string `json:"expectedTurnId"`
+			ClientUserMessageID string `json:"clientUserMessageId"`
+			Input               []struct {
+				Type string `json:"type"`
+				Text string `json:"text"`
+			} `json:"input"`
+		}
+		json.Unmarshal(msg.Params, &p)
+		if strings.Contains(prompt, "[steer-refused]") || p.ThreadID != threadID || p.ExpectedTurnID != "turn-1" || len(p.Input) != 1 || p.Input[0].Type != "text" {
+			f.send(map[string]any{"id": msg.ID, "error": map[string]any{"code": -32600, "message": "no active turn to steer"}})
+			// The turn goes on a little, as one taking no more input would.
+			time.Sleep(200 * time.Millisecond)
+			complete("completed", "", "not steered")
+			break
+		}
+		f.send(map[string]any{"id": msg.ID, "result": map[string]any{"turnId": "turn-1"}})
+		f.notify("item/completed", item("", map[string]any{"item": map[string]any{"type": "commandExecution", "id": "cmd-1", "command": "sleep 1", "status": "completed", "aggregatedOutput": "", "exitCode": 0, "commandActions": []any{}}}))
+		if strings.Contains(prompt, "[steer-failed]") {
+			complete("failed", "model exploded", "")
+			break
+		}
+		said := map[string]any{"type": "userMessage", "id": "um-2", "clientId": p.ClientUserMessageID, "content": []map[string]any{{"type": "text", "text": p.Input[0].Text, "text_elements": []any{}}}}
+		f.notify("item/started", item("", map[string]any{"item": said}))
+		f.notify("item/completed", item("", map[string]any{"item": said}))
+		complete("completed", "", "noted: "+p.Input[0].Text)
+	case strings.Contains(prompt, "[limit]"), strings.Contains(prompt, "[limit-read]"), strings.Contains(prompt, "[unauthorized]"), strings.Contains(prompt, "[disconnected]"):
+		// The account cannot go on. Codex tells how its usage limits stand
+		// as it goes, unless it did not this time ([limit-read]: the runner
+		// asks), and names why the turn failed.
+		fail := func(message string, info any) {
+			f.notify("turn/completed", map[string]any{"threadId": threadID, "turn": map[string]any{
+				"id": "turn-1", "status": "failed", "items": []any{}, "error": map[string]any{"message": message, "codexErrorInfo": info},
+			}})
+		}
+		switch {
+		case strings.Contains(prompt, "[limit]"):
+			f.notify("account/rateLimits/updated", map[string]any{"rateLimits": map[string]any{
+				"limitId": "codex", "primary": map[string]any{"usedPercent": 80, "windowDurationMins": 300, "resetsAt": 1790503600},
+				"secondary": map[string]any{"usedPercent": 40, "windowDurationMins": 10080, "resetsAt": 1791000000},
+			}})
+			// Another model's limit, used up: not this turn's.
+			f.notify("account/rateLimits/updated", map[string]any{"rateLimits": map[string]any{
+				"limitId": "gpt-5.3-codex-spark", "primary": map[string]any{"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1790600000},
+				"rateLimitReachedType": "rate_limit_reached",
+			}})
+			// Sparse: the weekly window is as it was.
+			f.notify("account/rateLimits/updated", map[string]any{"rateLimits": map[string]any{
+				"limitId": "codex", "primary": map[string]any{"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1790503600},
+				"rateLimitReachedType": "rate_limit_reached",
+			}})
+			fail("You've hit your usage limit. Try again at 5:40 PM.", "usageLimitExceeded")
+		case strings.Contains(prompt, "[limit-read]"):
+			fail("You've hit your usage limit.", "usageLimitExceeded")
+		case strings.Contains(prompt, "[unauthorized]"):
+			fail("Your access token could not be refreshed.", "unauthorized")
+		default:
+			fail("stream disconnected before completion", map[string]any{"responseStreamDisconnected": map[string]any{"httpStatusCode": nil}})
+		}
 	case strings.Contains(prompt, "[unsupported]"):
 		f.send(map[string]any{"id": 102, "method": "item/somethingNew/request", "params": item("", map[string]any{"itemId": "q-1"})})
 		reply, ok := f.awaitReply(102)
@@ -430,6 +596,17 @@ func (f *fakeAppServer) play(threadID, prompt string) bool {
 		complete("completed", "", "Hello Done.")
 	}
 	return true
+}
+
+// awaitRequest reads until the client sends a request of method,
+// recording what it reads.
+func (f *fakeAppServer) awaitRequest(method string) (codexMessage, bool) {
+	for {
+		msg, ok := f.next()
+		if !ok || msg.Method == method {
+			return msg, ok
+		}
+	}
 }
 
 // awaitReplyString is awaitReply for a string request id.
@@ -560,6 +737,7 @@ func TestCodex_HandshakeTurnAndEvents(t *testing.T) {
 	if results := byKind[EventToolResult]; results[0].Text != "a.txt\n[exit code 1]" || results[1].Text != "1 hit\nJ0EY0/veyloom" || results[2].Text != "error: server gone" {
 		t.Errorf("tool results: %+v", results)
 	}
+	checkCallIDs(t, events)
 	if byKind[EventFileChanged][0].Path != "notes.md" {
 		t.Errorf("file change: %+v", byKind[EventFileChanged])
 	}

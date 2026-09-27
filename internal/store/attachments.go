@@ -22,11 +22,21 @@ type Attachment struct {
 	MessageID string `json:"message_id,omitempty"`
 	Filename  string `json:"filename"`
 	MediaType string `json:"media_type"`
-	Size      int64  `json:"size"`
-	// Path is where the bytes are, relative to the attachment directory.
-	// It is the hub's business, not the client's.
-	Path      string    `json:"-"`
-	CreatedAt time.Time `json:"created_at"`
+	// Kind is what the chat draws it as (AttachmentKindOf).
+	Kind string `json:"kind"`
+	Size int64  `json:"size"`
+	// Width and Height are a picture's size in pixels as a browser shows
+	// it; 0 when not known.
+	Width  int `json:"width,omitempty"`
+	Height int `json:"height,omitempty"`
+	// Thumbnail says a smaller copy of the picture is served beside it.
+	Thumbnail bool `json:"thumbnail,omitempty"`
+	// Path is where the bytes are, relative to the attachment directory,
+	// and ThumbnailPath the smaller copy's, if any. They are the hub's
+	// business, not the client's.
+	Path          string    `json:"-"`
+	ThumbnailPath string    `json:"-"`
+	CreatedAt     time.Time `json:"created_at"`
 }
 
 // NewAttachment is the input to CreateAttachment. The caller picks the id
@@ -36,8 +46,12 @@ type NewAttachment struct {
 	RoomID    string
 	Filename  string
 	MediaType string
-	Size      int64
-	Path      string
+	// Kind is one of AttachmentKinds; empty is AttachmentOther.
+	Kind          string
+	Size          int64
+	Width, Height int
+	Path          string
+	ThumbnailPath string
 }
 
 // CreateAttachment records an upload that no message carries yet. An
@@ -51,8 +65,13 @@ func (s *Store) CreateAttachment(ctx context.Context, a NewAttachment) (Attachme
 	if err != nil {
 		return Attachment{}, err
 	}
+	kind := a.Kind
+	if kind == "" {
+		kind = AttachmentOther
+	}
 	row, err := s.q.CreateAttachment(ctx, db.CreateAttachmentParams{
-		ID: id, RoomID: roomID, Filename: a.Filename, MediaType: a.MediaType, Size: a.Size, Path: a.Path,
+		ID: id, RoomID: roomID, Filename: a.Filename, MediaType: a.MediaType, Kind: kind, Size: a.Size,
+		Width: int32(max(0, a.Width)), Height: int32(max(0, a.Height)), Path: a.Path, ThumbnailPath: a.ThumbnailPath,
 	})
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -60,7 +79,7 @@ func (s *Store) CreateAttachment(ctx context.Context, a NewAttachment) (Attachme
 			switch pgErr.Code {
 			case "23503": // foreign_key_violation: the room
 				return Attachment{}, fmt.Errorf("room: %w", ErrNotFound)
-			case "23514": // check_violation: blank filename, negative size
+			case "23514": // check_violation: blank filename, negative size, unknown kind
 				return Attachment{}, constraintProblem(pgErr)
 			case "23505": // unique_violation: the id
 				return Attachment{}, fmt.Errorf("%w: attachment %s is already stored", ErrConflict, a.ID)
@@ -147,14 +166,19 @@ func (s *Store) withAttachments(ctx context.Context, msgs []Message) ([]Message,
 
 func toAttachment(row db.Attachment) Attachment {
 	return Attachment{
-		ID:        uuidString(row.ID),
-		RoomID:    uuidString(row.RoomID),
-		MessageID: uuidString(row.MessageID),
-		Filename:  row.Filename,
-		MediaType: row.MediaType,
-		Size:      row.Size,
-		Path:      row.Path,
-		CreatedAt: row.CreatedAt.Time,
+		ID:            uuidString(row.ID),
+		RoomID:        uuidString(row.RoomID),
+		MessageID:     uuidString(row.MessageID),
+		Filename:      row.Filename,
+		MediaType:     row.MediaType,
+		Kind:          row.Kind,
+		Size:          row.Size,
+		Width:         int(row.Width),
+		Height:        int(row.Height),
+		Thumbnail:     row.ThumbnailPath != "",
+		Path:          row.Path,
+		ThumbnailPath: row.ThumbnailPath,
+		CreatedAt:     row.CreatedAt.Time,
 	}
 }
 

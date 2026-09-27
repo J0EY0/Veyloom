@@ -11,6 +11,72 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const cancelReminder = `-- name: CancelReminder :one
+UPDATE reminders SET status = 'cancelled', cancelled_by = $1, settled_at = now()
+WHERE id = $2 AND status = 'pending'
+RETURNING id, member_id, room_id, thread_id, turn_id, note, due_at, status, set_message_id, fired_message_id, cancelled_by, created_at, settled_at
+`
+
+type CancelReminderParams struct {
+	CancelledBy pgtype.UUID
+	ID          pgtype.UUID
+}
+
+// Takes back a reminder not yet due, by a person when cancelled_by is set.
+func (q *Queries) CancelReminder(ctx context.Context, arg CancelReminderParams) (Reminder, error) {
+	row := q.db.QueryRow(ctx, cancelReminder, arg.CancelledBy, arg.ID)
+	var i Reminder
+	err := row.Scan(
+		&i.ID,
+		&i.MemberID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.TurnID,
+		&i.Note,
+		&i.DueAt,
+		&i.Status,
+		&i.SetMessageID,
+		&i.FiredMessageID,
+		&i.CancelledBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
+const claimDraft = `-- name: ClaimDraft :one
+UPDATE drafts SET status = 'running' WHERE id = $1 AND status = 'pending'
+RETURNING id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at
+`
+
+// A person runs a pending draft: one run at a time, and none once it is
+// settled.
+func (q *Queries) ClaimDraft(ctx context.Context, id pgtype.UUID) (Draft, error) {
+	row := q.db.QueryRow(ctx, claimDraft, id)
+	var i Draft
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.MemberID,
+		&i.TurnID,
+		&i.Kind,
+		&i.TargetID,
+		&i.Subject,
+		&i.Params,
+		&i.ThenNote,
+		&i.Status,
+		&i.Result,
+		&i.MessageID,
+		&i.ResultMessageID,
+		&i.DecidedBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
 const clearTurnTrust = `-- name: ClearTurnTrust :one
 UPDATE turns SET trusted_by = NULL, trusted_at = NULL
 WHERE id = $1
@@ -64,6 +130,128 @@ func (q *Queries) CountChainWakes(ctx context.Context, chainMessageID pgtype.UUI
 	var count int64
 	err := row.Scan(&count)
 	return count, err
+}
+
+const countPendingReminders = `-- name: CountPendingReminders :one
+SELECT count(*) FROM reminders WHERE member_id = $1 AND status = 'pending'
+`
+
+func (q *Queries) CountPendingReminders(ctx context.Context, memberID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countPendingReminders, memberID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const countTurnDrafts = `-- name: CountTurnDrafts :one
+SELECT count(*) FROM drafts WHERE turn_id = $1
+`
+
+func (q *Queries) CountTurnDrafts(ctx context.Context, turnID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countTurnDrafts, turnID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
+}
+
+const createDraft = `-- name: CreateDraft :one
+INSERT INTO drafts (project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note)
+VALUES ($1, $2, $3, $4, $5, $6,
+        $7, $8, $9, $10)
+RETURNING id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at
+`
+
+type CreateDraftParams struct {
+	ProjectID pgtype.UUID
+	RoomID    pgtype.UUID
+	ThreadID  pgtype.UUID
+	MemberID  pgtype.UUID
+	TurnID    pgtype.UUID
+	Kind      string
+	TargetID  pgtype.UUID
+	Subject   string
+	Params    []byte
+	ThenNote  string
+}
+
+func (q *Queries) CreateDraft(ctx context.Context, arg CreateDraftParams) (Draft, error) {
+	row := q.db.QueryRow(ctx, createDraft,
+		arg.ProjectID,
+		arg.RoomID,
+		arg.ThreadID,
+		arg.MemberID,
+		arg.TurnID,
+		arg.Kind,
+		arg.TargetID,
+		arg.Subject,
+		arg.Params,
+		arg.ThenNote,
+	)
+	var i Draft
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.MemberID,
+		&i.TurnID,
+		&i.Kind,
+		&i.TargetID,
+		&i.Subject,
+		&i.Params,
+		&i.ThenNote,
+		&i.Status,
+		&i.Result,
+		&i.MessageID,
+		&i.ResultMessageID,
+		&i.DecidedBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
+const createReminder = `-- name: CreateReminder :one
+INSERT INTO reminders (member_id, room_id, thread_id, turn_id, note, due_at)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING id, member_id, room_id, thread_id, turn_id, note, due_at, status, set_message_id, fired_message_id, cancelled_by, created_at, settled_at
+`
+
+type CreateReminderParams struct {
+	MemberID pgtype.UUID
+	RoomID   pgtype.UUID
+	ThreadID pgtype.UUID
+	TurnID   pgtype.UUID
+	Note     string
+	DueAt    pgtype.Timestamptz
+}
+
+func (q *Queries) CreateReminder(ctx context.Context, arg CreateReminderParams) (Reminder, error) {
+	row := q.db.QueryRow(ctx, createReminder,
+		arg.MemberID,
+		arg.RoomID,
+		arg.ThreadID,
+		arg.TurnID,
+		arg.Note,
+		arg.DueAt,
+	)
+	var i Reminder
+	err := row.Scan(
+		&i.ID,
+		&i.MemberID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.TurnID,
+		&i.Note,
+		&i.DueAt,
+		&i.Status,
+		&i.SetMessageID,
+		&i.FiredMessageID,
+		&i.CancelledBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
 }
 
 const createTurn = `-- name: CreateTurn :one
@@ -129,6 +317,72 @@ func (q *Queries) CreateTurn(ctx context.Context, arg CreateTurnParams) (Turn, e
 		&i.TrustedAt,
 		&i.StartedAt,
 		&i.EndedAt,
+	)
+	return i, err
+}
+
+const declineDraft = `-- name: DeclineDraft :one
+UPDATE drafts SET status = 'declined', decided_by = $1, settled_at = now()
+WHERE id = $2 AND status = 'pending'
+RETURNING id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at
+`
+
+type DeclineDraftParams struct {
+	DecidedBy pgtype.UUID
+	ID        pgtype.UUID
+}
+
+// A person turns a pending draft down.
+func (q *Queries) DeclineDraft(ctx context.Context, arg DeclineDraftParams) (Draft, error) {
+	row := q.db.QueryRow(ctx, declineDraft, arg.DecidedBy, arg.ID)
+	var i Draft
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.MemberID,
+		&i.TurnID,
+		&i.Kind,
+		&i.TargetID,
+		&i.Subject,
+		&i.Params,
+		&i.ThenNote,
+		&i.Status,
+		&i.Result,
+		&i.MessageID,
+		&i.ResultMessageID,
+		&i.DecidedBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
+const dropReminder = `-- name: DropReminder :one
+UPDATE reminders SET status = 'dropped', settled_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING id, member_id, room_id, thread_id, turn_id, note, due_at, status, set_message_id, fired_message_id, cancelled_by, created_at, settled_at
+`
+
+// A reminder whose member is gone or switched off as it comes due.
+func (q *Queries) DropReminder(ctx context.Context, id pgtype.UUID) (Reminder, error) {
+	row := q.db.QueryRow(ctx, dropReminder, id)
+	var i Reminder
+	err := row.Scan(
+		&i.ID,
+		&i.MemberID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.TurnID,
+		&i.Note,
+		&i.DueAt,
+		&i.Status,
+		&i.SetMessageID,
+		&i.FiredMessageID,
+		&i.CancelledBy,
+		&i.CreatedAt,
+		&i.SettledAt,
 	)
 	return i, err
 }
@@ -273,6 +527,123 @@ func (q *Queries) FinishTurn(ctx context.Context, arg FinishTurnParams) (Turn, e
 	return i, err
 }
 
+const fireReminder = `-- name: FireReminder :one
+UPDATE reminders SET status = 'fired', settled_at = now()
+WHERE id = $1 AND status = 'pending'
+RETURNING id, member_id, room_id, thread_id, turn_id, note, due_at, status, set_message_id, fired_message_id, cancelled_by, created_at, settled_at
+`
+
+// A reminder comes due, once: one fired or cancelled already is left as it
+// is, and nothing comes back.
+func (q *Queries) FireReminder(ctx context.Context, id pgtype.UUID) (Reminder, error) {
+	row := q.db.QueryRow(ctx, fireReminder, id)
+	var i Reminder
+	err := row.Scan(
+		&i.ID,
+		&i.MemberID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.TurnID,
+		&i.Note,
+		&i.DueAt,
+		&i.Status,
+		&i.SetMessageID,
+		&i.FiredMessageID,
+		&i.CancelledBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
+const getDraft = `-- name: GetDraft :one
+SELECT id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at FROM drafts WHERE id = $1
+`
+
+func (q *Queries) GetDraft(ctx context.Context, id pgtype.UUID) (Draft, error) {
+	row := q.db.QueryRow(ctx, getDraft, id)
+	var i Draft
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.MemberID,
+		&i.TurnID,
+		&i.Kind,
+		&i.TargetID,
+		&i.Subject,
+		&i.Params,
+		&i.ThenNote,
+		&i.Status,
+		&i.Result,
+		&i.MessageID,
+		&i.ResultMessageID,
+		&i.DecidedBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
+const getDraftByMessage = `-- name: GetDraftByMessage :one
+SELECT id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at FROM drafts WHERE message_id = $1 OR result_message_id = $1
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+// The draft a message is the card or the outcome of.
+func (q *Queries) GetDraftByMessage(ctx context.Context, messageID pgtype.UUID) (Draft, error) {
+	row := q.db.QueryRow(ctx, getDraftByMessage, messageID)
+	var i Draft
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.MemberID,
+		&i.TurnID,
+		&i.Kind,
+		&i.TargetID,
+		&i.Subject,
+		&i.Params,
+		&i.ThenNote,
+		&i.Status,
+		&i.Result,
+		&i.MessageID,
+		&i.ResultMessageID,
+		&i.DecidedBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
+const getReminder = `-- name: GetReminder :one
+SELECT id, member_id, room_id, thread_id, turn_id, note, due_at, status, set_message_id, fired_message_id, cancelled_by, created_at, settled_at FROM reminders WHERE id = $1
+`
+
+func (q *Queries) GetReminder(ctx context.Context, id pgtype.UUID) (Reminder, error) {
+	row := q.db.QueryRow(ctx, getReminder, id)
+	var i Reminder
+	err := row.Scan(
+		&i.ID,
+		&i.MemberID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.TurnID,
+		&i.Note,
+		&i.DueAt,
+		&i.Status,
+		&i.SetMessageID,
+		&i.FiredMessageID,
+		&i.CancelledBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
 const getTurn = `-- name: GetTurn :one
 SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns WHERE id = $1
 `
@@ -310,6 +681,35 @@ func (q *Queries) GetTurn(ctx context.Context, id pgtype.UUID) (Turn, error) {
 		&i.EndedAt,
 	)
 	return i, err
+}
+
+const liftAccountPause = `-- name: LiftAccountPause :execrows
+DELETE FROM pauses WHERE member_id IS NULL AND machine_id = $1 AND runtime = $2
+`
+
+type LiftAccountPauseParams struct {
+	MachineID pgtype.UUID
+	Runtime   string
+}
+
+func (q *Queries) LiftAccountPause(ctx context.Context, arg LiftAccountPauseParams) (int64, error) {
+	result, err := q.db.Exec(ctx, liftAccountPause, arg.MachineID, arg.Runtime)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const liftMemberPause = `-- name: LiftMemberPause :execrows
+DELETE FROM pauses WHERE member_id = $1
+`
+
+func (q *Queries) LiftMemberPause(ctx context.Context, memberID pgtype.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, liftMemberPause, memberID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const listMachineTurnsSince = `-- name: ListMachineTurnsSince :many
@@ -357,6 +757,156 @@ func (q *Queries) ListMachineTurnsSince(ctx context.Context, arg ListMachineTurn
 			&i.CacheReadTokens,
 			&i.CacheWriteTokens,
 			&i.OutputTokens,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listMemberPendingReminders = `-- name: ListMemberPendingReminders :many
+SELECT id, member_id, room_id, thread_id, turn_id, note, due_at, status, set_message_id, fired_message_id, cancelled_by, created_at, settled_at FROM reminders WHERE member_id = $1 AND status = 'pending' ORDER BY due_at, id
+`
+
+func (q *Queries) ListMemberPendingReminders(ctx context.Context, memberID pgtype.UUID) ([]Reminder, error) {
+	rows, err := q.db.Query(ctx, listMemberPendingReminders, memberID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Reminder
+	for rows.Next() {
+		var i Reminder
+		if err := rows.Scan(
+			&i.ID,
+			&i.MemberID,
+			&i.RoomID,
+			&i.ThreadID,
+			&i.TurnID,
+			&i.Note,
+			&i.DueAt,
+			&i.Status,
+			&i.SetMessageID,
+			&i.FiredMessageID,
+			&i.CancelledBy,
+			&i.CreatedAt,
+			&i.SettledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPauses = `-- name: ListPauses :many
+SELECT id, machine_id, runtime, member_id, reason, detail, ends_at, created_at FROM pauses ORDER BY created_at, id
+`
+
+// The pauses in effect, the oldest first.
+func (q *Queries) ListPauses(ctx context.Context) ([]Pause, error) {
+	rows, err := q.db.Query(ctx, listPauses)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Pause
+	for rows.Next() {
+		var i Pause
+		if err := rows.Scan(
+			&i.ID,
+			&i.MachineID,
+			&i.Runtime,
+			&i.MemberID,
+			&i.Reason,
+			&i.Detail,
+			&i.EndsAt,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listPendingReminders = `-- name: ListPendingReminders :many
+SELECT r.id, r.member_id, r.room_id, r.thread_id, r.turn_id, r.note, r.due_at, r.status, r.set_message_id, r.fired_message_id, r.cancelled_by, r.created_at, r.settled_at FROM reminders r
+JOIN members m ON m.id = r.member_id
+WHERE m.machine_id = $1 AND r.status = 'pending'
+ORDER BY r.due_at, r.id
+`
+
+// The reminders not yet due of the members a machine runs, the soonest
+// first.
+func (q *Queries) ListPendingReminders(ctx context.Context, machineID pgtype.UUID) ([]Reminder, error) {
+	rows, err := q.db.Query(ctx, listPendingReminders, machineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Reminder
+	for rows.Next() {
+		var i Reminder
+		if err := rows.Scan(
+			&i.ID,
+			&i.MemberID,
+			&i.RoomID,
+			&i.ThreadID,
+			&i.TurnID,
+			&i.Note,
+			&i.DueAt,
+			&i.Status,
+			&i.SetMessageID,
+			&i.FiredMessageID,
+			&i.CancelledBy,
+			&i.CreatedAt,
+			&i.SettledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listQueuedWakes = `-- name: ListQueuedWakes :many
+SELECT q.member_id, q.message_id, q.thread_id, q.anchor_id, q.queued_at FROM queued_wakes q
+JOIN members m ON m.id = q.member_id
+WHERE m.machine_id = $1
+ORDER BY q.queued_at, q.message_id
+`
+
+// What the members running on a machine were asked and wait for, in the
+// order they were asked.
+func (q *Queries) ListQueuedWakes(ctx context.Context, machineID pgtype.UUID) ([]QueuedWake, error) {
+	rows, err := q.db.Query(ctx, listQueuedWakes, machineID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []QueuedWake
+	for rows.Next() {
+		var i QueuedWake
+		if err := rows.Scan(
+			&i.MemberID,
+			&i.MessageID,
+			&i.ThreadID,
+			&i.AnchorID,
+			&i.QueuedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -612,6 +1162,87 @@ func (q *Queries) ListSkillUses(ctx context.Context, arg ListSkillUsesParams) ([
 	return items, nil
 }
 
+const listThreadDrafts = `-- name: ListThreadDrafts :many
+SELECT id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at FROM drafts WHERE thread_id = $1 ORDER BY created_at, id
+`
+
+func (q *Queries) ListThreadDrafts(ctx context.Context, threadID pgtype.UUID) ([]Draft, error) {
+	rows, err := q.db.Query(ctx, listThreadDrafts, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Draft
+	for rows.Next() {
+		var i Draft
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.RoomID,
+			&i.ThreadID,
+			&i.MemberID,
+			&i.TurnID,
+			&i.Kind,
+			&i.TargetID,
+			&i.Subject,
+			&i.Params,
+			&i.ThenNote,
+			&i.Status,
+			&i.Result,
+			&i.MessageID,
+			&i.ResultMessageID,
+			&i.DecidedBy,
+			&i.CreatedAt,
+			&i.SettledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listThreadReminders = `-- name: ListThreadReminders :many
+SELECT id, member_id, room_id, thread_id, turn_id, note, due_at, status, set_message_id, fired_message_id, cancelled_by, created_at, settled_at FROM reminders WHERE thread_id = $1 ORDER BY created_at, id
+`
+
+func (q *Queries) ListThreadReminders(ctx context.Context, threadID pgtype.UUID) ([]Reminder, error) {
+	rows, err := q.db.Query(ctx, listThreadReminders, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Reminder
+	for rows.Next() {
+		var i Reminder
+		if err := rows.Scan(
+			&i.ID,
+			&i.MemberID,
+			&i.RoomID,
+			&i.ThreadID,
+			&i.TurnID,
+			&i.Note,
+			&i.DueAt,
+			&i.Status,
+			&i.SetMessageID,
+			&i.FiredMessageID,
+			&i.CancelledBy,
+			&i.CreatedAt,
+			&i.SettledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listThreadTurns = `-- name: ListThreadTurns :many
 SELECT id, member_id, room_id, thread_id, trigger_message_id, machine_id, session_id, runtime, kind, status, error, reply_message_id, transcript_path, input_tokens, cache_read_tokens, cache_write_tokens, output_tokens, files_changed, skills_used, wiki_pages, chain_message_id, woken_by_turn_id, worked, trusted_by, trusted_at, started_at, ended_at FROM turns
 WHERE thread_id = $1
@@ -667,6 +1298,163 @@ func (q *Queries) ListThreadTurns(ctx context.Context, threadID pgtype.UUID) ([]
 	return items, nil
 }
 
+const lockDraftSubject = `-- name: LockDraftSubject :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text || ' ' || $2::text, 0))
+`
+
+type LockDraftSubjectParams struct {
+	ProjectID string
+	Subject   string
+}
+
+// Holds a project's drafts about a subject for the transaction: those
+// drafted at once give way one to another in turn.
+func (q *Queries) LockDraftSubject(ctx context.Context, arg LockDraftSubjectParams) error {
+	_, err := q.db.Exec(ctx, lockDraftSubject, arg.ProjectID, arg.Subject)
+	return err
+}
+
+const openDraft = `-- name: OpenDraft :one
+SELECT id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at FROM drafts
+WHERE project_id = $1 AND subject = $2 AND status IN ('pending', 'running')
+ORDER BY created_at DESC
+LIMIT 1
+`
+
+type OpenDraftParams struct {
+	ProjectID pgtype.UUID
+	Subject   string
+}
+
+// The project's draft about subject that is not settled yet.
+func (q *Queries) OpenDraft(ctx context.Context, arg OpenDraftParams) (Draft, error) {
+	row := q.db.QueryRow(ctx, openDraft, arg.ProjectID, arg.Subject)
+	var i Draft
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.MemberID,
+		&i.TurnID,
+		&i.Kind,
+		&i.TargetID,
+		&i.Subject,
+		&i.Params,
+		&i.ThenNote,
+		&i.Status,
+		&i.Result,
+		&i.MessageID,
+		&i.ResultMessageID,
+		&i.DecidedBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
+const pauseAccount = `-- name: PauseAccount :one
+INSERT INTO pauses (machine_id, runtime, reason, detail, ends_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (machine_id, runtime) WHERE member_id IS NULL DO UPDATE SET
+    reason = EXCLUDED.reason, detail = EXCLUDED.detail, ends_at = EXCLUDED.ends_at
+RETURNING id, machine_id, runtime, member_id, reason, detail, ends_at, created_at
+`
+
+type PauseAccountParams struct {
+	MachineID pgtype.UUID
+	Runtime   string
+	Reason    string
+	Detail    string
+	EndsAt    pgtype.Timestamptz
+}
+
+// Pauses a runtime's account on a machine, or updates why and until when:
+// it keeps the time it began.
+func (q *Queries) PauseAccount(ctx context.Context, arg PauseAccountParams) (Pause, error) {
+	row := q.db.QueryRow(ctx, pauseAccount,
+		arg.MachineID,
+		arg.Runtime,
+		arg.Reason,
+		arg.Detail,
+		arg.EndsAt,
+	)
+	var i Pause
+	err := row.Scan(
+		&i.ID,
+		&i.MachineID,
+		&i.Runtime,
+		&i.MemberID,
+		&i.Reason,
+		&i.Detail,
+		&i.EndsAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const pauseMember = `-- name: PauseMember :one
+INSERT INTO pauses (member_id, reason, detail, ends_at)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (member_id) WHERE member_id IS NOT NULL DO UPDATE SET
+    reason = EXCLUDED.reason, detail = EXCLUDED.detail, ends_at = EXCLUDED.ends_at
+RETURNING id, machine_id, runtime, member_id, reason, detail, ends_at, created_at
+`
+
+type PauseMemberParams struct {
+	MemberID pgtype.UUID
+	Reason   string
+	Detail   string
+	EndsAt   pgtype.Timestamptz
+}
+
+// Pauses a member, or updates why and until when.
+func (q *Queries) PauseMember(ctx context.Context, arg PauseMemberParams) (Pause, error) {
+	row := q.db.QueryRow(ctx, pauseMember,
+		arg.MemberID,
+		arg.Reason,
+		arg.Detail,
+		arg.EndsAt,
+	)
+	var i Pause
+	err := row.Scan(
+		&i.ID,
+		&i.MachineID,
+		&i.Runtime,
+		&i.MemberID,
+		&i.Reason,
+		&i.Detail,
+		&i.EndsAt,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const queueWake = `-- name: QueueWake :exec
+INSERT INTO queued_wakes (member_id, message_id, thread_id, anchor_id)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT DO NOTHING
+`
+
+type QueueWakeParams struct {
+	MemberID  pgtype.UUID
+	MessageID pgtype.UUID
+	ThreadID  pgtype.UUID
+	AnchorID  pgtype.UUID
+}
+
+// Keeps what a busy member was asked until its turn starts; asked twice
+// by one message, it waits once.
+func (q *Queries) QueueWake(ctx context.Context, arg QueueWakeParams) error {
+	_, err := q.db.Exec(ctx, queueWake,
+		arg.MemberID,
+		arg.MessageID,
+		arg.ThreadID,
+		arg.AnchorID,
+	)
+	return err
+}
+
 const recentChainWakes = `-- name: RecentChainWakes :many
 SELECT worked FROM turns
 WHERE chain_message_id = $1 AND woken_by_turn_id IS NOT NULL AND ended_at IS NOT NULL
@@ -699,6 +1487,144 @@ func (q *Queries) RecentChainWakes(ctx context.Context, arg RecentChainWakesPara
 		return nil, err
 	}
 	return items, nil
+}
+
+const releaseDraft = `-- name: ReleaseDraft :one
+UPDATE drafts SET status = 'pending' WHERE id = $1 AND status = 'running'
+RETURNING id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at
+`
+
+// A run that could not be done for now: the draft waits again.
+func (q *Queries) ReleaseDraft(ctx context.Context, id pgtype.UUID) (Draft, error) {
+	row := q.db.QueryRow(ctx, releaseDraft, id)
+	var i Draft
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.MemberID,
+		&i.TurnID,
+		&i.Kind,
+		&i.TargetID,
+		&i.Subject,
+		&i.Params,
+		&i.ThenNote,
+		&i.Status,
+		&i.Result,
+		&i.MessageID,
+		&i.ResultMessageID,
+		&i.DecidedBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
+const releaseRunningDrafts = `-- name: ReleaseRunningDrafts :many
+UPDATE drafts SET status = 'pending' WHERE status = 'running'
+RETURNING id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at
+`
+
+// Runs a stopped hub left under way wait again; what they did shows when
+// run again.
+func (q *Queries) ReleaseRunningDrafts(ctx context.Context) ([]Draft, error) {
+	rows, err := q.db.Query(ctx, releaseRunningDrafts)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Draft
+	for rows.Next() {
+		var i Draft
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.RoomID,
+			&i.ThreadID,
+			&i.MemberID,
+			&i.TurnID,
+			&i.Kind,
+			&i.TargetID,
+			&i.Subject,
+			&i.Params,
+			&i.ThenNote,
+			&i.Status,
+			&i.Result,
+			&i.MessageID,
+			&i.ResultMessageID,
+			&i.DecidedBy,
+			&i.CreatedAt,
+			&i.SettledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const setDraftMessage = `-- name: SetDraftMessage :exec
+UPDATE drafts SET message_id = $1 WHERE id = $2
+`
+
+type SetDraftMessageParams struct {
+	MessageID pgtype.UUID
+	ID        pgtype.UUID
+}
+
+// The card that shows a draft.
+func (q *Queries) SetDraftMessage(ctx context.Context, arg SetDraftMessageParams) error {
+	_, err := q.db.Exec(ctx, setDraftMessage, arg.MessageID, arg.ID)
+	return err
+}
+
+const setDraftResultMessage = `-- name: SetDraftResultMessage :exec
+UPDATE drafts SET result_message_id = $1 WHERE id = $2
+`
+
+type SetDraftResultMessageParams struct {
+	MessageID pgtype.UUID
+	ID        pgtype.UUID
+}
+
+// The message that told the member what came of its draft.
+func (q *Queries) SetDraftResultMessage(ctx context.Context, arg SetDraftResultMessageParams) error {
+	_, err := q.db.Exec(ctx, setDraftResultMessage, arg.MessageID, arg.ID)
+	return err
+}
+
+const setReminderFired = `-- name: SetReminderFired :exec
+UPDATE reminders SET fired_message_id = $1 WHERE id = $2
+`
+
+type SetReminderFiredParams struct {
+	MessageID pgtype.UUID
+	ID        pgtype.UUID
+}
+
+// The message a reminder came due as.
+func (q *Queries) SetReminderFired(ctx context.Context, arg SetReminderFiredParams) error {
+	_, err := q.db.Exec(ctx, setReminderFired, arg.MessageID, arg.ID)
+	return err
+}
+
+const setReminderMessage = `-- name: SetReminderMessage :exec
+UPDATE reminders SET set_message_id = $1 WHERE id = $2
+`
+
+type SetReminderMessageParams struct {
+	MessageID pgtype.UUID
+	ID        pgtype.UUID
+}
+
+// The note that told of a reminder as it was set.
+func (q *Queries) SetReminderMessage(ctx context.Context, arg SetReminderMessageParams) error {
+	_, err := q.db.Exec(ctx, setReminderMessage, arg.MessageID, arg.ID)
+	return err
 }
 
 const setTurnSession = `-- name: SetTurnSession :execrows
@@ -765,4 +1691,164 @@ func (q *Queries) SetTurnTrust(ctx context.Context, arg SetTurnTrustParams) (Tur
 		&i.EndedAt,
 	)
 	return i, err
+}
+
+const settleDraft = `-- name: SettleDraft :one
+UPDATE drafts SET status = $1, result = $2, decided_by = $3, settled_at = now()
+WHERE id = $4 AND status = 'running'
+RETURNING id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at
+`
+
+type SettleDraftParams struct {
+	Status    string
+	Result    []byte
+	DecidedBy pgtype.UUID
+	ID        pgtype.UUID
+}
+
+// What came of a run: done, or conflicted.
+func (q *Queries) SettleDraft(ctx context.Context, arg SettleDraftParams) (Draft, error) {
+	row := q.db.QueryRow(ctx, settleDraft,
+		arg.Status,
+		arg.Result,
+		arg.DecidedBy,
+		arg.ID,
+	)
+	var i Draft
+	err := row.Scan(
+		&i.ID,
+		&i.ProjectID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.MemberID,
+		&i.TurnID,
+		&i.Kind,
+		&i.TargetID,
+		&i.Subject,
+		&i.Params,
+		&i.ThenNote,
+		&i.Status,
+		&i.Result,
+		&i.MessageID,
+		&i.ResultMessageID,
+		&i.DecidedBy,
+		&i.CreatedAt,
+		&i.SettledAt,
+	)
+	return i, err
+}
+
+const supersedeDrafts = `-- name: SupersedeDrafts :many
+UPDATE drafts SET status = 'superseded', settled_at = now()
+WHERE project_id = $1 AND subject = $2 AND status = 'pending'
+RETURNING id, project_id, room_id, thread_id, member_id, turn_id, kind, target_id, subject, params, then_note, status, result, message_id, result_message_id, decided_by, created_at, settled_at
+`
+
+type SupersedeDraftsParams struct {
+	ProjectID pgtype.UUID
+	Subject   string
+}
+
+// The project's pending drafts about subject give way to a new one.
+func (q *Queries) SupersedeDrafts(ctx context.Context, arg SupersedeDraftsParams) ([]Draft, error) {
+	rows, err := q.db.Query(ctx, supersedeDrafts, arg.ProjectID, arg.Subject)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Draft
+	for rows.Next() {
+		var i Draft
+		if err := rows.Scan(
+			&i.ID,
+			&i.ProjectID,
+			&i.RoomID,
+			&i.ThreadID,
+			&i.MemberID,
+			&i.TurnID,
+			&i.Kind,
+			&i.TargetID,
+			&i.Subject,
+			&i.Params,
+			&i.ThenNote,
+			&i.Status,
+			&i.Result,
+			&i.MessageID,
+			&i.ResultMessageID,
+			&i.DecidedBy,
+			&i.CreatedAt,
+			&i.SettledAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const turnAtSessionEnd = `-- name: TurnAtSessionEnd :one
+SELECT t.id, t.member_id, t.room_id, t.thread_id, t.trigger_message_id, t.machine_id, t.session_id, t.runtime, t.kind, t.status, t.error, t.reply_message_id, t.transcript_path, t.input_tokens, t.cache_read_tokens, t.cache_write_tokens, t.output_tokens, t.files_changed, t.skills_used, t.wiki_pages, t.chain_message_id, t.woken_by_turn_id, t.worked, t.trusted_by, t.trusted_at, t.started_at, t.ended_at FROM turns t JOIN member_sessions s ON s.member_id = t.member_id
+WHERE s.id = $1 AND t.member_id = $2 AND t.started_at <= s.ended_at
+ORDER BY t.started_at DESC LIMIT 1
+`
+
+type TurnAtSessionEndParams struct {
+	SessionID pgtype.UUID
+	MemberID  pgtype.UUID
+}
+
+// The member's latest turn by the time one of its sessions ended: the one
+// going as the session ended, which may not have got a session yet.
+func (q *Queries) TurnAtSessionEnd(ctx context.Context, arg TurnAtSessionEndParams) (Turn, error) {
+	row := q.db.QueryRow(ctx, turnAtSessionEnd, arg.SessionID, arg.MemberID)
+	var i Turn
+	err := row.Scan(
+		&i.ID,
+		&i.MemberID,
+		&i.RoomID,
+		&i.ThreadID,
+		&i.TriggerMessageID,
+		&i.MachineID,
+		&i.SessionID,
+		&i.Runtime,
+		&i.Kind,
+		&i.Status,
+		&i.Error,
+		&i.ReplyMessageID,
+		&i.TranscriptPath,
+		&i.InputTokens,
+		&i.CacheReadTokens,
+		&i.CacheWriteTokens,
+		&i.OutputTokens,
+		&i.FilesChanged,
+		&i.SkillsUsed,
+		&i.WikiPages,
+		&i.ChainMessageID,
+		&i.WokenByTurnID,
+		&i.Worked,
+		&i.TrustedBy,
+		&i.TrustedAt,
+		&i.StartedAt,
+		&i.EndedAt,
+	)
+	return i, err
+}
+
+const unqueueWakes = `-- name: UnqueueWakes :exec
+DELETE FROM queued_wakes
+WHERE member_id = $1 AND message_id = ANY($2::uuid[])
+`
+
+type UnqueueWakesParams struct {
+	MemberID   pgtype.UUID
+	MessageIds []pgtype.UUID
+}
+
+// A turn started for these messages: they wait no longer.
+func (q *Queries) UnqueueWakes(ctx context.Context, arg UnqueueWakesParams) error {
+	_, err := q.db.Exec(ctx, unqueueWakes, arg.MemberID, arg.MessageIds)
+	return err
 }

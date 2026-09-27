@@ -53,8 +53,12 @@ func (m *TurnManager) upkeepBrief(ctx context.Context, up *upkeep, member store.
 	mounts := m.wikis.mounts(ctx, up.project)
 	health := mountedHealth(bundle.Health(time.Now()), mounts)
 	checks, due := m.pagesToCheck(ctx, up.project, bundle)
+	misses, missed := m.searchMisses(ctx, up.turns)
+	unread, unreadCount := m.unreadPages(ctx, up.project, bundle, checks)
 	prefs := m.wikis.memoryPrefs()
-	upkeepSteps(w, up, prefs, !health.Empty(m.residentBudget), len(checks) > 0)
+	upkeepSteps(w, up, prefs, upkeepFound{
+		unhealthy: !health.Empty(m.residentBudget), checks: len(checks) > 0, misses: len(misses) > 0, unread: len(unread) > 0,
+	})
 	fmt.Fprintf(&w.sb, "Your veyloom tools: %s; the wiki tools (%s, with scope library for the skill library); %sand for reading the chat %s.\n",
 		strings.Join(runtime.UpkeepToolNames, ", "), strings.Join(runtime.WikiToolNames, ", "), memoryToolsLine(prefs), strings.Join(runtime.RoomToolNames, ", "))
 	if mounted := mountsLine(mounts); mounted != "" {
@@ -68,6 +72,7 @@ func (m *TurnManager) upkeepBrief(ctx context.Context, up *upkeep, member store.
 	for _, t := range up.turns {
 		w.sb.WriteString(upkeepTurnLine(t, false) + "\n")
 	}
+	missesPart(w, misses, missed)
 	if len(up.owned) > 0 {
 		w.section(fmt.Sprintf("Turns of other projects that used this team's skills (%d):", len(up.uses)))
 		if len(up.uses) == 0 {
@@ -90,6 +95,7 @@ func (m *TurnManager) upkeepBrief(ctx context.Context, up *upkeep, member store.
 
 	m.peoplePart(w, up)
 	checksPart(w, checks, due, m.wikis.now())
+	unreadPart(w, unread, unreadCount, m.wikis.now())
 	upkeepCatalogPart(w, bundle)
 	m.upkeepHistoryPart(ctx, w, bundle)
 	upkeepHealthPart(w, health, m.residentBudget)
@@ -115,10 +121,19 @@ func (m *TurnManager) trialLine(ctx context.Context, trial store.SkillTrial) str
 	return line
 }
 
+// upkeepFound is what an upkeep's brief found for it to see to besides
+// the turns and what people said: each calls for a step of its own.
+type upkeepFound struct {
+	// unhealthy: the health check found something; checks: pages are due
+	// to be checked again; misses: the turns searched and found nothing;
+	// unread: pages no turn reads (design.md 5.23.7).
+	unhealthy, checks, misses, unread bool
+}
+
 // upkeepSteps says what the upkeep is to do, only the steps there is
 // something for: a step with nothing to do only draws the eye from the
 // ones that have.
-func upkeepSteps(w *briefWriter, up *upkeep, prefs store.MemoryPrefs, unhealthy, checks bool) {
+func upkeepSteps(w *briefWriter, up *upkeep, prefs store.MemoryPrefs, found upkeepFound) {
 	w.section("What to do, in this order:")
 	var steps []string
 	if len(up.turns)+len(up.uses) > 0 {
@@ -132,6 +147,11 @@ func upkeepSteps(w *briefWriter, up *upkeep, prefs store.MemoryPrefs, unhealthy,
 	} else if len(up.news) == 0 {
 		steps = append(steps, "There is nothing new to go over: read the wiki as a whole for what is out of date, contradicts another page, or is missing a link, and set it right.")
 	}
+	if found.misses {
+		steps = append(steps, "Go over the \"Searches that found nothing as written\": where a page answers one under other words (often the page its turn read next), "+
+			"put the words searched with into that page's description or tags, in the language they were searched in, so that the next search finds it; "+
+			"where no page answers it and the turns found the answer, record it. A search for something that has no place in the wiki needs nothing.")
+	}
 	if len(up.news) > 0 {
 		steps = append(steps, "Go over what people said and sent since the last upkeep, listed below, as you see fit: read what bears on the project with read_room and read_topic, "+
 			"and open the files people sent with your own tools at the paths given (a model that takes no images cannot see a picture: say so rather than guess at it). "+
@@ -141,12 +161,17 @@ func upkeepSteps(w *briefWriter, up *upkeep, prefs store.MemoryPrefs, unhealthy,
 	if step := memoryStep(prefs); step != "" && len(up.turns)+len(up.news) > 0 {
 		steps = append(steps, step)
 	}
-	if checks {
+	if found.checks {
 		steps = append(steps, "Check each page under \"Pages to check again\" against the repository and what the chat said since it was last checked; its line says what calls for it, and read_turn reads the turn that changed a file. "+
 			"Where a page no longer holds, set it right with patch_wiki, or deprecate it naming the page that takes over; where it holds as written, confirm it with confirm_wiki, which counts as checking it. "+
 			"A page you neither change nor confirm stays due for the next upkeep.")
 	}
-	if unhealthy {
+	if found.unread {
+		steps = append(steps, "Look at the \"Pages no turn has read\": a page nobody reads may be hard to find, or no longer needed. "+
+			"Where it holds, make its title and description say what it answers in the words turns search with, link it from the pages it belongs with, and confirm it with confirm_wiki; "+
+			"where it no longer holds, set it right, or deprecate it naming the page that takes over. Never deprecate a page for going unread alone.")
+	}
+	if found.unhealthy {
 		steps = append(steps, "Set right what the health check below found: link orphan pages from the pages they belong with, mend or drop broken links, "+
 			"bring stale pages up to date or deprecate them, shorten resident pages that no longer fit. "+
 			"Where two pages name the same path and one bears on the other, link it from the other in a sentence that says how (it depends on it, it is the reason for it, it contradicts it); related_wiki shows how pages already connect.")

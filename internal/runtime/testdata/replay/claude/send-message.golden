@@ -1,0 +1,8 @@
+{"kind":"session","session_ref":"3cf94326-17a2-4a2f-a8a8-64d82f79176c"}
+{"kind":"status","text":"session started (model claude-haiku-4-5-20251001)"}
+{"call_id":"toolu_01BppsnXuhxGVk92Bq2jcTHi","input":"{\"max_results\":1,\"query\":\"select:mcp__veyloom__send_message\"}","kind":"tool_call","tool":"ToolSearch"}
+{"call_id":"toolu_01BppsnXuhxGVk92Bq2jcTHi","kind":"tool_result","tool":"ToolSearch"}
+{"kind":"quota","quota":{"resets_at":"2026-09-27T17:00:00Z","used_percent":93,"window":"7d"}}
+{"call_id":"toolu_01TkqJuVUdMLHAicBgaxwPHA","input":"{\"text\":\"KIWI\"}","kind":"tool_call","tool":"mcp__veyloom__send_message"}
+{"call_id":"toolu_01TkqJuVUdMLHAicBgaxwPHA","kind":"tool_result","text":"Posted in this topic.","tool":"mcp__veyloom__send_message"}
+result {"output":"","session_ref":"3cf94326-17a2-4a2f-a8a8-64d82f79176c","usage":{"input_tokens":24,"cache_read_tokens":48226,"cache_write_tokens":8259,"output_tokens":662}}

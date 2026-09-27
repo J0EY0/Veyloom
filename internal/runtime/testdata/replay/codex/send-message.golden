@@ -1,0 +1,8 @@
+{"kind":"session","session_ref":"01a0e2d8-4e19-7243-891c-314482df07ba"}
+{"kind":"status","text":"session started (model gpt-5-codex)"}
+{"kind":"quota","quota":{"resets_at":"2026-10-04T03:47:11Z","used_percent":4,"window":"7d"}}
+{"call_id":"exec-37c7a12e-c848-454d-9895-f975f0c7d13f","input":"{\"text\":\"KIWI\",\"to\":\"topic\"}","kind":"tool_call","tool":"veyloom/send_message"}
+{"call_id":"exec-37c7a12e-c848-454d-9895-f975f0c7d13f","kind":"tool_result","text":"Posted in this topic.","tool":"veyloom/send_message"}
+{"kind":"quota","quota":{"resets_at":"2026-10-04T03:47:10Z","used_percent":4,"window":"7d"}}
+{"kind":"quota","quota":{"resets_at":"2026-10-04T03:47:10Z","used_percent":4,"window":"7d"}}
+result {"output":"","session_ref":"01a0e2d8-4e19-7243-891c-314482df07ba","usage":{"input_tokens":6609,"cache_read_tokens":50560,"cache_write_tokens":0,"output_tokens":72}}

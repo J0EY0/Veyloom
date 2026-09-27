@@ -450,7 +450,7 @@ func (m *TurnManager) TriggerUpkeep(ctx context.Context, member store.Member, no
 	}
 	st.starting = true
 	m.mu.Unlock()
-	m.start(ctx, member.ID, topic, []store.Message{note}, "", up, nil)
+	m.launch(member.ID, topic, []store.Message{note}, up, nil)
 	return nil
 }
 

@@ -27,7 +27,9 @@ func wikiSmokeRunners(t *testing.T) map[string]runtime.Runner {
 	if out, err := exec.Command("go", "build", "-o", proxy, "../../cmd/veyloom").CombinedOutput(); err != nil {
 		t.Fatalf("build veyloom for the MCP proxy: %v\n%s", err, out)
 	}
-	return runtime.BuiltinRunnersWith(runtime.RunnerOptions{ToolDir: filepath.Join(t.TempDir(), "tools"), ProxyBinary: proxy})
+	// VEYLOOM_RECORD_DIR keeps what the CLIs print, for the replay tests
+	// of internal/runtime (docs/design.md 5.23.9).
+	return runtime.BuiltinRunnersWith(runtime.RunnerOptions{ToolDir: filepath.Join(t.TempDir(), "tools"), ProxyBinary: proxy, RecordDir: os.Getenv("VEYLOOM_RECORD_DIR")})
 }
 
 // TestClaudeRealSmoke_Wiki runs in the read-only preset, which is Claude

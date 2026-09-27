@@ -190,14 +190,28 @@ func (m *TurnManager) answerWiki(ctx context.Context, at *activeTurn, q runtime.
 	if scope == store.WikiProject {
 		mounts = m.wikis.mounts(ctx, tw.project)
 	}
+	// What the chat's turns search for and read is kept for the
+	// maintainer (lookups.go).
 	switch q.Tool {
 	case runtime.WikiToolSearch:
-		return tw.search(args, mounts)
+		text, hits, err := tw.search(args, mounts)
+		if err == nil {
+			m.noteLookup(ctx, at, tw, store.WikiLookup{Query: strings.TrimSpace(args.Query), Hits: hits})
+		}
+		return text, err
 	case runtime.WikiToolRead:
 		if name, inner, ok := splitMount(args.Path); ok && scope == store.WikiProject {
-			return readMounted(mounts, name, inner)
+			text, err := readMounted(mounts, name, inner)
+			if err == nil {
+				m.noteLookup(ctx, at, tw, store.WikiLookup{Path: mountPrefix + name + inner})
+			}
+			return text, err
 		}
-		return m.readWiki(ctx, tw, args)
+		text, path, err := m.readWiki(ctx, tw, args)
+		if err == nil {
+			m.noteLookup(ctx, at, tw, store.WikiLookup{Path: path})
+		}
+		return text, err
 	case runtime.WikiToolRelated:
 		return m.relatedWiki(ctx, tw, args, mounts)
 	}
@@ -231,18 +245,21 @@ func (m *TurnManager) answerWiki(ctx context.Context, at *activeTurn, q runtime.
 	return "", fmt.Errorf("unknown wiki tool %q", q.Tool)
 }
 
-func (tw *turnWiki) search(args wikiArgs, mounts []mountedWiki) (string, error) {
+// search answers search_wiki, and says how many pages matched the words
+// as written.
+func (tw *turnWiki) search(args wikiArgs, mounts []mountedWiki) (string, int, error) {
 	query := strings.TrimSpace(args.Query)
 	if query == "" {
-		return "", errors.New("search for what? give some words as query")
+		return "", 0, errors.New("search for what? give some words as query")
 	}
 	limit := args.Limit
 	if limit <= 0 {
 		limit = wikiSearchDefault
 	}
-	hits := searchMounted(tw.bundle, mounts, query, min(limit, wikiSearchMax))
+	limit = min(limit, wikiSearchMax)
+	hits := searchMounted(tw.bundle, mounts, query, limit)
 	if len(hits) == 0 {
-		return fmt.Sprintf("No page of %s matches %q.", tw.what(), query), nil
+		return tw.searchMissed(query, mounts, limit), 0, nil
 	}
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "Pages matching %q, best first:\n", query)
@@ -253,7 +270,26 @@ func (tw *turnWiki) search(args wikiArgs, mounts []mountedWiki) (string, error) 
 		}
 	}
 	sb.WriteString("(read a page with read_wiki)\n")
-	return sb.String(), nil
+	return sb.String(), len(hits), nil
+}
+
+// searchMissed answers a search no page matches: the pages sharing words
+// with the query when some do, and how to search again. Words are split at
+// spaces only, so a question asked whole matches just a page holding it as
+// written.
+func (tw *turnWiki) searchMissed(query string, mounts []mountedWiki, limit int) string {
+	again := "search again with fewer or other words, split by spaces: a name, a path, an error's text"
+	near := nearMounted(tw.bundle, mounts, query, limit)
+	if len(near) == 0 {
+		return fmt.Sprintf("No page of %s matches %q. To find one, %s; related_wiki finds the pages about a file.", tw.what(), query, again)
+	}
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "No page of %s holds %q as written. Pages sharing words with it, best first:\n", tw.what(), query)
+	for _, h := range near {
+		sb.WriteString(pageLine(h.Summary, 0) + "\n")
+	}
+	fmt.Fprintf(&sb, "(read a page with read_wiki, or %s)\n", again)
+	return sb.String()
 }
 
 // pageLine is a page as lists show it: where it is, what it is called,
@@ -288,17 +324,19 @@ func pageState(s wiki.Summary) string {
 	return strings.Join(parts, "; ")
 }
 
-func (m *TurnManager) readWiki(ctx context.Context, tw *turnWiki, args wikiArgs) (string, error) {
+// readWiki answers read_wiki with the page, and says which page it is, as
+// the wiki names it.
+func (m *TurnManager) readWiki(ctx context.Context, tw *turnWiki, args wikiArgs) (string, string, error) {
 	page, err := tw.bundle.Page(args.Path)
 	if errors.Is(err, store.ErrNotFound) {
-		return "", fmt.Errorf("%s has no page %s; search_wiki finds the ones it has", tw.what(), args.Path)
+		return "", "", fmt.Errorf("%s has no page %s; search_wiki finds the ones it has", tw.what(), args.Path)
 	}
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	text, err := page.Doc.Bytes()
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	var sb strings.Builder
 	sb.Write(text)
@@ -317,7 +355,7 @@ func (m *TurnManager) readWiki(ctx context.Context, tw *turnWiki, args wikiArgs)
 				trial.ChangedBy, trial.ChangedAt.Local().Format("2006-01-02"), m.trialUses)
 		}
 	}
-	return sb.String(), nil
+	return sb.String(), page.Path, nil
 }
 
 func (m *TurnManager) writeWiki(ctx context.Context, at *activeTurn, tw *turnWiki, args wikiArgs) (string, error) {

@@ -30,6 +30,12 @@ type cliOptions struct {
 	Env         []string
 	StderrBytes int
 	WaitDelay   time.Duration
+	// RecordDir, when set, keeps every line the CLI prints as it printed
+	// it, in a file of its own named after RecordName there: real output
+	// for the replay tests (docs/design.md 5.23.9). A file that cannot be
+	// made leaves the turn unrecorded, not failed.
+	RecordDir  string
+	RecordName string
 }
 
 // cliProcess wraps a CLI started for one turn: its stdout as a line
@@ -39,6 +45,8 @@ type cliProcess struct {
 	cmd    *exec.Cmd
 	stdout io.ReadCloser
 	stderr *tailBuffer
+	// record keeps the lines printed, when asked to (cliOptions.RecordDir).
+	record *os.File
 	// stdin is set when the process was started with StdinPipe.
 	stdin io.WriteCloser
 }
@@ -73,7 +81,13 @@ func startCLI(ctx context.Context, opts cliOptions) (*cliProcess, error) {
 	if err := cmd.Start(); err != nil {
 		return nil, fmt.Errorf("start: %w", err)
 	}
-	return &cliProcess{cmd: cmd, stdout: stdout, stderr: stderr, stdin: stdin}, nil
+	p := &cliProcess{cmd: cmd, stdout: stdout, stderr: stderr, stdin: stdin}
+	if opts.RecordDir != "" {
+		if f, err := os.CreateTemp(opts.RecordDir, opts.RecordName+"-*.jsonl"); err == nil {
+			p.record = f
+		}
+	}
+	return p, nil
 }
 
 // lines feeds every stdout line to fn until the stream ends. A
@@ -81,10 +95,16 @@ func startCLI(ctx context.Context, opts cliOptions) (*cliProcess, error) {
 // and must not hit a fixed limit, and a stalled read here would block the
 // CLI on its stdout.
 func (p *cliProcess) lines(fn func([]byte)) {
+	if p.record != nil {
+		defer p.record.Close()
+	}
 	reader := bufio.NewReader(p.stdout)
 	for {
 		line, err := reader.ReadBytes('\n')
 		if len(line) > 0 {
+			if p.record != nil {
+				_, _ = p.record.Write(line)
+			}
 			fn(line)
 		}
 		if err != nil {

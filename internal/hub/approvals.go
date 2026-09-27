@@ -44,6 +44,9 @@ func (m *TurnManager) OnApproval(conn protocol.Conn, req protocol.ApprovalReques
 		go m.send(conn, protocol.ApprovalDecision{TurnID: req.TurnID, ApprovalID: req.ApprovalID, Decision: runtime.Decision{Allow: false, Message: "the turn is no longer running"}})
 		return
 	}
+	// Asking is a sign of life, and while a person is asked the turn is
+	// not quiet (quiet.go).
+	m.stir(at)
 
 	at.mu.Lock()
 	if at.transcript != nil {
@@ -633,6 +636,9 @@ func (m *TurnManager) settle(approvalID string) (*activeTurn, *pendingApproval) 
 	if p.timer != nil {
 		p.timer.Stop()
 	}
+	// Answered, the turn's quiet starts over from now, not from before it
+	// asked.
+	m.stir(at)
 	return at, p
 }
 

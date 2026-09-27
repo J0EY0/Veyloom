@@ -55,6 +55,8 @@ const (
 	KindStartTurn Kind = "start_turn"
 	// KindCancelTurn asks the machine to stop a running turn.
 	KindCancelTurn Kind = "cancel_turn"
+	// KindSteerTurn passes what people said to a running turn.
+	KindSteerTurn Kind = "steer_turn"
 	// KindApprovalDecision answers an ApprovalRequest.
 	KindApprovalDecision Kind = "approval_decision"
 	// KindRoomResult answers a RoomQuery.
@@ -137,6 +139,21 @@ type CancelTurn struct {
 
 // Kind implements Message.
 func (CancelTurn) Kind() Kind { return KindCancelTurn }
+
+// SteerTurn passes text to a running turn, hub to machine: what people
+// said in its topic while it ran (docs/design.md 5.23.2). The turn's
+// events tell what became of it, under SteerID: runtime.EventSteer once
+// the agent took it in, runtime.EventSteerDropped when it will not reach
+// the agent in this turn, which is also what a turn not running here, or
+// one that cannot take it now, reports at once.
+type SteerTurn struct {
+	TurnID  string `json:"turn_id"`
+	SteerID string `json:"steer_id"`
+	Text    string `json:"text"`
+}
+
+// Kind implements Message.
+func (SteerTurn) Kind() Kind { return KindSteerTurn }
 
 // TurnEvent carries one event of a running turn, machine to hub.
 type TurnEvent struct {
@@ -426,6 +443,7 @@ var decoders = map[Kind]func(json.RawMessage) (Message, error){
 	KindProbe:          decodeAs[Probe],
 	KindStartTurn:      decodeAs[StartTurn],
 	KindCancelTurn:     decodeAs[CancelTurn],
+	KindSteerTurn:      decodeAs[SteerTurn],
 	KindTurnEvent:      decodeAs[TurnEvent],
 	KindTurnDone:       decodeAs[TurnDone],
 

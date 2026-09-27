@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/J0EY0/veyloom/internal/hub"
 	"github.com/J0EY0/veyloom/internal/runtime"
@@ -19,7 +20,14 @@ import (
 // bypassed.
 type Chat interface {
 	PostUserMessage(ctx context.Context, m store.NewMessage) (store.Message, error)
-	CancelTurn(ctx context.Context, turnID string) error
+	// CancelTurn stops a running turn; with newSession the member's next
+	// turn starts a new session (docs/design.md 5.23.8).
+	CancelTurn(ctx context.Context, turnID string, newSession bool) error
+	// QuietSince says, of the turns given, which went quiet and since when.
+	QuietSince(turnIDs []string) map[string]time.Time
+	// TranscriptSoFar writes out a running turn's transcript and says how
+	// many bytes of it are whole records; false when it is not running.
+	TranscriptSoFar(turnID string) (int64, bool)
 	// ContinueRelay lets a wake a limit on agents waking one another held
 	// back go on (docs/design.md 5.22), by the note that told of it.
 	ContinueRelay(ctx context.Context, noteID string) error
@@ -31,6 +39,17 @@ type Chat interface {
 	SubscribeInbox(userID string) hub.Subscription
 	// MarkInboxRead marks read what read picks of a person's inbox.
 	MarkInboxRead(ctx context.Context, userID string, read store.InboxRead) (int, error)
+	// Pauses are what keeps turns from starting now (docs/design.md
+	// 5.23.3); LiftPause lifts one at a person's asking.
+	Pauses(ctx context.Context) []store.Pause
+	LiftPause(ctx context.Context, id, userID string) error
+	// CancelReminder takes back a member's reminder not yet due at a
+	// person's asking (docs/design.md 5.23.4).
+	CancelReminder(ctx context.Context, id, userID string) (store.Reminder, error)
+	// RunDraft does what a member drafted for a person, and DeclineDraft
+	// turns it down (docs/design.md 5.23.5).
+	RunDraft(ctx context.Context, id, userID string, edit hub.DraftEdit) (store.Draft, error)
+	DeclineDraft(ctx context.Context, id, userID string) (store.Draft, error)
 }
 
 // TurnStore reads recorded turns.
@@ -43,6 +62,12 @@ type TurnStore interface {
 	// ListThreadRelayHolds lists the wakes held back that notes in a topic
 	// tell of (docs/design.md 5.22).
 	ListThreadRelayHolds(ctx context.Context, threadID string) ([]store.RelayHold, error)
+	// ListThreadReminders lists the reminders members set in a topic, in
+	// the order set (docs/design.md 5.23.4).
+	ListThreadReminders(ctx context.Context, threadID string) ([]store.Reminder, error)
+	// ListThreadDrafts lists what members drafted in a topic for a person
+	// to run, in the order drafted (docs/design.md 5.23.5).
+	ListThreadDrafts(ctx context.Context, threadID string) ([]store.Draft, error)
 	MachineActivity(ctx context.Context, machineID string, q store.ActivityQuery) (store.MachineActivity, error)
 }
 
@@ -77,13 +102,21 @@ type TurnsResponse struct {
 	Turns []store.Turn `json:"turns"`
 }
 
+// CancelTurnRequest is the optional body of POST /api/v1/turns/{id}/cancel.
+type CancelTurnRequest struct {
+	// NewSession has the member's next turn start a new session.
+	NewSession bool `json:"new_session"`
+}
+
 func (h *handlers) getTurn(w http.ResponseWriter, r *http.Request) {
 	turn, err := h.deps.Turns.GetTurn(r.Context(), r.PathValue("id"))
 	if err != nil {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	writeJSON(w, http.StatusOK, TurnResponse{Turn: turn})
+	one := []store.Turn{turn}
+	h.withQuiet(one)
+	writeJSON(w, http.StatusOK, TurnResponse{Turn: one[0]})
 }
 
 func (h *handlers) listRoomTurns(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +144,28 @@ func (h *handlers) listRoomTurns(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, r, err)
 		return
 	}
+	h.withQuiet(turns)
 	writeJSON(w, http.StatusOK, TurnsResponse{Turns: turns})
+}
+
+// withQuiet says of the running turns among turns which went quiet, and
+// since when: the hub's to know, not the store's.
+func (h *handlers) withQuiet(turns []store.Turn) {
+	var running []string
+	for _, t := range turns {
+		if t.Status == store.TurnRunning {
+			running = append(running, t.ID)
+		}
+	}
+	if len(running) == 0 {
+		return
+	}
+	quiet := h.deps.Chat.QuietSince(running)
+	for i := range turns {
+		if since, ok := quiet[turns[i].ID]; ok {
+			turns[i].QuietSince = &since
+		}
+	}
 }
 
 // cancelTurn stops a running turn. The turn is looked up first so that an
@@ -122,7 +176,14 @@ func (h *handlers) cancelTurn(w http.ResponseWriter, r *http.Request) {
 		h.writeStoreError(w, r, err)
 		return
 	}
-	if err := h.deps.Chat.CancelTurn(r.Context(), id); err != nil {
+	var req CancelTurnRequest
+	if r.ContentLength != 0 {
+		if err := decodeJSON(r, &req); err != nil {
+			writeReason(w, http.StatusBadRequest, err)
+			return
+		}
+	}
+	if err := h.deps.Chat.CancelTurn(r.Context(), id, req.NewSession); err != nil {
 		if errors.Is(err, hub.ErrUnknownTurn) {
 			writeCoded(w, http.StatusConflict, "turnNotRunning", nil, "turn is not running")
 			return
@@ -162,7 +223,9 @@ func (h *handlers) continueRelay(w http.ResponseWriter, r *http.Request) {
 
 // turnTranscript streams a turn's JSONL transcript as it was written. The
 // path is the one recorded on the turn, or the conventional one under the
-// transcript directory for a turn still running.
+// transcript directory for a turn still running, whose transcript is read
+// as far as it is written whole: the page lays it under the live events it
+// missed, before it was opened or while its stream was down.
 func (h *handlers) turnTranscript(w http.ResponseWriter, r *http.Request) {
 	turn, err := h.deps.Turns.GetTurn(r.Context(), r.PathValue("id"))
 	if err != nil {
@@ -189,14 +252,19 @@ func (h *handlers) turnTranscript(w http.ResponseWriter, r *http.Request) {
 	}
 	defer file.Close()
 
+	var body io.Reader = file
 	w.Header().Set("Content-Type", "application/x-ndjson")
 	if turn.Status == store.TurnRunning {
 		w.Header().Set("Cache-Control", "no-store")
+		// The hub may be writing past what it has flushed.
+		if n, ok := h.deps.Chat.TranscriptSoFar(turn.ID); ok {
+			body = io.LimitReader(file, n)
+		}
 	} else {
 		// A finished transcript never changes.
 		w.Header().Set("Cache-Control", "private, max-age=3600")
 	}
-	_, _ = io.Copy(w, file)
+	_, _ = io.Copy(w, body)
 }
 
 func validTurnStatus(s string) bool {
