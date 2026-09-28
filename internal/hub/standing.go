@@ -29,6 +29,7 @@ func (b *briefBuilder) standing(in briefInput, project store.Project) string {
 		strings.Join(runtime.RoomToolNames, ", ") + ". Topics are numbered; #12 is read with read_topic, which names each agent turn for read_turn. " +
 		"A long message a brief or a tool cuts short is read whole with " + runtime.RoomToolReadMessage + ".\n")
 	sb.WriteString(relayRules(project.RelayLimit))
+	sb.WriteString(dispatchRules(in, project))
 	sb.WriteString(practicesLine(in.BuiltinSkills))
 	sb.WriteString(reminderRules(project.RelayLimit))
 	sb.WriteString(draftRules)
@@ -66,7 +67,7 @@ func practicesLine(builtin []string) string {
 		return ""
 	}
 	return "\nHow members split, hand on, check and report back work is Veyloom's skill " + teamPractices + ", which every agent has: " +
-		"load it when you hand work on, take up work handed to you, check another's work, report back, or are stuck.\n"
+		"load it when you hand work on, get work that names no member or may not be yours, take up work handed to you, check another's work, report back, or are stuck.\n"
 }
 
 // reminderRules tells a member it can have the hub wake it later
@@ -101,6 +102,16 @@ func wikiRules(prefs store.MemoryPrefs, trialUses int) string {
 			"set it right with patch_wiki (scope library), one focused change to its SKILL.md or a page of its folder, and record what happened as a Pattern page. "+
 			"The change reaches every agent the skill is installed for from its next turn, on trial until %d turns have used it and ended well; a person or the skill's team can roll it back.", trialUses) +
 		memoryLine(prefs) + "\n"
+}
+
+// dispatchRules tells the leader what comes to it that names no one
+// (design.md 4.2): nothing for the other members.
+func dispatchRules(in briefInput, project store.Project) string {
+	if in.Member.ID != project.LeaderID {
+		return ""
+	}
+	return "\nAs the project's leader, you get a person's message to the room that names no member, and one in a topic whose member is gone or turned off: " +
+		"take it on yourself, or hand it on with " + runtime.MessageToolSend + ".\n"
 }
 
 // workplaceRules says where the member works (design.md 5.21): the leader

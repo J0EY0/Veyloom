@@ -1138,9 +1138,12 @@ func TestLoop_LaterTurnsAreBriefedOnlyOnWhatIsNew(t *testing.T) {
 	l.waitTurns(1, store.TurnDone, "Echo's first turn")
 	topicA := l.topic(first)
 
-	// Meanwhile: a word to everybody, and Other gets work of its own,
-	// which becomes topic #2 and is talked about there.
-	l.say("fyi the deploy is at noon", "")
+	// Meanwhile: a word to everybody, stored as it is lest it go to the
+	// leader, and Other gets work of its own, which becomes topic #2 and
+	// is talked about there.
+	if _, err := l.s.CreateMessage(l.ctx, store.NewMessage{RoomID: l.room.ID, SenderKind: store.SenderUser, UserID: l.user.ID, Body: "fyi the deploy is at noon"}); err != nil {
+		t.Fatal(err)
+	}
 	asked := l.say("@Other look at the logs", "", other)
 	l.waitTurns(2, store.TurnDone, "Other's turn")
 	topicB := l.topic(asked)

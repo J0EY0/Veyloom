@@ -217,19 +217,19 @@ func TestPiSmoke_UpkeepHearsPeople(t *testing.T) {
 	if _, err := r.s.UpdateProject(r.ctx, r.room.ProjectID, store.ProjectPatch{WikiUpkeep: &upkeepOn, WikiMaintainer: &r.member.ID, WikiMaintainerTrigger: &manual}); err != nil {
 		t.Fatal(err)
 	}
-	// With the maintainer alone in the chat, what people say without an @
-	// would go to it as a chat turn; with another member, it goes to no one
-	// and waits for the upkeep.
-	coder, err := r.s.CreateAgent(r.ctx, store.NewAgent{Name: "Coder", Runtime: "fake", MachineID: r.agent.MachineID, PermissionPreset: store.PermissionReadOnly})
+	// People tell one another, alice @-ing bob: that goes to no member and
+	// waits for the upkeep (design.md 4.2). A word to the room that named
+	// nobody would go to the leader, the keeper here, as a chat turn.
+	bob, err := r.s.CreateUser(r.ctx, "bob")
 	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := r.s.CreateMember(r.ctx, store.NewMember{RoomID: r.room.ID, AgentID: coder.ID, DisplayName: "Coder"}); err != nil {
 		t.Fatal(err)
 	}
 	post := func(body string, attachmentIDs ...string) {
 		t.Helper()
-		if _, err := r.h.PostUserMessage(r.ctx, store.NewMessage{RoomID: r.room.ID, UserID: r.user.ID, Body: body, AttachmentIDs: attachmentIDs}); err != nil {
+		if _, err := r.h.PostUserMessage(r.ctx, store.NewMessage{
+			RoomID: r.room.ID, UserID: r.user.ID, Body: "@bob " + body, AttachmentIDs: attachmentIDs,
+			Mentions: []store.Mention{{Kind: store.MentionUser, ID: bob.ID}},
+		}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -246,7 +246,7 @@ func TestPiSmoke_UpkeepHearsPeople(t *testing.T) {
 	if _, err := r.s.CreateAttachment(r.ctx, store.NewAttachment{ID: id, RoomID: r.room.ID, Filename: "release-checklist.md", MediaType: "text/markdown", Size: int64(len(checklist)), Path: rel}); err != nil {
 		t.Fatal(err)
 	}
-	post("这是发版清单，整理进 wiki，原文件也存一份。", id)
+	post("这是发版清单，我让管 wiki 的整理进去，原文件也存一份。", id)
 
 	if turns, _ := r.s.ListRoomTurns(r.ctx, r.room.ID, 10); len(turns) != 0 {
 		t.Fatalf("what people said started turns: %+v", turns)

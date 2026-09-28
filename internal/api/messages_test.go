@@ -96,6 +96,15 @@ type fakeChat struct {
 	reminders map[string]store.Reminder
 	drafts    map[string]store.Draft
 	ran       []string
+	// addressee is where a message that names nobody goes, and addressed
+	// the rooms and topics asked about, and for whom.
+	addressee hub.Addressee
+	addressed []string
+}
+
+func (c *fakeChat) Addressee(_ context.Context, roomID, threadID, userID string) (hub.Addressee, error) {
+	c.addressed = append(c.addressed, roomID+"/"+threadID+" for "+userID)
+	return c.addressee, nil
 }
 
 func (c *fakeChat) RunDraft(_ context.Context, id, userID string, edit hub.DraftEdit) (store.Draft, error) {

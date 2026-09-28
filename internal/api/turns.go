@@ -25,6 +25,9 @@ type Chat interface {
 	CancelTurn(ctx context.Context, turnID string, newSession bool) error
 	// QuietSince says, of the turns given, which went quiet and since when.
 	QuietSince(turnIDs []string) map[string]time.Time
+	// Addressee says where a person's message that names nobody would go,
+	// in a room or its topic (docs/design.md 4.2).
+	Addressee(ctx context.Context, roomID, threadID, userID string) (hub.Addressee, error)
 	// TranscriptSoFar writes out a running turn's transcript and says how
 	// many bytes of it are whole records; false when it is not running.
 	TranscriptSoFar(turnID string) (int64, bool)

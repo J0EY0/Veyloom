@@ -25,9 +25,13 @@ func TestBrief_Golden(t *testing.T) {
 	}{
 		// The leader, asked in the room, in a session that has read nothing.
 		{"first-turn", func(st *fakeBriefStore, in *briefInput) {
+			st.project.LeaderID = "a1"
+			asked := user("m1", "@Claude plan the auth refactor")
+			asked.Mentions = []store.Mention{{Kind: store.MentionAgent, ID: "a1"}}
+			st.messages["m1"] = asked
 			st.roomNews = []store.RoomNewsItem{
 				{Message: user("m0", "welcome everyone")},
-				{Message: user("m1", "@Claude plan the auth refactor"), TopicNumber: 7},
+				{Message: asked, TopicNumber: 7},
 			}
 			st.topicNews = []store.TopicNewsItem{
 				{ThreadID: "t3", Number: 3, NewCount: 4, Root: user("m30", "rate limits for the public API"), Last: agent("m34", "a2", "Shipped behind a flag.")},
@@ -71,6 +75,14 @@ func TestBrief_Golden(t *testing.T) {
 			}
 			st.replies = []store.Message{{ID: "m12", SenderKind: store.SenderSystem, Body: "The work Claude handed on is done (Codex); back to Claude."}}
 			in.Triggers = st.replies
+		}},
+		// A person's word to the room that names no member, which came to
+		// the leader to take on or hand on (design.md 4.2).
+		{"dispatched", func(st *fakeBriefStore, in *briefInput) {
+			st.project.LeaderID = "a1"
+			st.messages["m1"] = user("m1", "the login page is slow, can someone look into it?")
+			st.roomNews = []store.RoomNewsItem{{Message: st.messages["m1"], TopicNumber: 7}}
+			in.Triggers = []store.Message{st.messages["m1"]}
 		}},
 		// A new session after a person cancelled its last turn with one
 		// (design.md 5.23.8).

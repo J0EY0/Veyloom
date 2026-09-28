@@ -609,6 +609,13 @@ func (h *Hub) CancelTurn(ctx context.Context, turnID string, newSession bool) er
 	return h.turns.Cancel(ctx, turnID, newSession)
 }
 
+// Addressee says where a message of userID's that names nobody would go,
+// in the room or in its topic threadID, and why (design.md 4.2): what the
+// composer tells the person before they send it.
+func (h *Hub) Addressee(ctx context.Context, roomID, threadID, userID string) (Addressee, error) {
+	return h.router.Addressee(ctx, roomID, threadID, userID)
+}
+
 // QuietSince says, of the turns given, which went quiet and since when
 // (design.md 5.23.8).
 func (h *Hub) QuietSince(turnIDs []string) map[string]time.Time {

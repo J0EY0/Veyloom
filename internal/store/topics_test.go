@@ -78,6 +78,111 @@ func TestTopic_LastAgentMessageCountsTheRoot(t *testing.T) {
 	}
 }
 
+// Who a person talks with in a topic: the member in their latest exchange
+// there, a message of its that mentions them, one of theirs that names it,
+// or a turn one of theirs set going; neither of two they asked at once. And
+// whose turns run there.
+func TestTopic_WhoAPersonTalksWithAndWhoRuns(t *testing.T) {
+	f := newTurnFixture(t)
+	ctx := context.Background()
+	root, thread, turn := f.topic(t)
+	talking := func() (string, error) { return f.s.TalkingMemberInThread(ctx, thread.ID, f.user.ID) }
+
+	// The turn alice's message set going answers her, in one go at the head
+	// of the topic, mentioning no one.
+	if _, err := f.s.UpdateMessageBody(ctx, root.ID, "on it", turn.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := talking(); err != nil || got != f.member.ID {
+		t.Errorf("the member her message set going: %q %v", got, err)
+	}
+	// Another member answers her since, mentioning her.
+	agent, err := f.s.CreateAgent(ctx, store.NewAgent{Name: "Other", MachineID: f.machineID, Runtime: "claude", PermissionPreset: store.PermissionReadOnly})
+	if err != nil {
+		t.Fatal(err)
+	}
+	other, err := f.s.CreateMember(ctx, store.NewMember{RoomID: f.room.ID, AgentID: agent.ID, DisplayName: "Other"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.CreateMessage(ctx, store.NewMessage{RoomID: f.room.ID, ThreadID: thread.ID, SenderKind: store.SenderAgent, MemberID: other.ID, Body: "@alice done",
+		Mentions: []store.Mention{{Kind: store.MentionUser, ID: f.user.ID}}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := talking(); err != nil || got != other.ID {
+		t.Errorf("the latest to answer her, by a mention: %q %v", got, err)
+	}
+	// A reply that mentions nobody changes nothing.
+	if _, err := f.s.CreateMessage(ctx, store.NewMessage{RoomID: f.room.ID, ThreadID: thread.ID, SenderKind: store.SenderAgent, MemberID: f.member.ID, Body: "working", TurnID: turn.ID}); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := talking(); got != other.ID {
+		t.Errorf("a word to nobody: %q", got)
+	}
+	// Her word there sets the first member going again: she talks with it.
+	asked, err := f.s.CreateMessage(ctx, store.NewMessage{RoomID: f.room.ID, ThreadID: thread.ID, SenderKind: store.SenderUser, UserID: f.user.ID, Body: "and a test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := f.s.CreateTurn(ctx, store.NewTurn{MemberID: f.member.ID, RoomID: f.room.ID, ThreadID: thread.ID, TriggerMessageID: asked.ID, MachineID: f.machineID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := talking(); err != nil || got != f.member.ID {
+		t.Errorf("the turn her word set going: %q %v", got, err)
+	}
+	// She names the other member there, whose wake still waits in a queue:
+	// she talks with it, though no turn of its has begun.
+	say := func(body string, mentions ...store.Mention) {
+		t.Helper()
+		if _, err := f.s.CreateMessage(ctx, store.NewMessage{RoomID: f.room.ID, ThreadID: thread.ID, SenderKind: store.SenderUser, UserID: f.user.ID, Body: body, Mentions: mentions}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	say("@Other take it over", store.Mention{Kind: store.MentionAgent, ID: other.ID})
+	if got, err := talking(); err != nil || got != other.ID {
+		t.Errorf("the member she named last: %q %v", got, err)
+	}
+	// Naming both at once, she talks with neither in particular.
+	say("@agent @Other both of you", store.Mention{Kind: store.MentionAgent, ID: f.member.ID}, store.Mention{Kind: store.MentionAgent, ID: other.ID})
+	if got, err := talking(); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("two members asked at once: %q %v, want neither", got, err)
+	}
+	// A topic whose head is a member's answer to her, mentioning her.
+	head, err := f.s.CreateMessage(ctx, store.NewMessage{RoomID: f.room.ID, SenderKind: store.SenderAgent, MemberID: other.ID, Body: "@alice here is the plan",
+		Mentions: []store.Mention{{Kind: store.MentionUser, ID: f.user.ID}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	headed, err := f.s.ThreadForMessage(ctx, head.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := f.s.TalkingMemberInThread(ctx, headed.ID, f.user.ID); err != nil || got != other.ID {
+		t.Errorf("the member whose answer heads the topic: %q %v", got, err)
+	}
+	bob, err := f.s.CreateUser(ctx, "bob")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := f.s.TalkingMemberInThread(ctx, thread.ID, bob.ID); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("nobody talks with bob there: %v", err)
+	}
+
+	running, err := f.s.RunningMembersInThread(ctx, thread.ID)
+	if err != nil || len(running) != 1 || running[0] != f.member.ID {
+		t.Errorf("running there, once for both turns: %v %v", running, err)
+	}
+	for _, id := range []string{turn.ID, again.ID} {
+		if _, err := f.s.FinishTurn(ctx, id, store.TurnOutcome{Status: store.TurnDone}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if running, err := f.s.RunningMembersInThread(ctx, thread.ID); err != nil || len(running) != 0 {
+		t.Errorf("over, none runs: %v %v", running, err)
+	}
+}
+
 func TestTopic_SummariesAndTurns(t *testing.T) {
 	f := newTurnFixture(t)
 	ctx := context.Background()

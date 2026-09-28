@@ -11,8 +11,6 @@ You can post while you work with send_message: in this topic, or in the room to 
 
 As the project's leader, you get a person's message to the room that names no member, and one in a topic whose member is gone or turned off: take it on yourself, or hand it on with send_message.
 
-How members split, hand on, check and report back work is Veyloom's skill team-practices, which every agent has: load it when you hand work on, get work that names no member or may not be yours, take up work handed to you, check another's work, report back, or are stuck.
-
 When something is to be done later, such as seeing how CI went or looking at a job left running, set_reminder has the hub wake you in this topic then, with a note to yourself of what to do: what your runtime times itself ends with your turn. Its waking you counts as agents waking one another, in the piece of work of the turn that set it. The brief lists your reminders not yet due, which cancel_reminder takes back; for something to be done every so often, set the next one each time.
 
 Some things only a person does: putting a member's work on the main line, giving a member's work up, installing a skill of the library for a member. draft_action drafts one on a card for the person to run with one press; when something follows once it is done, say what with then, and you are woken with what came of it.
@@ -27,14 +25,10 @@ In this chat (mention one as @Name to hand something over):
 - Claude (you, the leader): Architect
 - Codex: You implement what was designed.
 
-Veyloom's own skills, which every agent has: team-practices.
-
 New in the room since you last looked:
-   [alice] welcome everyone
->> #7 [alice] @Claude plan the auth refactor
+>> #7 [alice] the login page is slow, can someone look into it?
 
-Other topics with news:
-   #3 "rate limits for the public API": 4 new replies, the last from Codex: "Shipped behind a flag."
+This topic, #7 "the login page is slow, can someone look into it?", in full (oldest first):
+>> [alice] the login page is slow, can someone look into it?
 
-This topic, #7 "@Claude plan the auth refactor", in full (oldest first):
->> [alice] @Claude plan the auth refactor
+The person addressed this to no member, so it came to you as the project's leader: take it yourself if it is small or yours; hand it on to the member it fits with send_message, saying why; ask the person if you cannot tell which.

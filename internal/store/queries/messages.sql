@@ -38,6 +38,33 @@ WHERE sender_kind = 'agent'
 ORDER BY seq DESC
 LIMIT 1;
 
+-- name: TalkingMemberInThread :many
+-- The members in a person's latest exchange in a topic (design.md 4.2),
+-- the root counted as the topic's: a member's message that mentions them;
+-- a message of theirs that names a member, whose wake may still wait in a
+-- queue; a turn a message of theirs set going (a reply given in one go,
+-- heading its topic, mentions no one). One member is the one they talk
+-- with; several, one message having asked them all, are none of them.
+WITH topic AS (
+    SELECT th.root_message_id FROM threads th WHERE th.id = sqlc.arg(thread_id)
+), exchanges AS (
+    SELECT m.member_id::text AS member_id, m.created_at AS at FROM messages m
+    WHERE m.sender_kind = 'agent'
+      AND (m.thread_id = sqlc.arg(thread_id) OR m.id = (SELECT root_message_id FROM topic))
+      AND m.mentions @> jsonb_build_array(jsonb_build_object('kind', 'user', 'id', sqlc.arg(user_id)::uuid::text))
+    UNION ALL
+    SELECT x.mention->>'id', m.created_at FROM messages m, jsonb_array_elements(m.mentions) AS x(mention)
+    WHERE m.sender_kind = 'user' AND m.user_id = sqlc.arg(user_id)::uuid
+      AND (m.thread_id = sqlc.arg(thread_id) OR m.id = (SELECT root_message_id FROM topic))
+      AND x.mention->>'kind' = 'agent'
+    UNION ALL
+    SELECT t.member_id::text, q.created_at FROM turns t
+    JOIN messages q ON q.id = t.trigger_message_id
+    WHERE t.thread_id = sqlc.arg(thread_id) AND q.sender_kind = 'user' AND q.user_id = sqlc.arg(user_id)::uuid
+)
+SELECT DISTINCT e.member_id::text FROM exchanges e
+WHERE e.at = (SELECT max(at) FROM exchanges);
+
 -- name: UpdateMessageBody :one
 -- Fills in a topic root once the agent's first reply text is known, with
 -- whoever that text mentions.

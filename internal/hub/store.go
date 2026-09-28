@@ -102,6 +102,9 @@ type messageStore interface {
 	UpdateMessageBody(ctx context.Context, id, body, turnID string, mentions []store.Mention) (store.Message, error)
 	SetMessageTitle(ctx context.Context, id, title string) (store.Message, error)
 	LastAgentMessageInThread(ctx context.Context, threadID string) (store.Message, error)
+	// Who a person's message that names nobody goes to (see routerStore).
+	TalkingMemberInThread(ctx context.Context, threadID, userID string) (string, error)
+	RunningMembersInThread(ctx context.Context, threadID string) ([]string, error)
 	GetUser(ctx context.Context, id string) (store.User, error)
 	// What a person read of their inbox.
 	MarkMentionsRead(ctx context.Context, userID string, read store.InboxRead) (int, error)

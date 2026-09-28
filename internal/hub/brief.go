@@ -232,6 +232,9 @@ func (b *briefBuilder) Build(ctx context.Context, in briefInput) (brief, error) 
 	if line := coAskedLine(in.Member, in.Triggers, members); line != "" {
 		w.sb.WriteString("\n" + line)
 	}
+	if line := dispatchLine(in.Member, in.Triggers, project, members); line != "" {
+		w.sb.WriteString("\n" + line)
+	}
 	if len(in.HandedOn) > 0 {
 		w.sb.WriteString("\n" + handedOnSection(in.HandedOn))
 	}
@@ -239,6 +242,27 @@ func (b *briefBuilder) Build(ctx context.Context, in briefInput) (brief, error) 
 		Prompt: strings.TrimLeft(strings.TrimRight(w.sb.String(), "\n")+"\n", "\n"), Position: position, Wiki: wikiAt,
 		Leads: in.Member.ID == project.LeaderID, Standing: standing, Parts: parts.now,
 	}, nil
+}
+
+// dispatchLine tells the leader that a person's message to the room named
+// no member, among several, and so came to it to take on or hand on
+// (design.md 4.2). Nothing for another member, or a message that named one.
+func dispatchLine(member store.Member, triggers []store.Message, project store.Project, members []store.Member) string {
+	if member.ID != project.LeaderID {
+		return ""
+	}
+	// With every other member gone or turned off, there is no one to hand
+	// it on to: it is the leader's, as the only member's would be.
+	others := slices.ContainsFunc(members, func(m store.Member) bool { return m.ID != member.ID && m.Enabled && !m.Removed() })
+	// What names anyone at all is theirs; the router hands the leader none of it.
+	unaddressed := slices.ContainsFunc(triggers, func(t store.Message) bool {
+		return t.SenderKind == store.SenderUser && t.ThreadID == "" && len(t.Mentions) == 0
+	})
+	if !others || !unaddressed {
+		return ""
+	}
+	return "The person addressed this to no member, so it came to you as the project's leader: take it yourself if it is small or yours; " +
+		"hand it on to the member it fits with " + runtime.MessageToolSend + ", saying why; ask the person if you cannot tell which.\n"
 }
 
 // coAskedLine tells a member a person asked in the same message as other

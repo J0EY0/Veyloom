@@ -521,6 +521,59 @@ func (q *Queries) SetMessageTitle(ctx context.Context, arg SetMessageTitleParams
 	return i, err
 }
 
+const talkingMemberInThread = `-- name: TalkingMemberInThread :many
+WITH topic AS (
+    SELECT th.root_message_id FROM threads th WHERE th.id = $1
+), exchanges AS (
+    SELECT m.member_id::text AS member_id, m.created_at AS at FROM messages m
+    WHERE m.sender_kind = 'agent'
+      AND (m.thread_id = $1 OR m.id = (SELECT root_message_id FROM topic))
+      AND m.mentions @> jsonb_build_array(jsonb_build_object('kind', 'user', 'id', $2::uuid::text))
+    UNION ALL
+    SELECT x.mention->>'id', m.created_at FROM messages m, jsonb_array_elements(m.mentions) AS x(mention)
+    WHERE m.sender_kind = 'user' AND m.user_id = $2::uuid
+      AND (m.thread_id = $1 OR m.id = (SELECT root_message_id FROM topic))
+      AND x.mention->>'kind' = 'agent'
+    UNION ALL
+    SELECT t.member_id::text, q.created_at FROM turns t
+    JOIN messages q ON q.id = t.trigger_message_id
+    WHERE t.thread_id = $1 AND q.sender_kind = 'user' AND q.user_id = $2::uuid
+)
+SELECT DISTINCT e.member_id::text FROM exchanges e
+WHERE e.at = (SELECT max(at) FROM exchanges)
+`
+
+type TalkingMemberInThreadParams struct {
+	ThreadID pgtype.UUID
+	UserID   pgtype.UUID
+}
+
+// The members in a person's latest exchange in a topic (design.md 4.2),
+// the root counted as the topic's: a member's message that mentions them;
+// a message of theirs that names a member, whose wake may still wait in a
+// queue; a turn a message of theirs set going (a reply given in one go,
+// heading its topic, mentions no one). One member is the one they talk
+// with; several, one message having asked them all, are none of them.
+func (q *Queries) TalkingMemberInThread(ctx context.Context, arg TalkingMemberInThreadParams) ([]string, error) {
+	rows, err := q.db.Query(ctx, talkingMemberInThread, arg.ThreadID, arg.UserID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []string
+	for rows.Next() {
+		var e_member_id string
+		if err := rows.Scan(&e_member_id); err != nil {
+			return nil, err
+		}
+		items = append(items, e_member_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const threadSummaries = `-- name: ThreadSummaries :many
 SELECT t.root_message_id,
        t.id AS thread_id,

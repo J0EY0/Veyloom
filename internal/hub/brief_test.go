@@ -579,3 +579,47 @@ func TestBrief_PracticesAreASkill(t *testing.T) {
 		}
 	}
 }
+
+// The leader is told a message came to it to take on or hand on only when
+// a person's word to the room named no member among several.
+func TestDispatchLine(t *testing.T) {
+	lead := store.Member{ID: "a1", DisplayName: "Lead", Enabled: true}
+	coder := store.Member{ID: "a2", DisplayName: "Coder", Enabled: true}
+	project := store.Project{LeaderID: "a1"}
+	word := store.Message{ID: "m1", SenderKind: store.SenderUser, UserID: "u1", Body: "the login page is slow"}
+	named := word
+	named.Mentions = []store.Mention{{Kind: store.MentionAgent, ID: "a1"}}
+	toPerson := word
+	toPerson.Mentions = []store.Mention{{Kind: store.MentionUser, ID: "u1"}}
+	inTopic := word
+	inTopic.ThreadID = "t1"
+	fromAgent := word
+	fromAgent.SenderKind, fromAgent.MemberID = store.SenderAgent, "a2"
+	both := []store.Member{lead, coder}
+	off, gone := coder, coder
+	off.Enabled = false
+	outAt := time.Now()
+	gone.RemovedAt = &outAt
+	for name, c := range map[string]struct {
+		member  store.Member
+		trigger store.Message
+		members []store.Member
+		want    bool
+	}{
+		"to the leader, among several": {lead, word, both, true},
+		// The router hands the leader nothing that names anyone.
+		"naming a person":      {lead, toPerson, both, false},
+		"not the leader":       {coder, word, both, false},
+		"the only member":      {lead, word, []store.Member{lead}, false},
+		"the other turned off": {lead, word, []store.Member{lead, off}, false},
+		"the other taken out":  {lead, word, []store.Member{lead, gone}, false},
+		"naming a member":      {lead, named, both, false},
+		"in a topic":           {lead, inTopic, both, false},
+		"an agent's word":      {lead, fromAgent, both, false},
+	} {
+		got := dispatchLine(c.member, []store.Message{c.trigger}, project, c.members)
+		if (got != "") != c.want {
+			t.Errorf("%s: %q", name, got)
+		}
+	}
+}

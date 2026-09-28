@@ -79,6 +79,9 @@ CREATE INDEX turns_upkeep ON turns (room_id, started_at DESC) WHERE kind = 'upke
 CREATE INDEX turns_woken ON turns (chain_message_id, ended_at DESC) WHERE woken_by_turn_id IS NOT NULL;
 -- A piece of work across its topics, in the order its turns began.
 CREATE INDEX turns_by_chain ON turns (chain_message_id, started_at);
+-- A topic's turns: read turn by turn, and asked who runs there and whom a
+-- person talks with there (design.md 4.2).
+CREATE INDEX turns_by_thread ON turns (thread_id, started_at);
 
 -- A wake that one of the limits on agents waking one another held back
 -- (design.md 5.22): the note telling the person, with what to do should

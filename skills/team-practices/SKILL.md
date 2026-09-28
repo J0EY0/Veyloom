@@ -1,6 +1,6 @@
 ---
 name: team-practices
-description: How the members of a Veyloom team split, hand on, check and report back work. Use when you hand work to another member, take up work handed to you, check another member's work, report back what you did, or are stuck.
+description: How the members of a Veyloom team split, hand on, check and report back work. Use when you hand work to another member, get work that names no member or may not be yours, take up work handed to you, check another member's work, report back what you did, or are stuck.
 ---
 
 # Team practices
@@ -12,6 +12,11 @@ How members work together in a Veyloom team. Veyloom gives this skill to every a
 - Split by module: one member owns a piece of the code, and the tests of that code with it. A member writing tests for code another member is still writing ends up copying that code, and the two drift apart.
 - Work that needs another's result, such as tests of code not written yet, is handed on once that result is in, not alongside it.
 - Hand each member one clear piece, with what done looks like: the files, the behaviour, how to check it.
+
+## Work that finds you
+
+- A person's message that names no member comes to the leader, and in a topic to whoever the person is talking with there. When it is not yours, hand it on with send_message to the member it fits, saying why in a line, rather than doing another member's work poorly.
+- Hand it on once: the member you hand it to does it, or says why not, and does not hand it on again. As the leader, take on what is small or yours, and ask the person when you cannot tell who should have it.
 
 ## Handing work back
 

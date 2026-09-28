@@ -294,6 +294,14 @@ func TestFake_WritesFiles(t *testing.T) {
 	if second, _ := os.ReadFile(filepath.Join(dir, "docs", "a.md")); string(second) == string(first) {
 		t.Error("writing again changed nothing")
 	}
+
+	// Told what to write, it writes that.
+	code := "package calc\n\nfunc Add(a, b int) int { return a + b }\n"
+	told, _ := NewFake().StartTurn(context.Background(), TurnSpec{Prompt: "hi", WorkDir: dir, Options: map[string]any{"write": []any{"calc.go"}, "content": code}})
+	drain(t, told)
+	if got, err := os.ReadFile(filepath.Join(dir, "calc.go")); err != nil || string(got) != code {
+		t.Errorf("calc.go holds %q (%v), want %q", got, err, code)
+	}
 }
 
 // The fake asks as many times over as it is told, and a rule of the

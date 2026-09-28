@@ -247,6 +247,7 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("GET /api/v1/attachments/{id}", h.getAttachment)
 	mux.HandleFunc("GET /api/v1/attachments/{id}/thumbnail", h.getAttachmentThumbnail)
 	mux.HandleFunc("GET /api/v1/rooms/{id}/attachments", h.listRoomAttachments)
+	mux.HandleFunc("GET /api/v1/rooms/{id}/addressee", h.addressee)
 	mux.HandleFunc("GET /api/v1/rooms/{id}/attachments/archive", h.downloadRoomAttachments)
 	mux.HandleFunc("POST /api/v1/avatars", h.uploadAvatar)
 	mux.HandleFunc("GET /api/v1/avatars/{name}", h.getAvatar)

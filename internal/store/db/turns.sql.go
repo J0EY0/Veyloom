@@ -1567,6 +1567,33 @@ func (q *Queries) ReleaseRunningDrafts(ctx context.Context) ([]Draft, error) {
 	return items, nil
 }
 
+const runningMembersInThread = `-- name: RunningMembersInThread :many
+SELECT DISTINCT member_id FROM turns WHERE thread_id = $1 AND status = 'running'
+`
+
+// The members with a turn running in a topic, getting ready included: a
+// person's message there that mentions nobody goes to the one running
+// (design.md 4.2).
+func (q *Queries) RunningMembersInThread(ctx context.Context, threadID pgtype.UUID) ([]pgtype.UUID, error) {
+	rows, err := q.db.Query(ctx, runningMembersInThread, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []pgtype.UUID
+	for rows.Next() {
+		var member_id pgtype.UUID
+		if err := rows.Scan(&member_id); err != nil {
+			return nil, err
+		}
+		items = append(items, member_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setDraftMessage = `-- name: SetDraftMessage :exec
 UPDATE drafts SET message_id = $1 WHERE id = $2
 `

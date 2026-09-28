@@ -24,6 +24,12 @@ RETURNING *;
 -- name: GetTurn :one
 SELECT * FROM turns WHERE id = $1;
 
+-- name: RunningMembersInThread :many
+-- The members with a turn running in a topic, getting ready included: a
+-- person's message there that mentions nobody goes to the one running
+-- (design.md 4.2).
+SELECT DISTINCT member_id FROM turns WHERE thread_id = $1 AND status = 'running';
+
 -- name: TurnAtSessionEnd :one
 -- The member's latest turn by the time one of its sessions ended: the one
 -- going as the session ended, which may not have got a session yet.

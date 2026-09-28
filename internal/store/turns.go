@@ -358,6 +358,49 @@ func (s *Store) LastAgentMessageInThread(ctx context.Context, threadID string) (
 	return toMessage(row)
 }
 
+// TalkingMemberInThread returns the member the person userID is talking
+// with in a topic: the one in their latest exchange there, which is a
+// message of the member's that mentions them, one of theirs that names the
+// member, or a turn a message of theirs set going. ErrNotFound when there
+// is none, and when their latest word there asked several members at once:
+// which of them the next is for, it cannot say.
+func (s *Store) TalkingMemberInThread(ctx context.Context, threadID, userID string) (string, error) {
+	tid, err := parseUUID(threadID)
+	if err != nil {
+		return "", err
+	}
+	uid, err := parseUUID(userID)
+	if err != nil {
+		return "", err
+	}
+	ids, err := s.q.TalkingMemberInThread(ctx, db.TalkingMemberInThreadParams{ThreadID: tid, UserID: uid})
+	if err != nil {
+		return "", fmt.Errorf("member talking with %s in thread %s: %w", userID, threadID, err)
+	}
+	if len(ids) != 1 {
+		return "", fmt.Errorf("member talking with %s in thread %s (%d in the latest exchange): %w", userID, threadID, len(ids), ErrNotFound)
+	}
+	return ids[0], nil
+}
+
+// RunningMembersInThread returns the members with a turn running in a
+// topic, one getting its worktree ready included.
+func (s *Store) RunningMembersInThread(ctx context.Context, threadID string) ([]string, error) {
+	tid, err := parseUUID(threadID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.q.RunningMembersInThread(ctx, tid)
+	if err != nil {
+		return nil, fmt.Errorf("members running in thread %s: %w", threadID, err)
+	}
+	out := make([]string, len(rows))
+	for i, id := range rows {
+		out[i] = uuidString(id)
+	}
+	return out, nil
+}
+
 // ListRoomTurnsByStatus returns a room's most recent turns in one status,
 // newest first.
 func (s *Store) ListRoomTurnsByStatus(ctx context.Context, roomID string, status TurnStatus, limit int) ([]Turn, error) {

@@ -55,6 +55,8 @@ var ErrTurnCancelled = errors.New("runtime: turn cancelled")
 //	write    []string write these files for real, relative to the working
 //	                 directory, each with a line of its own, and report
 //	                 them as written, before replying
+//	content  string  with write: what the files hold instead, such as code
+//	                 that builds, for a reader that checks it
 //	use_skill string  read this skill's SKILL.md from the turn's skills, as
 //	                 a runtime does when a task calls for the skill, and
 //	                 reply with its first line after the frontmatter
@@ -259,7 +261,7 @@ func (t *fakeTurn) play(ctx context.Context, spec TurnSpec) (Result, error) {
 			return Result{}, ErrTurnCancelled
 		}
 		result := "ok"
-		if err := writeInto(spec.WorkDir, path); err != nil {
+		if err := writeInto(spec.WorkDir, path, optString(spec.Options, "content")); err != nil {
 			result = "error: " + err.Error()
 		} else if !t.emit(ctx, Event{Kind: EventFileChanged, Path: path}) {
 			return Result{}, ErrTurnCancelled
@@ -560,9 +562,9 @@ func lastLine(s string) string {
 	return strings.TrimSpace(lines[len(lines)-1])
 }
 
-// writeInto writes a file at path inside dir, a line in it unlike any
-// written before, so every write is a change.
-func writeInto(dir, path string) error {
+// writeInto writes a file at path inside dir holding content or, without
+// any, a line unlike any written before, so every write is a change.
+func writeInto(dir, path, content string) error {
 	if dir == "" || filepath.IsAbs(path) || !filepath.IsLocal(path) {
 		return fmt.Errorf("%q is not a path inside the working directory", path)
 	}
@@ -570,7 +572,10 @@ func writeInto(dir, path string) error {
 	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(full, []byte("written in a fake turn "+randomHex(4)+"\n"), 0o644)
+	if content == "" {
+		content = "written in a fake turn " + randomHex(4) + "\n"
+	}
+	return os.WriteFile(full, []byte(content), 0o644)
 }
 
 func optString(o map[string]any, key string) string {
