@@ -45,7 +45,8 @@ function stub() {
   })
 }
 
-// renderWikis renders the page at route, with the other routes it leads to.
+// renderWikis renders the page at route, with the other routes it leads
+// to; its router, and what it rendered, to look inside it alone.
 function renderWikis(route: string) {
   const page = (
     <TooltipProvider>
@@ -63,18 +64,18 @@ function renderWikis(route: string) {
     { initialEntries: [route] },
   )
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(
+  const view = render(
     <QueryClientProvider client={client}>
       <RouterProvider router={router} />
     </QueryClientProvider>,
   )
-  return router
+  return { router, view }
 }
 
 describe('WikisPage', () => {
   it('lists every project’s wiki, and goes into one', async () => {
     stub()
-    const router = renderWikis('/wiki')
+    const { router } = renderWikis('/wiki')
     const line = await screen.findByRole('link', { name: /Veyloom.*3 页 · 1 页待复核 · 最近变更于/ })
     expect(line).toHaveAttribute('href', '/wiki/p1')
     expect(screen.getByRole('combobox')).toHaveTextContent('全部项目')
@@ -98,7 +99,7 @@ describe('WikisPage', () => {
 
   it('reads one project’s wiki at the page’s own addresses, its topics in their chat', async () => {
     stub()
-    const router = renderWikis('/wiki/p1/facts/port.md')
+    const { router } = renderWikis('/wiki/p1/facts/port.md')
     expect(await screen.findByRole('heading', { name: 'The hub listens on 7788' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'the config' })).toHaveAttribute('href', '/wiki/p1/modules/config.md')
     expect(screen.getByRole('link', { name: '关系图' })).toHaveAttribute('href', '/wiki/p1/graph')
@@ -113,13 +114,15 @@ describe('WikisPage', () => {
     stub()
     renderWikis('/wiki/p1')
     await waitFor(() => expect(screen.getByRole('combobox')).toHaveTextContent('Veyloom'))
-    const router = renderWikis('/wiki')
+    const { router, view } = renderWikis('/wiki')
     await waitFor(() => expect(router.state.location.pathname).toBe('/wiki/p1'))
     // The router moves first and the page follows as a transition: wait for
-    // the project's page itself, which remembers it on showing.
-    await waitFor(() => expect(screen.getAllByRole('combobox').at(-1)).toHaveTextContent('Veyloom'))
+    // the project's page itself, which remembers it on showing. Its picker,
+    // not the first page's, still open beside it.
+    const picker = () => within(view.container).getByRole('combobox')
+    await waitFor(() => expect(picker()).toHaveTextContent('Veyloom'))
 
-    await userEvent.click(screen.getAllByRole('combobox').at(-1) as HTMLElement)
+    await userEvent.click(picker())
     await userEvent.click(await screen.findByRole('option', { name: '全部项目' }))
     // The router moves on after the click has returned.
     await waitFor(() => expect(router.state.location.pathname).toBe('/wiki'))

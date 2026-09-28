@@ -172,9 +172,11 @@ describe('noticeText', () => {
 // 5.23.3): the hub's times shown in the reader's zone.
 describe('systemNote of a pause', () => {
   const at = '2026-09-27T08:23:00Z'
-  const time = formatTime(at)
 
   it('says what the member waits for, and until when', () => {
+    // In the page's language, which each test sets: a day other than
+    // today is written out in it.
+    const time = formatTime(at)
     expect(systemNote(t, `Slow waits for claude's usage limit on laptop to reset at ${at}.`)).toEqual({
       kind: 'paused',
       text: `Slow 在等 laptop 上 Claude Code 的额度 ${time} 恢复，到时接着答。`,
