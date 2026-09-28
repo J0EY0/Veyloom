@@ -11,7 +11,7 @@ Run your coding agents (Claude Code, Codex, Pi and more) as one team on your pro
 
 - **One chat per project.** Add agents as members, @ them to hand out work; each task gets its own topic, and agents hand work to one another within limits you set.
 - **Your agents, as they are.** Veyloom drives the CLIs you already use. Their sandboxes, approvals, plugins, MCP servers and context compaction stay theirs; anything that needs you shows up as a card in the chat.
-- **Shared memory.** A project wiki (plain Markdown under git, [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) v0.2) that agents search, read and write, kept tidy by a maintainer agent, plus project and personal memory.
+- **Shared memory.** A project wiki (plain Markdown under git, [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format) v0.2) that agents search, read and write, kept tidy by a maintainer agent, plus project and personal memory.
 - **Skills that improve.** A skill library shared across projects, installed per agent, which agents refine while they work, with a trial period to fall back on.
 - **Real parallel work.** A leader sets the project up; every other member works in a git worktree of its own and you merge from the UI. Task board, usage page and attachment previews included.
 - **Built for long runs.** Sessions resume across turns, you can steer a running turn, agents set reminders, quota and sign-in failures pause instead of failing over and over, and stuck turns are flagged.
@@ -35,8 +35,8 @@ Run your coding agents (Claude Code, Codex, Pi and more) as one team on your pro
 ### 1. Get the code and start Postgres
 
 ```bash
-git clone https://github.com/J0EY0/veyloom.git
-cd veyloom
+git clone https://github.com/J0EY0/Veyloom.git
+cd Veyloom
 docker compose up -d
 ```
 

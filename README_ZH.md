@@ -11,7 +11,7 @@
 
 - **每个项目一个群。** 把 agent 加成成员，@ 它就是派活；每件事一个话题，agent 之间可以互相转交，次数有上限。
 - **agent 保持原样。** Veyloom 驱动的就是你已经在用的 CLI，沙箱、审批、插件、MCP 服务、上下文压缩都还是它们自己的；需要你决定的事，会变成群里的一张卡片。
-- **共享记忆。** 每个项目一个 wiki（git 管着的普通 Markdown，遵循 [OKF](https://github.com/GoogleCloudPlatform/knowledge-catalog/tree/main/okf) v0.2），agent 能搜、能读、能写，由维护员 agent 整理；另有项目记忆和个人记忆。
+- **共享记忆。** 每个项目一个 wiki（git 管着的普通 Markdown，遵循 [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format) v0.2），agent 能搜、能读、能写，由维护员 agent 整理；另有项目记忆和个人记忆。
 - **越用越好的技能。** 跨项目共用一个技能库，按 agent 安装，agent 在干活中改进它们，有试用期兜底。
 - **真正的并行。** 组长负责初始化项目，其他成员各在自己的 git 工作区里干活，你在界面上合并。还有任务板、用量页和附件预览。
 - **经得起长时间运行。** 会话跨轮次续接；一轮进行中可以插话；agent 能定时唤醒自己；额度用完、登录失效时暂停而不是一次次失败；可能卡住的轮次会被标出来。
@@ -35,8 +35,8 @@
 ### 1. 拿代码，启动 Postgres
 
 ```bash
-git clone https://github.com/J0EY0/veyloom.git
-cd veyloom
+git clone https://github.com/J0EY0/Veyloom.git
+cd Veyloom
 docker compose up -d
 ```
 
