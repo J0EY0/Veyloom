@@ -17,7 +17,7 @@ export function RecheckButton({ machines }: { machines: Machine[] }) {
     probe.mutate(machines, {
       onError: (err) => {
         toast.error(
-          err instanceof ProbeTimeout ? t('machines.recheckTimeout', { names: err.names.join('、') }) : t('machines.recheckFailed', { error: errorText(err) }),
+          err instanceof ProbeTimeout ? t('machines.recheckTimeout', { names: err.names.join(t('common.listSeparator')) }) : t('machines.recheckFailed', { error: errorText(err) }),
         )
       },
     })

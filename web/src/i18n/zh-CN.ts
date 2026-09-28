@@ -8,6 +8,7 @@ export const zhCN = {
   'common.delete': '删除',
   'common.deleting': '删除中…',
   'common.listSeparator': '、',
+  'common.colon': '：',
   'common.allow': '允许',
   'common.deny': '拒绝',
   'common.search': '搜索',

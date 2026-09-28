@@ -76,7 +76,7 @@ export function SkillInstalls({ page }: { page: WikiPage }) {
   return (
     <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-subtle">
       <BlocksIcon className="size-3.5" aria-hidden="true" />
-      <span>{installed.length > 0 ? t('skill.installedFor', { agents: installed.map((a) => a.name).join('、') }) : t('skill.notInstalled')}</span>
+      <span>{installed.length > 0 ? t('skill.installedFor', { agents: installed.map((a) => a.name).join(t('common.listSeparator')) }) : t('skill.notInstalled')}</span>
       <InstallMenu name={skillName(page.path)} skill={page}>
         <Button variant="ghost" size="xs" className="-my-1 h-6 gap-1 px-1.5 text-muted-foreground">
           {t('skill.install')}

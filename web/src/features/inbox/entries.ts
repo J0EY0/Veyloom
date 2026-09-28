@@ -53,7 +53,7 @@ export function toEntries(approvals: PendingApproval[], items: InboxItem[], me: 
       sender: item.sender_kind === 'system' ? t('inbox.system') : item.sender_name,
       project: item.project_name,
       excerpt:
-        excerptOf(item.sender_kind === 'system' ? systemText(t, item.body) : item.body, me) || (item.attachments ?? []).map((file) => file.filename).join('、'),
+        excerptOf(item.sender_kind === 'system' ? systemText(t, item.body) : item.body, me) || (item.attachments ?? []).map((file) => file.filename).join(t('common.listSeparator')),
       createdAt: item.created_at,
       unread: !item.read,
       seq: item.seq,

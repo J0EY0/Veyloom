@@ -167,7 +167,7 @@ function ProjectItem({ project, active, topics, openThread, onRename, onDelete }
 // the topic in its chat. The project's wiki topic goes by its name.
 function TopicItem({ topic, active, named }: { topic: RunningTopic; active: boolean; named?: 'wiki' | 'setup' }) {
   const t = useT()
-  const label = named ? t(`${named}Topic.title`) : topic.ask || topic.root_body.trim() || topic.members.join('、')
+  const label = named ? t(`${named}Topic.title`) : topic.ask || topic.root_body.trim() || topic.members.join(t('common.listSeparator'))
   return (
     <SidebarMenuSubItem>
       <SidebarMenuSubButton asChild isActive={active} size="sm" className="h-6 gap-2 text-[0.78125rem] text-muted-foreground">

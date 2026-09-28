@@ -79,13 +79,13 @@ export function scopeTerms(approval: Pick<Approval, 'tool' | 'similar'>, scope: 
   const codes = rules.map(commandPattern)
   if (scope === 'similar') {
     if (offer.mode) words.push(offer.mode === 'acceptEdits' ? t('approval.similar.edits') : t('approval.similar.mode', { mode: offer.mode }))
-    if (offer.dirs && offer.dirs.length > 0) words.push(t('approval.similar.dirs', { dirs: offer.dirs.join('、') }))
+    if (offer.dirs && offer.dirs.length > 0) words.push(t('approval.similar.dirs', { dirs: offer.dirs.join(t('common.listSeparator')) }))
     // Commands starting the same way take in the same command again.
     if (offer.same && !offer.prefix?.length) words.push(t(approval.tool === 'fileChange' ? 'approval.similar.sameFiles' : 'approval.similar.sameCommand'))
   }
   if (words.length === 0) return undefined
   const code = words.length === codes.length && codes.every((c) => c !== undefined) ? codes.join(', ') : undefined
-  return { words: words.join('、'), code }
+  return { words: words.join(t('common.listSeparator')), code }
 }
 
 // prefixRule is a Codex command prefix as the rule Veyloom keeps: its

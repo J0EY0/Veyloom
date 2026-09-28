@@ -32,7 +32,7 @@ export function InstallMenu({ name, skill, align = 'start', children }: InstallM
   function why(agent: Agent): string | undefined {
     if (agent.skills.includes(name)) return undefined
     if (skill.status === 'deprecated') return t('skill.retiredNoInstall')
-    if (!forRuntime(skill, agent.runtime)) return t('skill.otherRuntime', { runtimes: keptFor(skill).map(runtimeName).join('、') })
+    if (!forRuntime(skill, agent.runtime)) return t('skill.otherRuntime', { runtimes: keptFor(skill).map(runtimeName).join(t('common.listSeparator')) })
     return undefined
   }
 

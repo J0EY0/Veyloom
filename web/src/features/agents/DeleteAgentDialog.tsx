@@ -37,7 +37,7 @@ export function DeleteAgentDialog({ agent, onClose }: DeleteAgentDialogProps) {
         </AlertDialogHeader>
         {remove.error ? (
           <p role="alert" className="text-center text-[0.8125rem] leading-relaxed text-status-fail">
-            {!inUse ? errorText(remove.error) : projects.length > 0 ? t('agents.deleteInProjects', { projects: projects.join('、') }) : t('agents.deleteInUse')}
+            {!inUse ? errorText(remove.error) : projects.length > 0 ? t('agents.deleteInProjects', { projects: projects.join(t('common.listSeparator')) }) : t('agents.deleteInUse')}
           </p>
         ) : null}
         <AlertDialogFooter>

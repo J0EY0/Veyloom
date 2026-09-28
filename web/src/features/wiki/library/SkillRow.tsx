@@ -51,7 +51,7 @@ export function SkillRow({ row, teams }: { row: Row; teams: WikiTeam[] }) {
           ) : null}
           {row.runtimes.length > 0 ? (
             <StatusPill tone="idle" dot={false}>
-              {t('library.onlyFor', { runtimes: row.runtimes.map(runtimeName).join('、') })}
+              {t('library.onlyFor', { runtimes: row.runtimes.map(runtimeName).join(t('common.listSeparator')) })}
             </StatusPill>
           ) : null}
         </ItemTitle>
@@ -69,7 +69,7 @@ export function SkillRow({ row, teams }: { row: Row; teams: WikiTeam[] }) {
             {row.installed.length > faces ? (
               <AvatarGroupCount className="size-6 text-[0.6875rem] tabular-nums">+{row.installed.length - faces}</AvatarGroupCount>
             ) : null}
-            <span className="sr-only">{t('skill.installedFor', { agents: row.installed.map((agent) => agent.name).join('、') })}</span>
+            <span className="sr-only">{t('skill.installedFor', { agents: row.installed.map((agent) => agent.name).join(t('common.listSeparator')) })}</span>
           </AvatarGroup>
         ) : null}
         <InstallMenu name={row.name} skill={row} align="end">

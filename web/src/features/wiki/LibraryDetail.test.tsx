@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
+import { setLocale } from '@/lib/i18n'
 import { stubApi } from '@/test/fetch'
 import { renderWithProviders } from '@/test/render'
 import { LibraryPage } from './LibraryPage'
@@ -104,6 +105,20 @@ describe('a skill of the library', () => {
     await userEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /Writer/ }))
     await waitFor(() => expect(asked).toEqual({ name: 'go-table-tests', agent_id: 'a2', installed: true }))
     expect(await screen.findByText('装给了 Coder、Writer')).toBeInTheDocument()
+  })
+
+  it('lists whom it is installed for as the language writes a list', async () => {
+    setLocale('en')
+    const both = { ...skill, installed: [{ id: 'a1', name: 'Coder' }, { id: 'a2', name: 'Tester' }] }
+    stubApi(
+      routes({
+        '/library/page': { page: both },
+        '/library/usage': { uses: [] },
+        '/agents': { agents: [agent('a1', 'Coder', 'codex', ['go-table-tests']), agent('a2', 'Tester', 'pi', ['go-table-tests'])] },
+      }),
+    )
+    renderWithProviders(<LibraryPage />, { route: '/library/skills/go-table-tests/SKILL.md', path: '/library/*' })
+    expect(await screen.findByText('Installed for Coder, Tester')).toBeInTheDocument()
   })
 })
 

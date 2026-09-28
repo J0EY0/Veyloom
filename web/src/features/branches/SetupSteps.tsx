@@ -16,7 +16,7 @@ export function StepsText({ steps }: { steps: WorkspaceSteps }) {
         <>
           {t('branches.setup.copy')}{' '}
           <span className="font-mono text-[0.78125rem]" translate="no">
-            {steps.copy.join('、')}
+            {steps.copy.join(t('common.listSeparator'))}
           </span>
         </>
       ) : null}
@@ -63,7 +63,7 @@ export function SetupSteps({ project, onEdit }: SetupStepsProps) {
         {project.initialized_at ? (
           <>
             <span className="text-foreground">{t('branches.setup.title')}</span>
-            <span aria-hidden="true">：</span>
+            <span aria-hidden="true">{t('common.colon')}</span>
             <StepsText steps={steps} />
           </>
         ) : (

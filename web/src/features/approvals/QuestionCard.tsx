@@ -118,7 +118,7 @@ function Settled({ approval, questions, names }: { approval: Approval; questions
           <div key={q.id} className="grid gap-0.5">
             <dt className="text-muted-foreground">{q.question}</dt>
             {approval.status === 'allowed' ? (
-              <dd className="break-words whitespace-pre-wrap text-foreground">{(given[q.id] ?? []).join('、') || '—'}</dd>
+              <dd className="break-words whitespace-pre-wrap text-foreground">{(given[q.id] ?? []).join(t('common.listSeparator')) || '—'}</dd>
             ) : null}
           </div>
         ))}

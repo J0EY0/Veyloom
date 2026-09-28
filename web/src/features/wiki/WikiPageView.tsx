@@ -210,7 +210,7 @@ function PageHead({ page, space, onOpenThread, back }: { page: WikiPage; space: 
         {page.review ? <StatusPill tone="wait">{t('wiki.review.due')}</StatusPill> : page.stale ? <StatusPill tone="wait">{t('wiki.stale')}</StatusPill> : null}
         {kept.length > 0 ? (
           <StatusPill tone="idle" dot={false}>
-            {t('library.onlyFor', { runtimes: kept.map(runtimeName).join('、') })}
+            {t('library.onlyFor', { runtimes: kept.map(runtimeName).join(t('common.listSeparator')) })}
           </StatusPill>
         ) : null}
         {page.tags
@@ -229,7 +229,9 @@ function PageHead({ page, space, onOpenThread, back }: { page: WikiPage; space: 
       </p>
       {page.review ? (
         <p className="text-xs leading-relaxed text-status-wait">
-          {t('wiki.review.due')}：{reviewText(t, page)}
+          {t('wiki.review.due')}
+          {t('common.colon')}
+          {reviewText(t, page)}
           {page.review.why === 'changed' && page.review.thread_id && page.review.topic_number ? (
             <>
               {' · '}

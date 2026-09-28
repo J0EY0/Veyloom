@@ -32,7 +32,7 @@ export function Conflicts({ roomId, memberId, name, branch, files, onDone }: Con
         ))}
       </ul>
       <div>
-        <Button size="sm" disabled={pending} onClick={() => handOver(t('branches.handOverMessage', { branch, files: files.join('、') }), onDone)}>
+        <Button size="sm" disabled={pending} onClick={() => handOver(t('branches.handOverMessage', { branch, files: files.join(t('common.listSeparator')) }), onDone)}>
           {t('branches.handOver', { name })}
         </Button>
       </div>

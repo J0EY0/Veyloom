@@ -96,7 +96,7 @@ export function AgentDialog({ agent, onClose }: AgentDialogProps) {
       // Moved while it was still in a project, since this dialog opened.
       onError: (err: Error) => {
         const projects = projectsInUse(err)
-        setError(projects.length > 0 ? t('agent.machineLocked', { projects: projects.join('、') }) : errorText(err))
+        setError(projects.length > 0 ? t('agent.machineLocked', { projects: projects.join(t('common.listSeparator')) }) : errorText(err))
       },
     }
     if (agent) {
@@ -133,7 +133,7 @@ export function AgentDialog({ agent, onClose }: AgentDialogProps) {
               <Field>
                 <FieldLabel htmlFor={`${id}-machine`}>{t('agent.machine')}</FieldLabel>
                 <Select value={machineId} onValueChange={setPickedMachine} disabled={locked || machineOptions.length === 0}>
-                  <WhyLocked reason={locked ? t('agent.machineLocked', { projects: agent.projects.join('、') }) : undefined}>
+                  <WhyLocked reason={locked ? t('agent.machineLocked', { projects: agent.projects.join(t('common.listSeparator')) }) : undefined}>
                     <SelectTrigger id={`${id}-machine`} className="w-full">
                       <SelectValue
                         placeholder={machines.isPending ? t('common.loading') : machineOptions.length === 0 ? t('agent.noMachines') : t('agent.pickMachine')}

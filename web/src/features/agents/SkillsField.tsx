@@ -36,7 +36,7 @@ export function SkillsField({ runtime, value, onChange }: SkillsFieldProps) {
       case 'retired':
         return t('agent.skillRetired')
       case 'otherRuntime':
-        return t('agent.skillOtherRuntime', { runtimes: skill.runtimes.map(runtimeName).join('、') })
+        return t('agent.skillOtherRuntime', { runtimes: skill.runtimes.map(runtimeName).join(t('common.listSeparator')) })
     }
     return undefined
   }
@@ -51,7 +51,7 @@ export function SkillsField({ runtime, value, onChange }: SkillsFieldProps) {
         <p className="text-xs text-subtle">
           {t('agent.builtinSkills')}{' '}
           <span className="font-mono" translate="no">
-            {builtin.data.map((skill) => skill.name).join('、')}
+            {builtin.data.map((skill) => skill.name).join(t('common.listSeparator'))}
           </span>
         </p>
       ) : null}

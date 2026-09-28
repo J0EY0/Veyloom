@@ -129,7 +129,7 @@ export function MergeDialog({ roomId, member, branch, onClose, onCheckoutDiff, o
         {overlaps.map((o) => (
           <p key={o.names.join()} className="flex items-start gap-2 text-[0.8125rem] text-status-wait">
             <TriangleAlertIcon aria-hidden="true" className="mt-0.5 size-3.5 flex-none" />
-            <span>{t('branches.overlapAlso', { names: o.names.join(t('common.listSeparator')), files: o.files.join('、') })}</span>
+            <span>{t('branches.overlapAlso', { names: o.names.join(t('common.listSeparator')), files: o.files.join(t('common.listSeparator')) })}</span>
           </p>
         ))}
         {conflicts ? (

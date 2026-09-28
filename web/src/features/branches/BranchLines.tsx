@@ -61,17 +61,17 @@ export function BranchLines({ branch, overlaps, holds }: BranchLinesProps) {
           {st.conflicts?.length ? (
             <span className="font-mono break-all" translate="no">
               {' '}
-              {st.conflicts.join('、')}
+              {st.conflicts.join(t('common.listSeparator'))}
             </span>
           ) : null}
         </Warning>
       ) : null}
       {overlaps.map((o) => {
-        const shown = o.files.slice(0, overlapFilesShown).join('、')
+        const shown = o.files.slice(0, overlapFilesShown).join(t('common.listSeparator'))
         const named = o.files.length > overlapFilesShown ? t('branches.overlapMore', { files: shown, n: o.files.length }) : shown
         return (
           <Warning key={o.names.join()}>
-            {t('branches.overlapWith', { names: o.names.join('、') })}{' '}
+            {t('branches.overlapWith', { names: o.names.join(t('common.listSeparator')) })}{' '}
             <span className="font-mono break-all" translate="no">
               {named}
             </span>

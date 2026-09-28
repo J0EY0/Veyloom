@@ -125,7 +125,7 @@ function SentForm({ approval, fields, names }: { approval: Approval; fields: For
     if (field.type === 'boolean') return value === true ? t('form.yes') : t('form.no')
     const label = (v: unknown) =>
       field.type === 'choice' || field.type === 'choices' ? (field.choices.find((c) => c.value === v)?.label ?? String(v)) : String(v)
-    return Array.isArray(value) ? value.map(label).join('、') : label(value)
+    return Array.isArray(value) ? value.map(label).join(t('common.listSeparator')) : label(value)
   }
   return (
     <>

@@ -70,7 +70,7 @@ function AgentRow({ row }: { row: MachineAgent }) {
       <ItemContent className="min-w-0 gap-0.5">
         <ItemTitle className="max-w-full truncate">{agent.name}</ItemTitle>
         <ItemDescription className="truncate text-xs text-subtle">
-          {[runtimeName(agent.runtime), projects.join('、')].filter(Boolean).join(' · ')}
+          {[runtimeName(agent.runtime), projects.join(t('common.listSeparator'))].filter(Boolean).join(' · ')}
         </ItemDescription>
       </ItemContent>
       <ItemActions className="flex-none gap-2 text-xs whitespace-nowrap text-muted-foreground">
