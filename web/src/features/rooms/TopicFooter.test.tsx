@@ -41,6 +41,12 @@ describe('topicState', () => {
     // Its own turn over, a member's still running.
     const underWay = { ...work, turns: 4, ended_at: undefined, running: true }
     expect(topicState(summary('t', { turns: 2, last_turn: lead, work: underWay }))).toMatchObject({ tone: 'run', text: '进行中 · 4 轮' })
+    // Its own turn done, the piece of work ended as its last turn to end
+    // did, in another topic: a person stopped it there.
+    expect(topicState(summary('t', { turns: 3, last_turn: lead, work: { ...work, last_status: 'cancelled' as const } }))).toMatchObject({
+      tone: 'idle',
+      text: '已取消 · 5 轮 · 3 分 14 秒',
+    })
   })
 
   it('says so while the runtime compacts the session, unless a person is waited for', () => {

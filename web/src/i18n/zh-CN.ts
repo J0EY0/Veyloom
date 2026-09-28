@@ -214,6 +214,10 @@ export const zhCN = {
   'topic.cancelled': '已取消',
   'topic.done': '完成 · {turns} 轮{took}',
   'topic.doneOnce': '完成{took}',
+  'topic.workFailed': '失败 · {turns} 轮{took}',
+  'topic.workFailedOnce': '失败{took}',
+  'topic.workCancelled': '已取消 · {turns} 轮{took}',
+  'topic.workCancelledOnce': '已取消{took}',
   'topic.workRunning': '进行中 · {turns} 轮',
   'topic.took': ' · {duration}',
 

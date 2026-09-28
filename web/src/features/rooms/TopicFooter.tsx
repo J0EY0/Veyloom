@@ -8,6 +8,7 @@ import { t, useT } from '@/lib/i18n'
 import { useNow } from '@/lib/useNow'
 import { quietFor, useQuietSince } from '@/features/turns/quiet'
 import { turnErrorText } from '@/features/turns/turnError'
+import { workState } from '@/features/threads/workState'
 
 export interface TopicFooterProps {
   summary: ThreadSummary
@@ -111,7 +112,9 @@ export function topicState(summary: ThreadSummary, liveTool?: string, waiting?: 
       return { tone: 'idle', text: t('topic.cancelled'), ofTurn: true }
     default: {
       // A piece of work counts from its first turn's start to its last
-      // one's end, in whichever topics they were.
+      // one's end, in whichever topics they were, and ended as the last of
+      // them did, here or in another topic.
+      if (work && work.turns > 1) return workState(work, t)
       const [from, to, turns] = work ? [work.started_at, work.ended_at, work.turns] : [turn.started_at, turn.ended_at, summary.turns]
       const took = to ? t('topic.took', { duration: formatDuration(from, to) }) : ''
       return turns > 1 ? { tone: 'ok', text: t('topic.done', { turns, took }) } : { tone: 'ok', text: t('topic.doneOnce', { took }), ofTurn: true }

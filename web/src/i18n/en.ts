@@ -217,6 +217,10 @@ export const en: Record<MessageKey, string> = {
   'topic.cancelled': 'Cancelled',
   'topic.done': 'Done · {turns} {turns?turn|turns}{took}',
   'topic.doneOnce': 'Done{took}',
+  'topic.workFailed': 'Failed · {turns} {turns?turn|turns}{took}',
+  'topic.workFailedOnce': 'Failed{took}',
+  'topic.workCancelled': 'Cancelled · {turns} {turns?turn|turns}{took}',
+  'topic.workCancelledOnce': 'Cancelled{took}',
   'topic.workRunning': 'Under way · {turns} {turns?turn|turns}',
   'topic.took': ' · {duration}',
 

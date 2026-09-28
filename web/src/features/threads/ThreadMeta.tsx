@@ -1,7 +1,7 @@
 import type { WorkSummary } from '@/api/types'
 import { StatusDot } from '@/components/shared/status-dot'
-import { formatDuration } from '@/lib/format'
 import { useT } from '@/lib/i18n'
+import { workState } from './workState'
 
 export interface ThreadMetaProps {
   threadId: string
@@ -41,16 +41,11 @@ export function ThreadMeta({ threadId, work, names, ask, onOpenThread }: ThreadM
     )
   }
   const members = (work.members ?? []).flatMap((id) => names.get(id) ?? []).join(t('common.listSeparator'))
-  const took = work.ended_at ? t('topic.took', { duration: formatDuration(work.started_at, work.ended_at) }) : ''
-  const state = work.running
-    ? t('topic.workRunning', { turns: work.turns })
-    : work.turns > 1
-      ? t('topic.done', { turns: work.turns, took })
-      : t('topic.doneOnce', { took })
+  const state = workState(work, t)
   return (
     <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <StatusDot tone={work.running ? 'run' : 'ok'} />
-      <span className="flex-none">{state}</span>
+      <StatusDot tone={state.tone} />
+      <span className="flex-none">{state.text}</span>
       {members ? <span className="min-w-0 truncate">· {members}</span> : null}
     </p>
   )

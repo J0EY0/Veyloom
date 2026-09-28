@@ -225,6 +225,9 @@ export interface WorkSummary {
   // Once none of its turns runs.
   ended_at?: string
   running: boolean
+  // How it stands by its latest turn: running while one runs, else how the
+  // turn that ended last ended.
+  last_status?: TurnStatus
   // The members who took turns in it, in the order they first did; the
   // room's summaries leave them out.
   members?: string[]
