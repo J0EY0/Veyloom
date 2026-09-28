@@ -148,6 +148,10 @@ type WorkSummary struct {
 	StartedAt time.Time  `json:"started_at"`
 	EndedAt   *time.Time `json:"ended_at,omitempty"`
 	Running   bool       `json:"running"`
+	// LastStatus is how it stands by its latest turn: running while one
+	// runs, else how the turn that ended last ended. A piece of work whose
+	// last turn was cancelled or failed ended so, whatever came before.
+	LastStatus TurnStatus `json:"last_status"`
 }
 
 // TurnSummary is the slice of a Turn a timeline needs.
@@ -470,7 +474,7 @@ func (s *Store) ThreadSummaries(ctx context.Context, rootMessageIDs []string) (m
 		if row.WorkChain != "" {
 			summary.Work = &WorkSummary{
 				ThreadID: summary.ID, ThreadNumber: summary.Number, Chain: row.WorkChain, Turns: int(row.WorkTurns),
-				StartedAt: row.WorkStartedAt.Time, Running: row.WorkRunning,
+				StartedAt: row.WorkStartedAt.Time, Running: row.WorkRunning, LastStatus: TurnStatus(row.WorkLastStatus),
 			}
 			if row.WorkEndedAt.Valid {
 				t := row.WorkEndedAt.Time
@@ -498,7 +502,7 @@ func (s *Store) ChainWork(ctx context.Context, chain string) (WorkSummary, error
 	}
 	work := WorkSummary{
 		ThreadID: uuidString(row.ThreadID), ThreadNumber: int(row.ThreadNumber), Chain: chain, Turns: int(row.Turns),
-		StartedAt: row.StartedAt.Time, Running: row.Running,
+		StartedAt: row.StartedAt.Time, Running: row.Running, LastStatus: TurnStatus(row.LastStatus),
 	}
 	for _, id := range row.Members {
 		work.Members = append(work.Members, uuidString(id))

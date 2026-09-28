@@ -183,6 +183,73 @@ func TestTopic_WhoAPersonTalksWithAndWhoRuns(t *testing.T) {
 	}
 }
 
+// A piece of work stands as its latest turn does: running while one runs,
+// else as the turn that ended last ended. A person stopping the last turn
+// leaves it cancelled, whatever came before; a member answering after one
+// failed leaves it done.
+func TestTopic_HowAPieceOfWorkEnded(t *testing.T) {
+	f := newTurnFixture(t)
+	ctx := context.Background()
+	chain := f.root.ID
+	stands := func() (store.TurnStatus, store.TurnStatus) {
+		t.Helper()
+		summaries, err := f.s.ThreadSummaries(ctx, []string{f.root.ID})
+		if err != nil || summaries[f.root.ID].Work == nil {
+			t.Fatalf("the topic's piece of work: %+v %v", summaries, err)
+		}
+		work, err := f.s.ChainWork(ctx, chain)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return summaries[f.root.ID].Work.LastStatus, work.LastStatus
+	}
+	for _, step := range []struct {
+		name string
+		end  store.TurnStatus
+	}{
+		{"one that fails", store.TurnFailed},
+		{"one that answers after it", store.TurnDone},
+		{"one a person stops", store.TurnCancelled},
+	} {
+		turn, err := f.s.CreateTurn(ctx, store.NewTurn{MemberID: f.member.ID, RoomID: f.room.ID, ThreadID: f.thread.ID, TriggerMessageID: f.root.ID, MachineID: f.machineID, ChainMessageID: chain})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if timeline, work := stands(); timeline != store.TurnRunning || work != store.TurnRunning {
+			t.Errorf("%s, running: the timeline says %q, the topic %q", step.name, timeline, work)
+		}
+		if _, err := f.s.FinishTurn(ctx, turn.ID, store.TurnOutcome{Status: step.end, Error: "x"}); err != nil {
+			t.Fatal(err)
+		}
+		if timeline, work := stands(); timeline != step.end || work != step.end {
+			t.Errorf("%s, over: the timeline says %q, the topic %q, want %q", step.name, timeline, work, step.end)
+		}
+	}
+	// Two at once: the one begun first ends last, and it failed. How the
+	// piece of work ended is how the turn that ended last did.
+	begun := func() store.Turn {
+		t.Helper()
+		turn, err := f.s.CreateTurn(ctx, store.NewTurn{MemberID: f.member.ID, RoomID: f.room.ID, ThreadID: f.thread.ID, TriggerMessageID: f.root.ID, MachineID: f.machineID, ChainMessageID: chain})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return turn
+	}
+	first, second := begun(), begun()
+	if _, err := f.s.FinishTurn(ctx, second.ID, store.TurnOutcome{Status: store.TurnDone}); err != nil {
+		t.Fatal(err)
+	}
+	if timeline, work := stands(); timeline != store.TurnRunning || work != store.TurnRunning {
+		t.Errorf("one of two still running: the timeline says %q, the topic %q", timeline, work)
+	}
+	if _, err := f.s.FinishTurn(ctx, first.ID, store.TurnOutcome{Status: store.TurnFailed, Error: "x"}); err != nil {
+		t.Fatal(err)
+	}
+	if timeline, work := stands(); timeline != store.TurnFailed || work != store.TurnFailed {
+		t.Errorf("the one that ended last failed: the timeline says %q, the topic %q", timeline, work)
+	}
+}
+
 func TestTopic_SummariesAndTurns(t *testing.T) {
 	f := newTurnFixture(t)
 	ctx := context.Background()

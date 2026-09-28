@@ -82,7 +82,9 @@ RETURNING *;
 -- name: ThreadSummaries :many
 -- What the room timeline shows under each topic root: reply count, last
 -- reply time, the latest turn, and, under the topic where the latest turn's
--- piece of work began, that piece of work across all its topics.
+-- piece of work began, that piece of work across all its topics, with how
+-- it stands by its latest turn: running while one runs, else how the turn
+-- that ended last ended.
 SELECT t.root_message_id,
        t.id AS thread_id,
        t.number AS thread_number,
@@ -99,7 +101,8 @@ SELECT t.root_message_id,
        coalesce(w.turns, 0)::int AS work_turns,
        w.started_at::timestamptz AS work_started_at,
        w.ended_at::timestamptz AS work_ended_at,
-       coalesce(w.running, false)::bool AS work_running
+       coalesce(w.running, false)::bool AS work_running,
+       coalesce(w.last_status, '')::text AS work_last_status
 FROM threads t
 LEFT JOIN LATERAL (
     SELECT * FROM turns tu WHERE tu.thread_id = t.id ORDER BY tu.started_at DESC LIMIT 1
@@ -109,7 +112,9 @@ LEFT JOIN LATERAL (
            count(*) AS turns,
            min(c.started_at) AS started_at,
            CASE WHEN bool_or(c.ended_at IS NULL) THEN NULL ELSE max(c.ended_at) END AS ended_at,
-           bool_or(c.status = 'running') AS running
+           bool_or(c.status = 'running') AS running,
+           (SELECT l.status FROM turns l WHERE l.chain_message_id = lt.chain_message_id
+            ORDER BY l.ended_at DESC NULLS FIRST, l.started_at DESC LIMIT 1) AS last_status
     FROM turns c
     WHERE c.chain_message_id = lt.chain_message_id
     GROUP BY c.chain_message_id
@@ -119,8 +124,10 @@ WHERE t.root_message_id = ANY($1::uuid[]);
 
 -- name: ChainWork :one
 -- A piece of work across its topics: the topic it began in, how many turns
--- it took, when it began and, once none runs, when it ended, and the
--- members who took turns in it, in the order they first did.
+-- it took, when it began and, once none runs, when it ended, how it stands
+-- by its latest turn (running while one runs, else how the turn that ended
+-- last ended), and the members who took turns in it, in the order they
+-- first did.
 WITH c AS (
     SELECT * FROM turns WHERE chain_message_id = $1
 ), origin AS (
@@ -132,6 +139,7 @@ SELECT (SELECT thread_id FROM origin)::uuid AS thread_id,
        (SELECT min(started_at) FROM c)::timestamptz AS started_at,
        (SELECT CASE WHEN bool_or(ended_at IS NULL) THEN NULL ELSE max(ended_at) END FROM c)::timestamptz AS ended_at,
        coalesce((SELECT bool_or(status = 'running') FROM c), false)::bool AS running,
+       coalesce((SELECT status FROM c ORDER BY ended_at DESC NULLS FIRST, started_at DESC LIMIT 1), '')::text AS last_status,
        coalesce((SELECT array_agg(x.member_id ORDER BY x.first) FROM (
            SELECT member_id, min(started_at) AS first FROM c GROUP BY member_id
        ) x), '{}')::uuid[] AS members;

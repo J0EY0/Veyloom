@@ -226,7 +226,7 @@ func TestLoop_TheTopicAskedInCountsTheWholeWork(t *testing.T) {
 		}
 	}
 	first, last := turns[len(turns)-1], turns[0]
-	if whole == nil || whole.Turns != 4 || whole.Running || whole.Chain != msg.ID || whole.ThreadID != thread.ID ||
+	if whole == nil || whole.Turns != 4 || whole.Running || whole.LastStatus != store.TurnDone || whole.Chain != msg.ID || whole.ThreadID != thread.ID ||
 		!whole.StartedAt.Equal(first.StartedAt) || whole.EndedAt == nil || !whole.EndedAt.Equal(*last.EndedAt) {
 		t.Fatalf("the whole work: %+v, turns %+v", whole, turns)
 	}
@@ -247,10 +247,10 @@ func TestLoop_TheTopicAskedInCountsTheWholeWork(t *testing.T) {
 			t.Fatalf("the turn events carried %d pieces of work: %+v", len(seen), seen)
 		}
 	}
-	if w := seen[0]; w.Turns != 1 || !w.Running || w.ThreadID != thread.ID {
+	if w := seen[0]; w.Turns != 1 || !w.Running || w.LastStatus != store.TurnRunning || w.ThreadID != thread.ID {
 		t.Errorf("as the first turn began: %+v", w)
 	}
-	if w := seen[len(seen)-1]; w.Turns != 4 || w.Running || w.EndedAt == nil {
+	if w := seen[len(seen)-1]; w.Turns != 4 || w.Running || w.LastStatus != store.TurnDone || w.EndedAt == nil {
 		t.Errorf("as the last turn ended: %+v", w)
 	}
 }
