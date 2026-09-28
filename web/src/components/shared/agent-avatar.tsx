@@ -55,8 +55,10 @@ export function AgentAvatar({ look, name, size = 'md', mark, className }: AgentA
   ) : (
     letter
   )
+  // Rounded as the face is, so that a ring drawn around the avatar (a
+  // shadow in className) follows its corners.
   return (
-    <span aria-hidden="true" className={cn('relative inline-flex flex-none', box)}>
+    <span aria-hidden="true" className={cn('relative inline-flex flex-none rounded-[28%]', box)}>
       {face}
       {(mark ?? marked.has(size)) ? (
         <RuntimeIcon runtime={look.runtime} className="absolute -right-[0.1875rem] -bottom-[0.1875rem] size-3 ring-2 ring-background" />
