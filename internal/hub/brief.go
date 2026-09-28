@@ -615,9 +615,10 @@ func (b *briefBuilder) relevance(ctx context.Context, in briefInput, members []s
 }
 
 // repoPath is a changed file as its path in the repository, which is how
-// a page names it. Runtimes mostly report absolute paths: one under a
-// member's repository is made relative to it, any other keeps its last
-// three parts.
+// a page names it. Machines name a file in the folder a turn works in
+// relative to it (machine/turns.go); a turn's absolute path, from before
+// that or of a file elsewhere, is made relative to a member's repository
+// it is under, or else keeps its last three parts.
 func repoPath(p string, roots []string) string {
 	if !filepath.IsAbs(p) {
 		return filepath.ToSlash(filepath.Clean(p))

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -102,7 +103,7 @@ func (r *turnRunner) start(ctx context.Context, req protocol.StartTurn) {
 	r.wg.Add(1)
 	go func() {
 		defer r.wg.Done()
-		r.pump(ctx, req.TurnID, turn)
+		r.pump(ctx, req.TurnID, req.Spec.WorkDir, turn)
 	}()
 }
 
@@ -224,9 +225,10 @@ func (r *turnRunner) release(turnID string) {
 }
 
 // pump forwards a turn's events to the hub, coalescing text, and finishes
-// with a TurnDone. If the connection fails mid-turn the turn is cancelled:
-// nobody is listening any more.
-func (r *turnRunner) pump(ctx context.Context, turnID string, turn runtime.Turn) {
+// with a TurnDone. The files it wrote are named relative to dir, where it
+// works. If the connection fails mid-turn the turn is cancelled: nobody is
+// listening any more.
+func (r *turnRunner) pump(ctx context.Context, turnID, dir string, turn runtime.Turn) {
 	buf := newTextBuffer(r.flush)
 	send := func(ev runtime.Event) bool {
 		return r.conn.Send(ctx, outbound(turnID, ev)) == nil
@@ -239,6 +241,9 @@ func (r *turnRunner) pump(ctx context.Context, turnID string, turn runtime.Turn)
 			if !ok {
 				events = nil
 				break
+			}
+			if ev.Kind == runtime.EventFileChanged {
+				ev.Path = inWorkDir(dir, ev.Path)
 			}
 			for _, out := range buf.add(ev) {
 				if !send(out) {
@@ -269,6 +274,50 @@ func (r *turnRunner) pump(ctx context.Context, turnID string, turn runtime.Turn)
 		done.Cancelled = errors.Is(err, runtime.ErrTurnCancelled)
 	}
 	_ = r.conn.Send(ctx, done)
+}
+
+// inWorkDir names a file a turn wrote as the project does: relative to dir,
+// where the member works, when it is in there. Runtimes report the path
+// they were given or chose, mostly absolute, which would name the worktree
+// the member happens to work in on this machine, and wiki pages and people
+// name a project's files without it. A path through a symbolic link, such
+// as /tmp for /private/tmp on macOS, counts where the link leads; any other
+// path is kept as it came.
+func inWorkDir(dir, path string) string {
+	if path == "" {
+		return path
+	}
+	if !filepath.IsAbs(path) {
+		return filepath.ToSlash(filepath.Clean(path))
+	}
+	if dir == "" {
+		return path
+	}
+	if rel, ok := within(dir, path); ok {
+		return rel
+	}
+	realDir, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return path
+	}
+	// The file may be gone, deleted by the turn: its folder is resolved.
+	realFolder, err := filepath.EvalSymlinks(filepath.Dir(path))
+	if err != nil {
+		return path
+	}
+	if rel, ok := within(realDir, filepath.Join(realFolder, filepath.Base(path))); ok {
+		return rel
+	}
+	return path
+}
+
+// within is path relative to dir, if it is inside it.
+func within(dir, path string) (string, bool) {
+	rel, err := filepath.Rel(dir, path)
+	if err != nil || rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return filepath.ToSlash(rel), true
 }
 
 // outbound is the protocol message for one runtime event. Approval requests

@@ -579,3 +579,60 @@ func TestTurn_EachSteerIsPassedOnce(t *testing.T) {
 		t.Errorf("%d texts taken for %d sent, first astray at %d: %v", len(turn.ids), len(want), i, turn.ids[i:min(i+5, len(turn.ids))])
 	}
 }
+
+func TestInWorkDir(t *testing.T) {
+	real := t.TempDir()
+	link := filepath.Join(t.TempDir(), "link")
+	if err := os.Symlink(real, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(real, "main.go"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cases := []struct {
+		name, dir, path, want string
+	}{
+		{"inside", real, filepath.Join(real, "main.go"), "main.go"},
+		{"deeper inside", real, filepath.Join(real, "internal", "store.go"), "internal/store.go"},
+		{"relative", real, "./main.go", "main.go"},
+		{"relative, outside", real, "../other/main.go", "../other/main.go"},
+		{"outside", real, "/elsewhere/main.go", "/elsewhere/main.go"},
+		{"the folder itself", real, real, real},
+		{"no folder", "", filepath.Join(real, "main.go"), filepath.Join(real, "main.go")},
+		{"folder through a link", link, filepath.Join(real, "main.go"), "main.go"},
+		{"file through a link", real, filepath.Join(link, "main.go"), "main.go"},
+		{"deleted, through a link", link, filepath.Join(real, "gone.go"), "gone.go"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := inWorkDir(c.dir, c.path); got != c.want {
+				t.Errorf("inWorkDir(%q, %q) = %q, want %q", c.dir, c.path, got, c.want)
+			}
+		})
+	}
+}
+
+func TestTurn_NamesChangedFilesWhereItWorks(t *testing.T) {
+	hubEnd, _ := connectedMachine(t, Config{})
+	dir := t.TempDir()
+	req := protocol.StartTurn{TurnID: "t1", Runtime: "fake", Spec: runtime.TurnSpec{
+		Prompt: "hello", WorkDir: dir,
+		Options: map[string]any{"changes": []any{filepath.Join(dir, "main.go"), "/elsewhere/notes.txt"}},
+	}}
+	if err := hubEnd.Send(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	events, done := collectTurn(t, hubEnd, "t1")
+	if done.Error != "" {
+		t.Fatalf("turn failed: %s", done.Error)
+	}
+	var files []string
+	for _, ev := range events {
+		if ev.Kind == runtime.EventFileChanged {
+			files = append(files, ev.Path)
+		}
+	}
+	if want := []string{"main.go", "/elsewhere/notes.txt"}; !slices.Equal(files, want) {
+		t.Errorf("files changed = %q, want %q", files, want)
+	}
+}
