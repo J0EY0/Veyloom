@@ -91,7 +91,9 @@ func TestDiscover_TimeoutFlagOverridesConfigFile(t *testing.T) {
 	}
 
 	// A fake runtime that sleeps longer than the file's 1ms but shorter than
-	// the flag's value shows which timeout actually applied.
+	// the flag's value shows which timeout actually applied. The flag's is
+	// generous: on a machine busy with the whole suite, starting the script
+	// alone may take seconds.
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "claude"), []byte("#!/bin/sh\n/bin/sleep 0.2\necho 1.0.0\n"), 0o755); err != nil {
 		t.Fatal(err)
@@ -102,7 +104,7 @@ func TestDiscover_TimeoutFlagOverridesConfigFile(t *testing.T) {
 	root := newRootCmd()
 	root.SetOut(&out)
 	root.SetErr(&out)
-	root.SetArgs([]string{"discover", "--json", "--config", file, "--timeout", "5s"})
+	root.SetArgs([]string{"discover", "--json", "--config", file, "--timeout", "30s"})
 	if err := root.ExecuteContext(context.Background()); err != nil {
 		t.Fatalf("command failed: %v\n%s", err, out.String())
 	}

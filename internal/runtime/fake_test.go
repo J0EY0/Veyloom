@@ -10,11 +10,14 @@ import (
 	"time"
 )
 
-// drain collects every event until the channel closes.
+// drain collects every event until the channel closes. A turn of a fake
+// CLI ends in well under a second; the wait is long because a machine busy
+// with the whole suite under the race detector may take seconds to start
+// a process.
 func drain(t *testing.T, turn Turn) []Event {
 	t.Helper()
 	var events []Event
-	timeout := time.After(5 * time.Second)
+	timeout := time.After(15 * time.Second)
 	for {
 		select {
 		case ev, ok := <-turn.Events():

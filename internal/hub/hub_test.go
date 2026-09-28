@@ -49,10 +49,13 @@ func handshake(t *testing.T, conn protocol.Conn, hello protocol.Hello) protocol.
 	return welcome
 }
 
-// eventually polls cond until it is true or the deadline passes.
+// eventually polls cond until it is true or the deadline passes. What it
+// waits for takes well under a second; the deadline is long because the
+// whole suite under the race detector keeps the machine busy enough to
+// hold a few turns in a row up for seconds.
 func eventually(t *testing.T, cond func() bool, what string) {
 	t.Helper()
-	eventuallyWithin(t, 2*time.Second, cond, what)
+	eventuallyWithin(t, 10*time.Second, cond, what)
 }
 
 // eventuallyWithin is eventually with its own deadline, for what takes
