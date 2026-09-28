@@ -1,4 +1,4 @@
-import { useEffect, useMemo } from 'react'
+import { useLayoutEffect, useMemo } from 'react'
 import { FolderXIcon } from 'lucide-react'
 import { Link, Navigate, useParams } from 'react-router'
 import { useProjects } from '@/api/projects'
@@ -32,7 +32,10 @@ export function WikisPage() {
     () => (project ? { kind: 'project', projectId: project.id, roomId: project.main_room_id, standalone: true } : undefined),
     [project],
   )
-  useEffect(() => {
+  // Remembered as the page shows, not a moment after: a person picking
+  // every project's the moment it shows would have it written back after
+  // their choice, and be sent back to it.
+  useLayoutEffect(() => {
     if (projectId) rememberWiki(projectId)
   }, [projectId])
 
