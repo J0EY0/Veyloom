@@ -136,17 +136,17 @@ func (r *turnRunner) steer(ctx context.Context, req protocol.SteerTurn) {
 	}()
 }
 
-// passSteers passes the texts for turnID in order, until none is left.
+// passSteers passes the texts for turnID in order, until none is left. It
+// is started for a line of one, and the line is never empty while it runs:
+// the text being passed stays at its head until passed, and the pass ends
+// as the last one leaves, under the same lock. So a text that comes finds
+// either a pass going, which takes it in its turn, or none, and starts one:
+// never a line emptied by a pass not yet over, which would start a second
+// pass on the same texts, each taking the next and leaving one out.
 func (r *turnRunner) passSteers(ctx context.Context, turnID string) {
 	for {
 		r.mu.Lock()
-		line := r.steers[turnID]
-		if len(line) == 0 {
-			delete(r.steers, turnID)
-			r.mu.Unlock()
-			return
-		}
-		req, turn := line[0], r.active[turnID]
+		req, turn := r.steers[turnID][0], r.active[turnID]
 		r.mu.Unlock()
 		err := runtime.ErrSteerRefused
 		if turn != nil {
@@ -160,7 +160,13 @@ func (r *turnRunner) passSteers(ctx context.Context, turnID string) {
 		// Taken off only once passed: one that comes meanwhile waits its
 		// turn behind it rather than start a pass of its own.
 		r.mu.Lock()
-		r.steers[turnID] = r.steers[turnID][1:]
+		rest := r.steers[turnID][1:]
+		if len(rest) == 0 {
+			delete(r.steers, turnID)
+			r.mu.Unlock()
+			return
+		}
+		r.steers[turnID] = rest
 		r.mu.Unlock()
 	}
 }

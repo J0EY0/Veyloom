@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -534,5 +535,47 @@ func TestTurn_SteersReachTheTurnInOrder(t *testing.T) {
 	}
 	if !slices.Equal(got, want) || done.Error != "" {
 		t.Errorf("taken in the order %v, want %v (done %+v)", got, want, done)
+	}
+}
+
+// steerRecorder is a turn that takes each text at once, noting its id.
+type steerRecorder struct {
+	mu  sync.Mutex
+	ids []string
+}
+
+func (s *steerRecorder) Events() <-chan runtime.Event          { return nil }
+func (s *steerRecorder) Result() (runtime.Result, error)       { return runtime.Result{}, nil }
+func (s *steerRecorder) Cancel()                               {}
+func (s *steerRecorder) Answer(string, runtime.Decision) error { return nil }
+func (s *steerRecorder) Steer(id, _ string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.ids = append(s.ids, id)
+	return nil
+}
+
+// Each text for a turn reaches it once, in order, wherever the next falls
+// against the pass of the ones before: one that comes as the line empties
+// starts a pass of its own, and no two passes take the same text.
+func TestTurn_EachSteerIsPassedOnce(t *testing.T) {
+	r := newTurnRunner(nil, nil, 0, "")
+	turn := &steerRecorder{}
+	r.active["t1"] = turn
+	want := make([]string, 0, 5000)
+	for i := range cap(want) {
+		id := fmt.Sprintf("s%d", i)
+		want = append(want, id)
+		r.steer(context.Background(), protocol.SteerTurn{TurnID: "t1", SteerID: id, Text: id})
+	}
+	r.wg.Wait()
+	turn.mu.Lock()
+	defer turn.mu.Unlock()
+	if !slices.Equal(turn.ids, want) {
+		i := 0
+		for i < len(turn.ids) && i < len(want) && turn.ids[i] == want[i] {
+			i++
+		}
+		t.Errorf("%d texts taken for %d sent, first astray at %d: %v", len(turn.ids), len(want), i, turn.ids[i:min(i+5, len(turn.ids))])
 	}
 }
