@@ -1,4 +1,5 @@
 import { useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
+import { addresseeKeys, refreshAddressees } from './addressee'
 import { agentKeys, machineKeys } from './agents'
 import { approvalKeys } from './approvals'
 import { api, ApiError } from './client'
@@ -52,8 +53,10 @@ export function useUpdateProject(projectId: string) {
     onSuccess: ({ project }) => {
       client.setQueryData<Project[]>(projectKeys.all, (old) => old?.map((p) => (p.id === project.id ? project : p)))
       refreshAfterProjectChange(client)
-      // The wiki maintainer may have changed.
+      // The wiki maintainer may have changed; the leader, and so whom a
+      // message without an @ goes to, too.
       void client.invalidateQueries({ queryKey: upkeepKeys.project(project.id) })
+      refreshAddressees(client, addresseeKeys.room(project.main_room_id))
     },
   })
 }
@@ -74,6 +77,7 @@ export function useDeleteProject() {
     onSuccess: (project) => {
       client.setQueryData<Project[]>(projectKeys.all, (old) => old?.filter((p) => p.id !== project.id))
       client.removeQueries({ queryKey: ['rooms', project.main_room_id] })
+      client.removeQueries({ queryKey: addresseeKeys.room(project.main_room_id) })
       refreshAfterProjectChange(client)
     },
   })

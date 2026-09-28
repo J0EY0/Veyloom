@@ -68,6 +68,21 @@ export interface Member {
   removed_at?: string
 }
 
+// Why a person's message that names no member goes where it goes
+// (docs/design.md 4.2): to the room's one member; to the leader, to take
+// on or hand on; in a topic, to the member whose turn runs there, the one
+// talking with the person, or the last to speak; to the leader when that
+// one is gone or turned off, or there is none; or to nobody.
+export type AddresseeReason = 'none' | 'only' | 'leader' | 'running' | 'talking' | 'last' | 'leader_fallback'
+
+// GET /rooms/{id}/addressee: where a person's message that names no member
+// would go, in the room or its topic; member_id is absent when nobody
+// would take it.
+export interface Addressee {
+  member_id?: string
+  reason: AddresseeReason
+}
+
 export interface MembersResponse {
   members: Member[]
 }

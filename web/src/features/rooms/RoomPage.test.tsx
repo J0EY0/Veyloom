@@ -6,12 +6,13 @@ import { approval, message, room, summary, turn, user } from '@/test/fixtures'
 import { lastChat } from '@/lib/lastChat'
 import { renderWithProviders } from '@/test/render'
 import { FakeWebSocket, stubWebSocket } from '@/test/websocket'
+import { addresseeKeys } from '@/api/addressee'
 import { RoomPage } from './RoomPage'
 
 const agent = { member_id: 'a1', user_id: undefined }
 
 // stubRoom serves room r1; later are messages said after the first two.
-function stubRoom(members: object[] = [{ id: 'a1', display_name: 'Codex Implementer' }], later: object[] = []) {
+function stubRoom(members: object[] = [{ id: 'a1', display_name: 'Codex Implementer' }], later: object[] = [], addressee: object = { reason: 'none' }) {
   stubApi({
     '/rooms/r1': { room: room('r1', 'p1', 'main') },
     '/users': { users: [user('u1', 'alice')] },
@@ -40,6 +41,7 @@ function stubRoom(members: object[] = [{ id: 'a1', display_name: 'Codex Implemen
     '/rooms/r1/approvals': { approvals: [] },
     '/rooms/r1/turns': { turns: [] },
     '/machines': { machines: [] },
+    '/rooms/r1/addressee': addressee,
   })
 }
 
@@ -188,20 +190,24 @@ describe('RoomPage escape', () => {
     await userEvent.keyboard('{Escape}')
     await waitFor(() => expect(router.state.location.search).toBe(''))
   })
-  it('says the only member answers a message without an @', async () => {
+  it('says whom a message without an @ goes to, as the hub answers for the room', async () => {
     const codex = { id: 'a1', display_name: 'Codex Implementer', enabled: true }
-    stubRoom([codex])
-    const solo = renderWithProviders(<RoomPage />, { route: '/rooms/r1', path: '/rooms/:roomId' })
-    expect(await screen.findByText('不带 @ 时由 Codex Implementer 回复')).toBeInTheDocument()
-    solo.unmount()
-
-    // Switched off, or joined by a second member, it is back to asking for an @.
-    for (const members of [[{ ...codex, enabled: false }], [codex, { id: 'a2', display_name: 'Pi Tester', enabled: true }]]) {
-      stubRoom(members)
+    const pi = { id: 'a2', display_name: 'Pi Tester', enabled: true }
+    for (const [members, addressee, hint] of [
+      // With one member the chat is a conversation with it.
+      [[codex], { member_id: 'a1', reason: 'only' }, '不带 @ 时由 Codex Implementer 回复'],
+      // With more, the leader takes it or hands it on.
+      [[codex, pi], { member_id: 'a2', reason: 'leader' }, '不带 @ 时交给组长 Pi Tester 分派'],
+      // Nobody would take it: the box asks for an @.
+      [[{ ...codex, enabled: false }], { reason: 'none' }, '输入 @ 提到成员'],
+    ] as const) {
+      stubRoom([...members], [], addressee)
       const view = renderWithProviders(<RoomPage />, { route: '/rooms/r1', path: '/rooms/:roomId' })
-      await screen.findByRole('status', { name: '成员状态' })
-      expect(screen.getByText('输入 @ 提到成员')).toBeInTheDocument()
-      expect(screen.queryByText(/不带 @ 时由/)).not.toBeInTheDocument()
+      // Once the hub has answered: nobody's answer reads as the box's plain
+      // hint, which it shows while it asks too.
+      await waitFor(() => expect(view.client.getQueryState(addresseeKeys.at('r1', ''))?.status).toBe('success'))
+      expect(await screen.findByText(hint)).toBeInTheDocument()
+      expect(screen.queryAllByText(/不带 @ 时/)).toHaveLength(addressee.reason === 'none' ? 0 : 1)
       view.unmount()
     }
   })

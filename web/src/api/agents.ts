@@ -1,5 +1,6 @@
 import { keepPreviousData, useMutation, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { browserTimeZone } from '@/lib/format'
+import { addresseeKeys, refreshAddressees } from './addressee'
 import { ApiError, api } from './client'
 import { projectKeys } from './projects'
 import { upkeepKeys } from './upkeep'
@@ -150,10 +151,12 @@ export function useProbeMachines({ intervalMs = 1000, timeoutMs = 30_000 } = {})
 
 // Who leads a project, and so keeps its wiki unless someone else was
 // chosen, follows its members (docs/design.md 5.21): a member joining,
-// switched on or off, or taken out may change it.
-function refreshLeaders(client: QueryClient) {
+// switched on or off, or taken out may change it. So may whom a message
+// without an @ goes to, in the room and its topics (4.2).
+function refreshLeaders(client: QueryClient, roomId: string) {
   void client.invalidateQueries({ queryKey: projectKeys.all })
   void client.invalidateQueries({ queryKey: upkeepKeys.all })
+  refreshAddressees(client, addresseeKeys.room(roomId))
 }
 
 export function useCreateMember(roomId: string) {
@@ -162,7 +165,7 @@ export function useCreateMember(roomId: string) {
     mutationFn: async (req: CreateMemberRequest) => (await api.post<MemberResponse>(`/rooms/${roomId}/members`, req)).member,
     onSuccess: (member) => {
       client.setQueryData<Member[]>(memberKeys.room(roomId), (old) => (old ? [...old, member] : old))
-      refreshLeaders(client)
+      refreshLeaders(client, roomId)
     },
   })
 }
@@ -173,7 +176,7 @@ export function useUpdateMember(roomId: string) {
     mutationFn: async ({ id, patch }: { id: string; patch: UpdateMemberRequest }) => (await api.patch<MemberResponse>(`/members/${id}`, patch)).member,
     onSuccess: (member) => {
       client.setQueryData<Member[]>(memberKeys.room(roomId), (old) => (old ? old.map((m) => (m.id === member.id ? member : m)) : old))
-      refreshLeaders(client)
+      refreshLeaders(client, roomId)
     },
   })
 }
@@ -220,7 +223,7 @@ export function useRemoveMember(roomId: string) {
       client.setQueryData<Member[]>(memberKeys.room(roomId), (old) =>
         old ? old.map((m) => (m.id === id ? { ...m, removed_at: m.removed_at ?? now } : m)) : old,
       )
-      refreshLeaders(client)
+      refreshLeaders(client, roomId)
     },
   })
 }

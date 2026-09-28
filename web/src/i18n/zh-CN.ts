@@ -196,6 +196,8 @@ export const zhCN = {
   'composer.hintKeys': 'Enter 发送，Shift+Enter 换行',
   'composer.hintMention': '输入 @ 提到成员',
   'composer.replyHint': '不带 @ 时由 {name} 回复',
+  'composer.leaderHint': '不带 @ 时交给组长 {name} 分派',
+  'composer.leaderFallbackHint': '不带 @ 时交给组长 {name}',
   'mention.title': '提到成员',
   'connection.reconnecting': '正在重连…',
 

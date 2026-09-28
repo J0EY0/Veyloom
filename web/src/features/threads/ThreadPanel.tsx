@@ -1,5 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { Maximize2Icon, Minimize2Icon } from 'lucide-react'
+import { usePrefetchAddressee } from '@/api/addressee'
 import { useMessage, useThread, useThreadMessages } from '@/api/messages'
 import { useProject } from '@/api/projects'
 import { useRoom } from '@/api/rooms'
@@ -44,6 +45,8 @@ export interface ThreadPanelProps {
 export function ThreadPanel({ roomId, roomName, threadId, wide, onToggleWide, onClose, onOpenTurn, variant, actions, onOpenThread }: ThreadPanelProps) {
   const thread = useThread(threadId)
   const replies = useThreadMessages(threadId)
+  // The box below says whom a message without an @ goes to.
+  usePrefetchAddressee(roomId, threadId)
   const sender = useSenderNames(roomId)
   const { names, looks } = useMentionTargets(roomId)
   const triggerId = thread.data?.turns[0]?.trigger_message_id ?? ''
@@ -118,10 +121,6 @@ export function ThreadPanel({ roomId, roomName, threadId, wide, onToggleWide, on
   // the @ that handed it first.
   const handedBy = root.body !== '' ? root : trigger.data
   const handed = handedBy && /^\s*@/.test(handedBy.body) ? askTitle(handedBy, names) : undefined
-  // Without an @, the agent that spoke last answers, counting the root, as
-  // the hub routes it (docs/design.md §4.2).
-  const lastAgent = [root, ...(replies.data ?? [])].reverse().find((message) => message.sender_kind === 'agent')
-  const responder = lastAgent ? sender(lastAgent).name : undefined
   // While a person lets the rest of a turn's requests through, a strip
   // says so and takes it back (docs/design.md 4.6).
   const trusted = trustedTurns(turns)
@@ -132,9 +131,7 @@ export function ThreadPanel({ roomId, roomName, threadId, wide, onToggleWide, on
           return <TrustBand key={turn.id} turn={turn} name={name} />
         })
       : undefined
-  const composer = (
-    <Composer roomId={roomId} roomName={roomName} threadId={threadId} hint={responder ? t('composer.replyHint', { name: responder }) : undefined} compact />
-  )
+  const composer = <Composer roomId={roomId} roomName={roomName} threadId={threadId} compact />
   return (
     <SidePanel
       label={t('thread.label')}

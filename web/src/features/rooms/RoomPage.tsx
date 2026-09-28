@@ -3,6 +3,7 @@ import { ViewTransition } from 'react'
 import { SearchIcon, UsersIcon } from 'lucide-react'
 import { useMatch, useParams, useSearchParams } from 'react-router'
 import { ApiError } from '@/api/client'
+import { usePrefetchAddressee } from '@/api/addressee'
 import { usePendingApprovals } from '@/api/approvals'
 import { useRoomEvents } from '@/api/events'
 import { useProject } from '@/api/projects'
@@ -40,11 +41,10 @@ export function RoomPage() {
   const { roomId = '' } = useParams()
   const t = useT()
   const room = useRoom(roomId)
+  // The chat's box says whom a message without an @ goes to.
+  usePrefetchAddressee(roomId)
   useRoomEvents(roomId)
   const memberStates = useMemberStates(roomId)
-  // With one member the chat is a conversation with it: a message without
-  // an @ goes to it (docs/design.md §4.2), and the box says so.
-  const soloMember = memberStates.length === 1 && memberStates[0].member.enabled ? memberStates[0].member.display_name : undefined
   const pending = usePendingApprovals(roomId)
   // The Wiki tab is this page too: its part of the address picks the page.
   const wikiMatch = useMatch('/rooms/:roomId/wiki/*')
@@ -237,7 +237,7 @@ export function RoomPage() {
                   leaderId={project?.leader_id}
                 />
               </div>
-              <Composer roomId={roomId} roomName={chatName} hint={soloMember ? t('composer.replyHint', { name: soloMember }) : undefined} />
+              <Composer roomId={roomId} roomName={chatName} />
             </>
           )}
         </div>

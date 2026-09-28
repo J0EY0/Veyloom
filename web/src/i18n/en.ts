@@ -199,6 +199,8 @@ export const en: Record<MessageKey, string> = {
   'composer.hintKeys': 'Enter to send, Shift+Enter for a new line',
   'composer.hintMention': 'Type @ to mention a member',
   'composer.replyHint': '{name} replies unless you @ someone',
+  'composer.leaderHint': '{name}, the leader, assigns it unless you @ someone',
+  'composer.leaderFallbackHint': 'Goes to {name}, the leader, unless you @ someone',
   'mention.title': 'Mention a member',
   'connection.reconnecting': 'Reconnecting…',
 

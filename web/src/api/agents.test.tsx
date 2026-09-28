@@ -1,9 +1,10 @@
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { renderHook } from '@testing-library/react'
+import { renderHook, waitFor } from '@testing-library/react'
 import type { ReactNode } from 'react'
 import { describe, expect, it } from 'vitest'
 import { stubApi } from '@/test/fetch'
-import { ProbeTimeout, useProbeMachines } from './agents'
+import { addresseeKeys, useAddressee } from './addressee'
+import { ProbeTimeout, useProbeMachines, useUpdateMember } from './agents'
 import type { Machine } from './types'
 
 function wrapper({ children }: { children: ReactNode }) {
@@ -37,5 +38,29 @@ describe('useProbeMachines', () => {
     const { result } = renderHook(() => useProbeMachines({ intervalMs: 5, timeoutMs: 1000 }), { wrapper })
     const fresh = await result.current.mutateAsync([machine('laptop'), machine('gone')])
     expect(fresh.map((machine) => machine.id)).toEqual(['laptop'])
+  })
+})
+
+describe('useUpdateMember', () => {
+  // A member switched on or off may change who leads, and whom a message
+  // without an @ goes to in its room and the room's topics (docs/design.md
+  // 4.2): the answer on screen is read again, the others are dropped to be
+  // asked afresh when they show; other rooms keep theirs.
+  it('reads again whom a message without an @ goes to, in the room and its topics', async () => {
+    const calls = stubApi({
+      '/members/a1': { member: { id: 'a1', room_id: 'r1', display_name: 'Coder', enabled: false } },
+      '/rooms/r1/addressee': { member_id: 'a1', reason: 'talking' },
+    })
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const withClient = ({ children }: { children: ReactNode }) => <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    client.setQueryData(addresseeKeys.at('r1', ''), { member_id: 'a1', reason: 'leader' })
+    client.setQueryData(addresseeKeys.at('r2', ''), { member_id: 'a9', reason: 'only' })
+    const open = renderHook(() => useAddressee('r1', 't1'), { wrapper: withClient })
+    await waitFor(() => expect(open.result.current.data?.reason).toBe('talking'))
+    const { result } = renderHook(() => useUpdateMember('r1'), { wrapper: withClient })
+    await result.current.mutateAsync({ id: 'a1', patch: { enabled: false } })
+    await waitFor(() => expect(calls.filter((call) => call === 'GET /rooms/r1/addressee?thread_id=t1')).toHaveLength(2))
+    expect(client.getQueryState(addresseeKeys.at('r1', ''))).toBeUndefined()
+    expect(client.getQueryState(addresseeKeys.at('r2', ''))?.isInvalidated).toBe(false)
   })
 })

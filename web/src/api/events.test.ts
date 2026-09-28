@@ -1,6 +1,7 @@
 import { QueryClient } from '@tanstack/react-query'
 import { describe, expect, it, vi } from 'vitest'
 import { attachment, message, turn } from '@/test/fixtures'
+import { addresseeKeys } from './addressee'
 import { attachmentKeys } from './attachments'
 import { applyRoomEvent } from './events'
 import { threadKeys } from './messages'
@@ -113,5 +114,27 @@ describe('applyRoomEvent', () => {
     expect(touched()).not.toContain(JSON.stringify(attachmentKeys.room('r1')))
     applyRoomEvent(client, { kind: 'message', room_id: 'r1', at: '', message: message('m2', 2, { attachments: [attachment('f1', 'shot.png', 'image')] }) })
     await expect.poll(touched).toContain(JSON.stringify(attachmentKeys.room('r1')))
+  })
+
+  // Whom a message without an @ in a topic goes to follows who runs, talks
+  // and speaks there (docs/design.md 4.2); the room's own follows only its
+  // members, which no event here moves.
+  it('reads again whom a message without an @ goes to in a topic where a turn starts or ends, or a member speaks', async () => {
+    const client = new QueryClient()
+    const spy = vi.spyOn(client, 'invalidateQueries')
+    const touched = () => spy.mock.calls.map(([filters]) => JSON.stringify(filters?.queryKey))
+    applyRoomEvent(client, { kind: 'turn_started', room_id: 'r1', at: '', turn: turn('x1', 't1', { status: 'running' }) })
+    applyRoomEvent(client, { kind: 'turn_finished', room_id: 'r1', at: '', turn: turn('x2', 't2') })
+    applyRoomEvent(client, { kind: 'message', room_id: 'r1', at: '', message: message('m3', 3, { member_id: 'a1', user_id: undefined, thread_id: 't3' }) })
+    // A person's word, in a topic or in the room, and a member's in the
+    // room, change nobody's.
+    applyRoomEvent(client, { kind: 'message', room_id: 'r1', at: '', message: message('m4', 4, { thread_id: 't4' }) })
+    applyRoomEvent(client, { kind: 'message', room_id: 'r1', at: '', message: message('m5', 5) })
+    applyRoomEvent(client, { kind: 'message', room_id: 'r1', at: '', message: message('m6', 6, { member_id: 'a1', user_id: undefined }) })
+    const addressees = () =>
+      touched()
+        .filter((key) => key?.startsWith('["addressee"'))
+        .sort()
+    await expect.poll(addressees).toEqual(['t1', 't2', 't3'].map((thread) => JSON.stringify(addresseeKeys.at('r1', thread))))
   })
 })

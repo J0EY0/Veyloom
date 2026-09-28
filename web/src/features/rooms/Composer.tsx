@@ -1,4 +1,5 @@
 import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
+import { useAddressee } from '@/api/addressee'
 import { blobFromUrl, uploadAttachment } from '@/api/attachments'
 import { usePostMessage } from '@/api/messages'
 import {
@@ -22,6 +23,7 @@ import { Kbd } from '@/components/ui/kbd'
 import { Label } from '@/components/ui/label'
 import { registerComposer } from '@/lib/composer'
 import { useCurrentUser } from '@/lib/currentUser'
+import { composerHint } from './composerHint'
 import { MentionPicker } from './MentionPicker'
 import { useMentionInput } from './useMentionInput'
 import { detectMentions, useMentionTargets } from './useMentionTargets'
@@ -33,8 +35,6 @@ export interface ComposerProps {
   roomName: string
   // Set to reply inside a topic instead of posting to the room.
   threadId?: string
-  // Replaces the keyboard hint, e.g. who will answer a reply.
-  hint?: string
   // Tighter padding for the topic panel.
   compact?: boolean
 }
@@ -50,8 +50,9 @@ const maxFileMB = 20
 // a line, and Enter while an input method is composing does neither. Files
 // come in by the menu, paste or drop; on send they are uploaded first and
 // the message carries their ids. Mentions are recomputed from the text so
-// structure and words never disagree.
-export function Composer({ roomId, roomName, threadId, hint, compact }: ComposerProps) {
+// structure and words never disagree. Under the text, the box says whom a
+// message without an @ goes to, as the hub would route it.
+export function Composer({ roomId, roomName, threadId, compact }: ComposerProps) {
   const user = useCurrentUser()
   const post = usePostMessage(roomId)
   const targets = useMentionTargets(roomId)
@@ -64,6 +65,11 @@ export function Composer({ roomId, roomName, threadId, hint, compact }: Composer
   const disabled = user === null
   const busy = post.isPending || uploading
   const t = useT()
+  const addressee = useAddressee(roomId, threadId)
+  // Nothing until the first answer, rather than one hint and then another
+  // a moment later; asking again once the stream opens calls off the first
+  // try, which leaves the query waiting without fetching for a moment.
+  const hint = addressee.isPending ? undefined : composerHint(addressee.data, targets.names, threadId !== undefined, t)
 
   // A take-over button elsewhere on the page drops its @ in here.
   useEffect(
@@ -176,8 +182,8 @@ export function Composer({ roomId, roomName, threadId, hint, compact }: Composer
                 </span>
               ) : (
                 <span className="inline-flex min-w-0 items-center gap-1.5 truncate text-xs font-normal text-subtle">
-                  {uploading ? t('composer.uploading') : (hint ?? (threadId ? t('composer.hintKeys') : t('composer.hintMention')))}
-                  {!uploading && !hint && !threadId ? <Kbd className="h-4 min-w-4 px-1 text-[0.625rem]">@</Kbd> : null}
+                  {uploading ? t('composer.uploading') : hint?.text}
+                  {!uploading && hint?.mention ? <Kbd className="h-4 min-w-4 px-1 text-[0.625rem]">@</Kbd> : null}
                 </span>
               )}
             </PromptInputTools>

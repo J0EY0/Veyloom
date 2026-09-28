@@ -20,6 +20,7 @@ function stubTopic(extra: Record<string, unknown> = {}) {
     },
     '/threads/t1/messages': { messages: [message('m3', 3, { ...agent, thread_id: 't1', body: '补了两个用例。', turn_id: 'x1' })] },
     '/messages/m1': { message: message('m1', 1, { body: '把掉队的处理补上测试。' }) },
+    '/rooms/r1/addressee': { member_id: 'a1', reason: 'talking' },
     ...extra,
   })
 }
@@ -42,7 +43,7 @@ describe('ThreadPanel', () => {
     expect(screen.queryByText(/第 1 轮/)).not.toBeInTheDocument()
     expect(await screen.findByText('补了两个用例。')).toBeInTheDocument()
     expect(screen.getByText('Codex Implementer')).toBeInTheDocument()
-    expect(screen.getByText('不带 @ 时由 Codex Implementer 回复')).toBeInTheDocument()
+    expect(await screen.findByText('不带 @ 时由 Codex Implementer 回复')).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('button', { name: '关闭话题' }))
     expect(onClose).toHaveBeenCalledOnce()
@@ -163,8 +164,6 @@ describe('ThreadPanel', () => {
     expect(await screen.findByText('我看协议。')).toBeInTheDocument()
     expect(screen.getByText('Codex Implementer')).toBeInTheDocument()
     expect(screen.getByText('Claude Architect')).toBeInTheDocument()
-    // Without an @, the agent that spoke last answers.
-    expect(screen.getByText('不带 @ 时由 Claude Architect 回复')).toBeInTheDocument()
 
     expect(screen.queryByRole('button', { name: '预览 shot.png' })).not.toBeInTheDocument()
     await userEvent.click(title)
@@ -172,8 +171,10 @@ describe('ThreadPanel', () => {
     expect(screen.getByText('alice')).toBeInTheDocument()
   })
 
-  it('hands a message without an @ to the agent that spoke last, not to the one that opened the topic', async () => {
+  it('says whom a message without an @ goes to, as the hub answers for the topic', async () => {
+    const asked: string[] = []
     stubTopic({
+      '/rooms/r1/addressee': (req: Request) => (asked.push(new URL(req.url).search), { member_id: 'a2', reason: 'last' }),
       '/rooms/r1/members': {
         members: [
           { id: 'a1', display_name: 'Codex Implementer' },
@@ -197,7 +198,16 @@ describe('ThreadPanel', () => {
     expect(await screen.findByText('看过了。')).toBeInTheDocument()
     // Pi Tester answers under its own name, after the pill that asked it.
     expect(screen.getAllByText('Pi Tester')).toHaveLength(2)
-    expect(screen.getByText('不带 @ 时由 Pi Tester 回复')).toBeInTheDocument()
+    expect(await screen.findByText('不带 @ 时由 Pi Tester 回复')).toBeInTheDocument()
+    // Asked as the topic opens and, answers going stale at once in tests,
+    // again by the box: about the topic each time.
+    expect(new Set(asked)).toEqual(new Set(['?thread_id=t1']))
+  })
+
+  it('says a message without an @ goes to the leader when the topic has no one else to take it', async () => {
+    stubTopic({ '/rooms/r1/addressee': { member_id: 'a1', reason: 'leader_fallback' } })
+    renderWithProviders(<ThreadPanel roomId="r1" roomName="main" threadId="t1" onClose={() => {}} />)
+    expect(await screen.findByText('不带 @ 时交给组长 Codex Implementer')).toBeInTheDocument()
   })
 
   it('names a topic whose root has nothing in it yet by the message that started it', async () => {

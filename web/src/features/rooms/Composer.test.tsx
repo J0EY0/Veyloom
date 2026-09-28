@@ -53,6 +53,26 @@ describe('Composer', () => {
     expect(await screen.findByRole('alert')).toHaveTextContent('找不到了，可能已经被删除。')
     expect(box).toHaveValue('hello')
   })
+
+  it('says whom a message without an @ goes to, and asks for an @ where it would reach nobody', async () => {
+    const asked: string[] = []
+    let to: object = { member_id: 'a1', reason: 'leader' }
+    stubApi({
+      '/users': { users: [] },
+      '/rooms/r1/members': { members: [{ id: 'a1', display_name: 'Lead', enabled: true }] },
+      '/rooms/r1/addressee': (req: Request) => (asked.push(new URL(req.url).search), to),
+    })
+    const room = renderWithProviders(<Composer roomId="r1" roomName="main" />)
+    expect(await screen.findByText('不带 @ 时交给组长 Lead 分派')).toBeInTheDocument()
+    expect(room.container.querySelector('kbd')).toBeNull()
+    room.unmount()
+
+    to = { reason: 'none' }
+    const topic = renderWithProviders(<Composer roomId="r1" roomName="main" threadId="t1" />)
+    expect(await screen.findByText('输入 @ 提到成员')).toBeInTheDocument()
+    expect(topic.container.querySelector('kbd')).toHaveTextContent('@')
+    expect(asked).toEqual(['', '?thread_id=t1'])
+  })
 })
 
 describe('Composer mentions', () => {

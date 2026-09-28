@@ -3,6 +3,7 @@ import { useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { setConnectionStatus } from '@/lib/connection'
 import { applyTurnEvent, clearLiveTurn } from '@/lib/liveTurns'
 import { connectRoomEvents } from '@/lib/roomSocket'
+import { addresseeKeys, refreshAddressees } from './addressee'
 import { applyApproval } from './approvals'
 import { refreshBranches } from './branches'
 import { attachmentKeys } from './attachments'
@@ -39,6 +40,9 @@ export function applyRoomEvent(client: QueryClient, event: RoomEvent) {
       applyRoomMessage(client, event.message, event.thread)
       // Files it brought join the attachments tab and the viewer's walk.
       if (event.message.attachments?.length) refresh(client, { queryKey: attachmentKeys.room(event.room_id) })
+      // A member's word in a topic may make it the one a message there
+      // without an @ goes to (docs/design.md 4.2).
+      if (event.message.sender_kind === 'agent' && event.message.thread_id) refreshAddressee(client, event.room_id, event.message.thread_id)
       // A note of the system's may be one the project now names: its wiki
       // or setup topic, its offer of a wiki maintainer (docs/design.md
       // 5.16), the setup steps waiting for a person (5.21).
@@ -52,6 +56,7 @@ export function applyRoomEvent(client: QueryClient, event: RoomEvent) {
       applyTurn(client, event.turn, event.work)
       applyRunningTurn(client, event.turn)
       refresh(client, { queryKey: topicKeys.running })
+      refreshAddressee(client, event.room_id, event.turn.thread_id)
       invalidateUpkeep(client)
       refreshBranches(client)
       break
@@ -61,6 +66,7 @@ export function applyRoomEvent(client: QueryClient, event: RoomEvent) {
       // Its messages have arrived by now; the live copy is stale.
       clearLiveTurn(event.turn.id)
       refresh(client, { queryKey: topicKeys.running })
+      refreshAddressee(client, event.room_id, event.turn.thread_id)
       invalidateUpkeep(client)
       // What the member did shows on its branch.
       refreshBranches(client)
@@ -92,6 +98,14 @@ export function applyRoomEvent(client: QueryClient, event: RoomEvent) {
     default:
       break
   }
+}
+
+// refreshAddressee reads again where a message without an @ in the topic
+// would go: who runs there, and so takes it, changes with every turn that
+// starts or ends there, and who talks or spoke last with what the members
+// say there (docs/design.md 4.2). A topic nobody has open reads nothing.
+function refreshAddressee(client: QueryClient, roomId: string, threadId: string) {
+  refreshAddressees(client, addresseeKeys.at(roomId, threadId))
 }
 
 // useRoomEvents keeps the room's live stream flowing into the cache while
