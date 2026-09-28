@@ -7,14 +7,48 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Go 1.26](https://img.shields.io/badge/go-1.26-00ADD8.svg)
 
-## 特性
+![Veyloom 里的 Acme 笔记项目：组长把活交给 Coder 和 Tester，最后汇总](.github/assets/readme/zh/chat.webp)
 
-- **每个项目一个群。** 把 agent 加成成员，@ 它就是派活；每件事一个话题，agent 之间可以互相转交，次数有上限。
+Veyloom 把你已经在用的编码 agent 拉进同一个项目群。你像带一个团队那样跟它们说话：@ 谁就是把活派给谁；不点名，就由项目的组长接下来或者分给合适的成员。每个 agent 有自己的会话，大家共用一个 wiki：一个 agent 学到的，下一个也知道。
+
+## 亮点
+
+### 一个 agent 团队
+
+- 把 Claude Code、Codex、Pi 加进项目当成员，各有各的角色。
+- @ 一个成员就是派活给它；不点名的话，由组长接下或转给合适的成员，输入框下面会写明这条消息会交给谁。
+- 成员之间在话题里互相转交，次数由你设上限；大家都做完后，你问的那个成员会给你汇总。
+- 组长在你的仓库里干活，其他成员各在自己的 git 工作区里，做完的活在群里点一下卡片就合进主线。
+- 任务板按成员和话题跟踪每一件事。
+
+![任务板](.github/assets/readme/zh/tasks.webp)
+
+### 每个项目一个 LLM Wiki
+
+- 每个项目都有一个 wiki，agent 用工具搜、读、写：git 管着的普通 Markdown，遵循 [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format) v0.2。
+- 每一轮都带上标为常驻的页面，以及 agent 上次看过之后的变动；其余的需要时再读。
+- 维护员 agent 定期整理：把群里说过、发过的东西写成页面；页面提到的文件改了、或者放得太久，就标成待复核；过时的内容换掉。
+- 页面之间互相链接，关系图能看出它们怎么连在一起；每次改动都是一个能撤回的提交。
+- 项目记忆和全局记忆（每个 agent 都该知道的事）每一轮都会带上。
+
+![项目 wiki 的一页](.github/assets/readme/zh/wiki.webp)
+
+![wiki 的关系图](.github/assets/readme/zh/wiki-graph.webp)
+
+### 跨项目共享的 Skill Wiki
+
+- 所有项目共用一个技能库。每个技能是一个带 `SKILL.md` 的文件夹，导入即可，由一个项目团队负责看管。
+- 把技能装给需要它的 agent，Veyloom 按各家运行时自己加载的方式交给它。
+- agent 用的时候会改进技能。改动先进入试用：正常用过几次就转正，人或这个技能的维护员也可以退回。
+- 每个技能都留着历史：谁在哪里改了什么、为什么改。
+
+![技能库里试用中的技能](.github/assets/readme/zh/skill.webp)
+
+### 还有
+
 - **agent 保持原样。** Veyloom 驱动的就是你已经在用的 CLI，沙箱、审批、插件、MCP 服务、上下文压缩都还是它们自己的；需要你决定的事，会变成群里的一张卡片。
-- **共享记忆。** 每个项目一个 wiki（git 管着的普通 Markdown，遵循 [OKF](https://github.com/GoogleCloudPlatform/open-knowledge-format) v0.2），agent 能搜、能读、能写，由维护员 agent 整理；另有项目记忆和个人记忆。
-- **越用越好的技能。** 跨项目共用一个技能库，按 agent 安装，agent 在干活中改进它们，有试用期兜底。
-- **真正的并行。** 组长负责初始化项目，其他成员各在自己的 git 工作区里干活，你在界面上合并。还有任务板、用量页和附件预览。
 - **经得起长时间运行。** 会话跨轮次续接；一轮进行中可以插话；agent 能定时唤醒自己；额度用完、登录失效时暂停而不是一次次失败；可能卡住的轮次会被标出来。
+- 用量页、附件预览，以及汇集待你处理事项的收件箱。
 
 ## 工作方式
 
