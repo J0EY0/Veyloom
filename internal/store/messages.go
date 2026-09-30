@@ -99,6 +99,10 @@ type InboxItem struct {
 	RoomName    string `json:"room_name"`
 	ProjectName string `json:"project_name"`
 	SenderName  string `json:"sender_name"`
+	// SenderAgentID is the agent behind the member an agent's message came
+	// from, whose face the inbox shows; empty for a person, or once that
+	// agent is gone.
+	SenderAgentID string `json:"sender_agent_id,omitempty"`
 	// Read says the user has read it: in the inbox, in its topic, or all
 	// at once.
 	Read bool `json:"read"`
@@ -325,7 +329,10 @@ func (s *Store) ListUserMentions(ctx context.Context, userID string, before int6
 	}
 	out := make([]InboxItem, 0, len(rows))
 	for i, row := range rows {
-		out = append(out, InboxItem{Message: msgs[i], RoomName: row.RoomName, ProjectName: row.ProjectName, SenderName: row.SenderName, Read: row.Read})
+		out = append(out, InboxItem{
+			Message: msgs[i], RoomName: row.RoomName, ProjectName: row.ProjectName, SenderName: row.SenderName,
+			SenderAgentID: uuidString(row.SenderAgentID), Read: row.Read,
+		})
 	}
 	return out, nil
 }

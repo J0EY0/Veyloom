@@ -375,7 +375,7 @@ func (q *Queries) ListThreadMessagesBefore(ctx context.Context, arg ListThreadMe
 
 const listUserMentions = `-- name: ListUserMentions :many
 SELECT m.id, m.seq, m.room_id, m.thread_id, m.sender_kind, m.user_id, m.member_id, m.body, m.mentions, m.created_at, m.turn_id, m.title, r.name AS room_name, p.name AS project_name, coalesce(u.name, mb.display_name, '')::text AS sender_name,
-       (ir.message_id IS NOT NULL)::boolean AS read
+       mb.agent_id AS sender_agent_id, (ir.message_id IS NOT NULL)::boolean AS read
 FROM messages m
 JOIN rooms r ON r.id = m.room_id
 JOIN projects p ON p.id = r.project_id
@@ -395,26 +395,28 @@ type ListUserMentionsParams struct {
 }
 
 type ListUserMentionsRow struct {
-	ID          pgtype.UUID
-	Seq         int64
-	RoomID      pgtype.UUID
-	ThreadID    pgtype.UUID
-	SenderKind  string
-	UserID      pgtype.UUID
-	MemberID    pgtype.UUID
-	Body        string
-	Mentions    []byte
-	CreatedAt   pgtype.Timestamptz
-	TurnID      pgtype.UUID
-	Title       string
-	RoomName    string
-	ProjectName string
-	SenderName  string
-	Read        bool
+	ID            pgtype.UUID
+	Seq           int64
+	RoomID        pgtype.UUID
+	ThreadID      pgtype.UUID
+	SenderKind    string
+	UserID        pgtype.UUID
+	MemberID      pgtype.UUID
+	Body          string
+	Mentions      []byte
+	CreatedAt     pgtype.Timestamptz
+	TurnID        pgtype.UUID
+	Title         string
+	RoomName      string
+	ProjectName   string
+	SenderName    string
+	SenderAgentID pgtype.UUID
+	Read          bool
 }
 
 // Messages that mention one user, newest first, with the names the inbox
-// shows so it needs no second lookup, and whether the user read them.
+// shows so it needs no second lookup, the agent behind an agent's member
+// (its face), and whether the user read them.
 func (q *Queries) ListUserMentions(ctx context.Context, arg ListUserMentionsParams) ([]ListUserMentionsRow, error) {
 	rows, err := q.db.Query(ctx, listUserMentions,
 		arg.UserID,
@@ -445,6 +447,7 @@ func (q *Queries) ListUserMentions(ctx context.Context, arg ListUserMentionsPara
 			&i.RoomName,
 			&i.ProjectName,
 			&i.SenderName,
+			&i.SenderAgentID,
 			&i.Read,
 		); err != nil {
 			return nil, err

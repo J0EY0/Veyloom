@@ -154,9 +154,10 @@ LIMIT $3;
 
 -- name: ListUserMentions :many
 -- Messages that mention one user, newest first, with the names the inbox
--- shows so it needs no second lookup, and whether the user read them.
+-- shows so it needs no second lookup, the agent behind an agent's member
+-- (its face), and whether the user read them.
 SELECT m.*, r.name AS room_name, p.name AS project_name, coalesce(u.name, mb.display_name, '')::text AS sender_name,
-       (ir.message_id IS NOT NULL)::boolean AS read
+       mb.agent_id AS sender_agent_id, (ir.message_id IS NOT NULL)::boolean AS read
 FROM messages m
 JOIN rooms r ON r.id = m.room_id
 JOIN projects p ON p.id = r.project_id

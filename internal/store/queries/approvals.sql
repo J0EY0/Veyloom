@@ -52,8 +52,9 @@ SELECT * FROM approvals WHERE turn_id = $1 ORDER BY created_at;
 
 -- name: ListPendingApprovals :many
 -- Every request waiting for a person, across every room, oldest first,
--- with the names the "for me" page shows so it needs no second lookup.
-SELECT sqlc.embed(ap), mb.display_name AS member_name, p.name AS project_name
+-- with the names the "for me" page shows so it needs no second lookup, and
+-- the agent behind the member (its face).
+SELECT sqlc.embed(ap), mb.display_name AS member_name, mb.agent_id AS member_agent_id, p.name AS project_name
 FROM approvals ap
 JOIN members mb ON mb.id = ap.member_id
 JOIN rooms r ON r.id = ap.room_id

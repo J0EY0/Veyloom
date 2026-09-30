@@ -162,6 +162,24 @@ func TestApprovals_NonJSONInputIsStoredAsString(t *testing.T) {
 	}
 }
 
+// The inbox shows who asks as its agent's face, so a pending request names
+// the agent behind the member as well as the member.
+func TestListPendingApprovals_NamesTheAgent(t *testing.T) {
+	f := newApprovalFixture(t)
+	ctx := context.Background()
+	a, err := f.s.CreateApproval(ctx, f.newApproval("r1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pending, err := f.s.ListPendingApprovals(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].ID != a.ID || pending[0].AgentID != f.agent.ID || pending[0].MemberName != f.member.DisplayName {
+		t.Errorf("pending = %+v, want the request with agent %s", pending, f.agent.ID)
+	}
+}
+
 func TestApprovals_ListAndResolve(t *testing.T) {
 	f := newApprovalFixture(t)
 	ctx := context.Background()

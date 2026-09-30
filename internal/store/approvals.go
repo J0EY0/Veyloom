@@ -410,7 +410,10 @@ func (s *Store) ListPendingRoomApprovals(ctx context.Context, roomID string) ([]
 // "for me" page shows next to it.
 type PendingApproval struct {
 	Approval
-	MemberName  string `json:"member_name"`
+	MemberName string `json:"member_name"`
+	// AgentID is the agent behind the member, whose face the inbox shows;
+	// empty once that agent is gone.
+	AgentID     string `json:"agent_id,omitempty"`
 	ProjectName string `json:"project_name"`
 }
 
@@ -427,7 +430,7 @@ func (s *Store) ListPendingApprovals(ctx context.Context) ([]PendingApproval, er
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, PendingApproval{Approval: a, MemberName: row.MemberName, ProjectName: row.ProjectName})
+		out = append(out, PendingApproval{Approval: a, MemberName: row.MemberName, AgentID: uuidString(row.MemberAgentID), ProjectName: row.ProjectName})
 	}
 	return out, nil
 }

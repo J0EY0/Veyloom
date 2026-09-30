@@ -344,6 +344,35 @@ func TestListThreadMessagesBefore_LatestChronological(t *testing.T) {
 	}
 }
 
+// An agent's mention names the agent behind its member, which the inbox
+// draws as its face; a person's names none.
+func TestListUserMentions_NamesTheAgentThatSaidIt(t *testing.T) {
+	f := newTurnFixture(t)
+	ctx := context.Background()
+	mention := []store.Mention{{Kind: store.MentionUser, ID: f.user.ID}}
+	said, err := f.s.CreateMessage(ctx, store.NewMessage{RoomID: f.room.ID, SenderKind: store.SenderAgent, MemberID: f.member.ID, Body: "@alice done", Mentions: mention})
+	if err != nil {
+		t.Fatal(err)
+	}
+	asked, err := f.s.CreateMessage(ctx, store.NewMessage{RoomID: f.room.ID, SenderKind: store.SenderUser, UserID: f.user.ID, Body: "@alice note to self", Mentions: mention})
+	if err != nil {
+		t.Fatal(err)
+	}
+	items, err := f.s.ListUserMentions(ctx, f.user.ID, 0, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(items) != 2 || items[0].ID != asked.ID || items[1].ID != said.ID {
+		t.Fatalf("inbox = %+v", items)
+	}
+	if items[1].SenderAgentID != f.agent.ID || items[1].SenderName != f.member.DisplayName {
+		t.Errorf("the agent's mention: %+v, want agent %s", items[1], f.agent.ID)
+	}
+	if items[0].SenderAgentID != "" {
+		t.Errorf("a person's mention names agent %q", items[0].SenderAgentID)
+	}
+}
+
 func TestListUserMentions_AcrossRoomsNewestFirst(t *testing.T) {
 	f := newChatFixture(t)
 	ctx := context.Background()

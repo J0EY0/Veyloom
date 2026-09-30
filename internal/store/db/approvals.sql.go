@@ -227,7 +227,7 @@ func (q *Queries) GetApproval(ctx context.Context, id pgtype.UUID) (Approval, er
 }
 
 const listPendingApprovals = `-- name: ListPendingApprovals :many
-SELECT ap.id, ap.turn_id, ap.room_id, ap.thread_id, ap.member_id, ap.request_id, ap.kind, ap.payload, ap.similar_offer, ap.scope, ap.status, ap.message, ap.message_id, ap.decided_by, ap.reviewer, ap.answer, ap.created_at, ap.decided_at, mb.display_name AS member_name, p.name AS project_name
+SELECT ap.id, ap.turn_id, ap.room_id, ap.thread_id, ap.member_id, ap.request_id, ap.kind, ap.payload, ap.similar_offer, ap.scope, ap.status, ap.message, ap.message_id, ap.decided_by, ap.reviewer, ap.answer, ap.created_at, ap.decided_at, mb.display_name AS member_name, mb.agent_id AS member_agent_id, p.name AS project_name
 FROM approvals ap
 JOIN members mb ON mb.id = ap.member_id
 JOIN rooms r ON r.id = ap.room_id
@@ -237,13 +237,15 @@ ORDER BY ap.created_at
 `
 
 type ListPendingApprovalsRow struct {
-	Approval    Approval
-	MemberName  string
-	ProjectName string
+	Approval      Approval
+	MemberName    string
+	MemberAgentID pgtype.UUID
+	ProjectName   string
 }
 
 // Every request waiting for a person, across every room, oldest first,
-// with the names the "for me" page shows so it needs no second lookup.
+// with the names the "for me" page shows so it needs no second lookup, and
+// the agent behind the member (its face).
 func (q *Queries) ListPendingApprovals(ctx context.Context) ([]ListPendingApprovalsRow, error) {
 	rows, err := q.db.Query(ctx, listPendingApprovals)
 	if err != nil {
@@ -273,6 +275,7 @@ func (q *Queries) ListPendingApprovals(ctx context.Context) ([]ListPendingApprov
 			&i.Approval.CreatedAt,
 			&i.Approval.DecidedAt,
 			&i.MemberName,
+			&i.MemberAgentID,
 			&i.ProjectName,
 		); err != nil {
 			return nil, err
