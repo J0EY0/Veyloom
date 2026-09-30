@@ -199,8 +199,19 @@ func (r *ClaudeRunner) args(spec TurnSpec) []string {
 	if r.cfg.StreamPartials {
 		args = append(args, "--include-partial-messages")
 	}
-	if spec.SystemPrompt != "" {
-		args = append(args, "--append-system-prompt", spec.SystemPrompt)
+	// A person's own skills of the names of the plugin's, which are the
+	// ones installed: the run is told to use the plugin's, and the
+	// person's are refused if called (claudeSkillClashes).
+	var clashes []string
+	if spec.SkillDir != "" {
+		clashes = claudeSkillClashes(spec.Skills, spec.WorkDir)
+	}
+	system := spec.SystemPrompt
+	if len(clashes) > 0 {
+		system = strings.TrimSpace(system + "\n\n" + claudeSkillNote(clashes))
+	}
+	if system != "" {
+		args = append(args, "--append-system-prompt", system)
 	}
 	if spec.Model != "" {
 		args = append(args, "--model", spec.Model)
@@ -229,9 +240,22 @@ func (r *ClaudeRunner) args(spec TurnSpec) []string {
 	// as settings, a JSON list added to the person's own, not on
 	// --allowedTools: the CLI splits that on commas and spaces outside
 	// parentheses, and loses count in a rule with parentheses of its own.
-	// A --settings among the agent's extra_args comes later and wins.
+	// With them, the rules refusing the person's own skills of the
+	// plugin's names. A --settings among the agent's extra_args comes later
+	// and wins.
+	permissions := map[string]any{}
 	if len(spec.AllowedRules) > 0 {
-		settings, _ := json.Marshal(map[string]any{"permissions": map[string]any{"allow": spec.AllowedRules}})
+		permissions["allow"] = spec.AllowedRules
+	}
+	if len(clashes) > 0 {
+		denies := make([]string, len(clashes))
+		for i, name := range clashes {
+			denies[i] = "Skill(" + name + ")"
+		}
+		permissions["deny"] = denies
+	}
+	if len(permissions) > 0 {
+		settings, _ := json.Marshal(map[string]any{"permissions": permissions})
 		args = append(args, "--settings", string(settings))
 	}
 	return append(args, optStrings(spec.Options, "extra_args")...)

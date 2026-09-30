@@ -80,33 +80,24 @@ func (c *checker) add(rule, format string, args ...any) {
 	c.problems = append(c.problems, Problem{c.path, rule, fmt.Sprintf(format, args...)})
 }
 
-// okfKeys are the frontmatter keys OKF v0.2 defines; skillKeys the ones a
-// skill page adds from Agent Skills.
-var (
-	okfKeys = []string{
-		KeyType, KeyTitle, KeyDescription, KeyResource, KeyTags, KeySources, KeyUsageWindow,
-		KeyGenerated, KeyVerified, KeyStatus, KeyStaleAfter,
-		"runtime", "parameters", "computation", "executor", "attester",
-	}
-	skillKeys = []string{KeyName, KeyLicense, KeyCompatibility, KeyMetadata, KeyAllowedTools}
-)
+// okfKeys are the frontmatter keys OKF v0.2 defines.
+var okfKeys = []string{
+	KeyType, KeyTitle, KeyDescription, KeyResource, KeyTags, KeySources, KeyUsageWindow,
+	KeyGenerated, KeyVerified, KeyStatus, KeyStaleAfter,
+	"runtime", "parameters", "computation", "executor", "attester",
+}
 
-// KeepToSpec leaves a document read from elsewhere the fields OKF v0.2
-// defines, and on a skill's SKILL.md the ones Agent Skills adds. A field of
-// neither that holds one value moves into a skill's metadata, where Agent
-// Skills lets a client keep its own; anything else is dropped. It returns
-// the keys dropped.
-func (d *Document) KeepToSpec(skill bool) []string {
+// KeepToSpec leaves a page read from elsewhere the fields OKF v0.2
+// defines, and returns the keys it dropped. Not for a skill's SKILL.md,
+// whose other fields are the skill's settings for runtimes and stay as
+// they are (SkillSettings).
+func (d *Document) KeepToSpec() []string {
 	var dropped []string
 	for _, k := range d.Keys() {
-		if slices.Contains(okfKeys, k) || (skill && slices.Contains(skillKeys, k)) {
+		if slices.Contains(okfKeys, k) {
 			continue
 		}
-		if v, ok := d.String(k); ok && skill && v != "" {
-			d.SetMetadata(k, v)
-		} else {
-			dropped = append(dropped, k)
-		}
+		dropped = append(dropped, k)
 		d.Delete(k)
 	}
 	return dropped
@@ -120,7 +111,11 @@ func (c *checker) strict(d *Document) {
 			c.add("key", "%s appears twice", k)
 		}
 		seen[k] = true
-		if !slices.Contains(okfKeys, k) && !(isSkill && slices.Contains(skillKeys, k)) {
+		// A skill's SKILL.md carries fields for runtimes besides OKF's:
+		// Agent Skills' own, and what runtimes add to it
+		// (disable-model-invocation, hooks and the like), as the person
+		// who wrote the skill set them (docs/design.md 5.10).
+		if !slices.Contains(okfKeys, k) && !isSkill {
 			c.add("key", "%s is not a field of OKF v0.2; Veyloom writes only the fields the spec defines", k)
 		}
 	}

@@ -80,7 +80,7 @@ func (r *turnRunner) start(ctx context.Context, req protocol.StartTurn) {
 	// The skills it is given, where its runtime loads them from. A turn
 	// whose skills could not be written goes without, and people are told.
 	if req.Spec.Skills != nil && r.skillRoot != "" {
-		taken := runtime.UserSkillNames(req.Spec.WorkDir)
+		taken := runtime.ClashingSkillNames(req.Runtime, req.Spec.WorkDir)
 		dir, err := runtime.WriteSkills(r.skillRoot, req.Spec.Skills, taken)
 		if err != nil {
 			_ = r.conn.Send(ctx, outbound(req.TurnID, runtime.Event{
@@ -471,9 +471,9 @@ func renamedSkills(aliases map[string]string) string {
 	for i, name := range names {
 		names[i] = name + " goes by " + aliases[name]
 	}
-	whose := "as a skill of your own on this machine has its name"
+	whose := "as another skill on this machine has its name, one of your own or one the runtime comes with"
 	if len(names) > 1 {
-		whose = "as skills of your own on this machine have their names"
+		whose = "as other skills on this machine have their names, of your own or ones the runtime comes with"
 	}
 	return "In this turn the skill library's " + strings.Join(names, " and ") + ", " + whose + "."
 }

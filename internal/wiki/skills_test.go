@@ -3,6 +3,7 @@ package wiki
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -92,7 +93,7 @@ func TestProjectSkill(t *testing.T) {
 	os.MkdirAll(filepath.Join(dir, "scripts"), 0o755)
 	os.WriteFile(filepath.Join(dir, "scripts", "run.sh"), []byte("#!/bin/sh\ngo test ./...\n"), 0o755)
 	os.WriteFile(filepath.Join(dir, ".secret"), []byte("hidden"), 0o644)
-	os.WriteFile(filepath.Join(dir, "huge.bin"), make([]byte, maxSkillFile+1), 0o644)
+	sparse(t, filepath.Join(dir, "huge.bin"), MaxSkillFile+1)
 
 	got, err := b.ProjectSkill("go-table-tests")
 	if err != nil {
@@ -120,6 +121,102 @@ func TestProjectSkill(t *testing.T) {
 	}
 	if !strings.Contains(readFile(t, b, SkillPath("go-table-tests")), "type: Skill") {
 		t.Error("the page in the library keeps OKF's keys")
+	}
+}
+
+// What a runtime reads, and a person takes elsewhere, is the skill as it
+// is anywhere else: its references plain markdown that link from where
+// they are, not pages of the library linking from its root.
+func TestProjectSkill_ReferencesAsTheyWere(t *testing.T) {
+	b := openLibrary(t)
+	w := writer(t, b, okf.Human("alice"))
+	s := skill("relay-word", "", "Use when asked for the relay word.", "The word is kept in [the guide](/skills/relay-word/references/guide.md), see [a pattern](/patterns/relays.md).")
+	if _, err := w.Create(SkillPath("relay-word"), s); err != nil {
+		t.Fatal(err)
+	}
+	guide := okf.New("Reference")
+	guide.SetString(okf.KeyTitle, "Guide")
+	guide.SetBody("# Guide\n\nRead [the list](/skills/relay-word/references/list.md#words), then [the skill](/skills/relay-word/SKILL.md) again, or [elsewhere](/patterns/relays.md).")
+	if _, err := w.Create("/skills/relay-word/references/guide.md", guide); err != nil {
+		t.Fatal(err)
+	}
+	list := okf.New("Reference")
+	list.SetString(okf.KeyTitle, "List")
+	list.SetBody("The relay word is FERN-77.")
+	if _, err := w.Create("/skills/relay-word/references/list.md", list); err != nil {
+		t.Fatal(err)
+	}
+	got, err := b.ProjectSkill("relay-word")
+	if err != nil {
+		t.Fatal(err)
+	}
+	main := string(got.Files["SKILL.md"])
+	if !strings.Contains(main, "](references/guide.md)") || !strings.Contains(main, "](/patterns/relays.md)") {
+		t.Errorf("SKILL.md links into its folder from there:\n%s", main)
+	}
+	want := "# Guide\n\nRead [the list](list.md#words), then [the skill](../SKILL.md) again, or [elsewhere](/patterns/relays.md).\n"
+	if got := string(got.Files["references/guide.md"]); got != want {
+		t.Errorf("the guide:\n%q\nwant\n%q", got, want)
+	}
+	if got := string(got.Files["references/list.md"]); got != "The relay word is FERN-77.\n" {
+		t.Errorf("the list: %q", got)
+	}
+	if !strings.Contains(readFile(t, b, "/skills/relay-word/references/guide.md"), "](/skills/relay-word/references/list.md#words)") {
+		t.Error("the library's page links from its root")
+	}
+}
+
+// sparse makes a file of size bytes that takes no room on disk.
+func sparse(t *testing.T, p string, size int64) {
+	t.Helper()
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := f.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A skill too much for a turn to carry stays behind, whole: too many
+// files, or too much in all.
+func TestProjectSkill_Limits(t *testing.T) {
+	b := openLibrary(t)
+	w := writer(t, b, okf.Human("alice"))
+	for _, name := range []string{"many", "heavy"} {
+		if _, err := w.Create(SkillPath(name), skill(name, "", "Use when testing limits.", "x")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	many := filepath.Join(b.Dir(), "skills", "many", "data")
+	os.MkdirAll(many, 0o755)
+	for i := range MaxSkillFiles {
+		os.WriteFile(filepath.Join(many, fmt.Sprintf("f%03d.txt", i)), []byte("x"), 0o644)
+	}
+	if _, err := b.ProjectSkill("many"); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("too many files: %v", err)
+	}
+	heavy := filepath.Join(b.Dir(), "skills", "heavy", "assets")
+	os.MkdirAll(heavy, 0o755)
+	for i := range int(MaxSkillBytes/MaxSkillFile) + 1 {
+		sparse(t, filepath.Join(heavy, fmt.Sprintf("f%d.bin", i)), MaxSkillFile)
+	}
+	if _, err := b.ProjectSkill("heavy"); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("too much in all: %v", err)
+	}
+}
+
+func TestRelativePath(t *testing.T) {
+	for _, tc := range []struct{ dir, to, want string }{
+		{"/skills/x", "/skills/x/references/a.md", "references/a.md"},
+		{"/skills/x/references", "/skills/x/SKILL.md", "../SKILL.md"},
+		{"/skills/x/references", "/skills/x/references/b.md", "b.md"},
+		{"/skills/x/references/deep", "/skills/x/scripts/run.sh", "../../scripts/run.sh"},
+	} {
+		if got := relativePath(tc.dir, tc.to); got != tc.want {
+			t.Errorf("relativePath(%q, %q) = %q, want %q", tc.dir, tc.to, got, tc.want)
+		}
 	}
 }
 

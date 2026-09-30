@@ -443,6 +443,7 @@ func (p *claudeParser) user(msg *claudeMessage) {
 			Tool:   p.toolNames[block.ToolUseID],
 			CallID: block.ToolUseID,
 			Text:   truncate(toolResultText(block.Content), p.cfg.MaxEventBytes),
+			Failed: block.IsError,
 		})
 		if path, ok := p.edits[block.ToolUseID]; ok {
 			delete(p.edits, block.ToolUseID)

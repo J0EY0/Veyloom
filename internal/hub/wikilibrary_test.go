@@ -3,6 +3,7 @@ package hub
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -92,6 +93,52 @@ func (l *loop) install(name string, member store.Member) {
 	l.t.Helper()
 	if _, err := l.h.InstallSkill(l.ctx, name, member.AgentID, true); err != nil {
 		l.t.Fatal(err)
+	}
+}
+
+// A skill's settings for runtimes are the person's (docs/design.md 5.15):
+// an agent improving a skill installed for it changes its text, not what
+// a runtime lets the skill do or keeps it from.
+func TestLoop_SkillSettingsArePeoples(t *testing.T) {
+	l, dir := wikiLoop(t)
+	home := l.project()
+	src := skillFolder(t, "release-notes", map[string]string{
+		"SKILL.md": "---\nname: release-notes\ndescription: Use when writing release notes.\nallowed-tools: Bash(git log:*)\ndisable-model-invocation: true\n---\n\nGroup the changes by kind.\n",
+	})
+	if _, err := l.h.ImportSkill(l.ctx, src, home.ID, l.user.ID); err != nil {
+		t.Fatal(err)
+	}
+	patch := func(target, content string) map[string]any {
+		return call(runtime.WikiToolPatch, map[string]any{"scope": "library", "path": "/skills/release-notes/SKILL.md", "reason": "better",
+			"edits": []any{map[string]any{"op": "replace", "target": target, "content": content}}})
+	}
+	editor := l.member("Editor", map[string]any{"tool_calls": []any{
+		patch("disable-model-invocation: true", "disable-model-invocation: false"),
+		patch("allowed-tools: Bash(git log:*)", "allowed-tools: Bash(*)"),
+		patch("disable-model-invocation: true", "disable-model-invocation: true\nhooks:\n  Stop: []"),
+		patch("Group the changes by kind.", "Group the changes by kind, newest first."),
+	}})
+	l.install("release-notes", editor)
+	asked := l.say("@Editor improve the release notes skill", "", editor)
+	l.waitTurns(1, store.TurnDone, "Editor's turn")
+	answer := l.root(l.topic(asked)).Body
+	if n := strings.Count(answer, "are set by people"); n != 3 {
+		t.Errorf("the three changes to its settings are refused, %d were:\n%s", n, answer)
+	}
+	if !strings.Contains(answer, "Changed the skill release-notes") {
+		t.Errorf("the change to its text goes through:\n%s", answer)
+	}
+	data, err := os.ReadFile(filepath.Join(dir, "library", "skills", "release-notes", "SKILL.md"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"disable-model-invocation: true", "allowed-tools: Bash(git log:*)", "newest first"} {
+		if !strings.Contains(string(data), want) {
+			t.Errorf("SKILL.md lacks %q:\n%s", want, data)
+		}
+	}
+	if strings.Contains(string(data), "hooks") {
+		t.Errorf("no hook came in:\n%s", data)
 	}
 }
 
@@ -217,6 +264,34 @@ func TestSkillsIn(t *testing.T) {
 	}
 	if skillsIn(runtime.Event{Kind: runtime.EventToolCall, Tool: "Skill", Input: `{"skill":"veyloom:go"}`}, nil) != nil {
 		t.Error("a turn given no skills uses none")
+	}
+}
+
+// A call reaching for a skill counts once the runtime carried it out:
+// Claude Code refuses a skill kept from the model, and says so in the
+// call's result.
+func TestNoteSkillUse(t *testing.T) {
+	m := &TurnManager{}
+	at := &activeTurn{spec: runtime.TurnSpec{Skills: &runtime.SkillSet{Hash: "0123456789abcdef", Skills: []runtime.Skill{{Name: "gate-word"}, {Name: "go"}}}}}
+	events := []runtime.Event{
+		{Kind: runtime.EventToolCall, Tool: "Skill", CallID: "c1", Input: `{"skill":"gate-word"}`},
+		{Kind: runtime.EventToolCall, Tool: "read", CallID: "c2", Input: `{"path":"/t/skills/0123456789abcdef/skills/go/SKILL.md"}`},
+	}
+	for _, ev := range events {
+		m.noteSkillUse(at, ev)
+	}
+	if len(at.skillsUsed) != 0 {
+		t.Errorf("nothing is used before the results: %v", at.skillsUsed)
+	}
+	m.noteSkillUse(at, runtime.Event{Kind: runtime.EventToolResult, Tool: "Skill", CallID: "c1", Failed: true, Text: "cannot be used with Skill tool due to disable-model-invocation"})
+	m.noteSkillUse(at, runtime.Event{Kind: runtime.EventToolResult, Tool: "read", CallID: "c2", Text: "The go skill"})
+	if !slices.Equal(at.skillsUsed, []string{"go"}) || len(at.skillCalls) != 0 {
+		t.Errorf("used %v, waiting %v; want only the call that went through", at.skillsUsed, at.skillCalls)
+	}
+	// A runtime that does not name its calls has them count at once.
+	m.noteSkillUse(at, runtime.Event{Kind: runtime.EventToolCall, Tool: "Skill", Input: `{"skill":"veyloom:gate-word"}`})
+	if !slices.Equal(at.skillsUsed, []string{"go", "gate-word"}) {
+		t.Errorf("used %v", at.skillsUsed)
 	}
 }
 

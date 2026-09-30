@@ -1,9 +1,12 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -200,6 +203,35 @@ func (f *fakeWikis) ImportSkill(ctx context.Context, folder, team, userID string
 		return hub.WikiPageView{}, store.Invalid("folderNotAbsolute", store.Params{"path": folder}, "%s is not a full path", folder)
 	}
 	return f.LibraryPage(ctx, "/skills/go/SKILL.md")
+}
+
+func (f *fakeWikis) LocalSkills(context.Context) ([]hub.LocalSkill, error) {
+	f.record("local skills")
+	return []hub.LocalSkill{{Name: "pdf", Description: "Use with PDFs.", Folder: "/home/me/.agents/skills/pdf", Where: "~/.agents/skills"}}, nil
+}
+
+func (f *fakeWikis) UploadSkills(_ context.Context, up hub.SkillUpload) ([]hub.UploadedSkill, error) {
+	if up.Zip != nil {
+		f.record("upload zip %s (%d bytes) for %q by %s", up.Name, up.ZipSize, up.Team, up.UserID)
+		return []hub.UploadedSkill{{Name: "go", Path: "/skills/go/SKILL.md"}}, nil
+	}
+	var paths []string
+	for _, file := range up.Files {
+		rc, _ := file.Open()
+		data, _ := io.ReadAll(rc)
+		rc.Close()
+		paths = append(paths, file.Path+"="+string(data))
+	}
+	f.record("upload folder %s %v for %q by %s", up.Name, paths, up.Team, up.UserID)
+	return []hub.UploadedSkill{{Name: "go", Code: "skillExists", Params: store.Params{"name": "go"}, Message: "the skill library has a skill go already"}}, nil
+}
+
+func (f *fakeWikis) ExportSkill(_ context.Context, name string) ([]byte, error) {
+	f.record("export %s", name)
+	if name != "go" {
+		return nil, store.ErrNotFound
+	}
+	return []byte("PK zip"), nil
 }
 
 func (f *fakeWikis) InstallSkill(ctx context.Context, name, agentID string, installed bool) ([]store.AgentRef, error) {
@@ -424,6 +456,10 @@ func TestLibrary(t *testing.T) {
 	if rec := do(t, handler, http.MethodPost, "/api/v1/library/rollback", `{"user_id":"u1","name":"go","reason":"longer notes"}`, &page); rec.Code != http.StatusOK || page.Page.Path != "/skills/go/SKILL.md" {
 		t.Errorf("rollback: %d %+v", rec.Code, page)
 	}
+	if rec := do(t, handler, http.MethodGet, "/api/v1/library/export?name=go", "", nil); rec.Code != http.StatusOK ||
+		rec.Header().Get("Content-Type") != "application/zip" || rec.Header().Get("Content-Disposition") != `attachment; filename=go.zip` || rec.Body.String() != "PK zip" {
+		t.Errorf("export: %d %v %q", rec.Code, rec.Header(), rec.Body)
+	}
 	var installs SkillInstallsResponse
 	if do(t, handler, http.MethodPost, "/api/v1/library/install", `{"name":"go","agent_id":"ag1","installed":true}`, &installs); len(installs.Installed) != 1 || installs.Installed[0].Name != "Coder" {
 		t.Errorf("installed %+v", installs)
@@ -433,7 +469,7 @@ func TestLibrary(t *testing.T) {
 	}
 	want := []string{`uses go 5`, `library search "table" 200`, `library history "/skills/go/SKILL.md" 200`, "library revert abc by u1",
 		"library verify /skills/go/SKILL.md by u1", "transfer go to p2 by u1", `import /skills/go for "p2" by u1`,
-		"rollback go by u1: longer notes", "install go for ag1: true", "install go for ag1: false"}
+		"rollback go by u1: longer notes", "export go", "install go for ag1: true", "install go for ag1: false"}
 	if fmt.Sprint(fake.asked) != fmt.Sprint(want) {
 		t.Errorf("asked %q, want %q", fake.asked, want)
 	}
@@ -450,12 +486,67 @@ func TestLibrary(t *testing.T) {
 		{http.MethodPost, "/api/v1/library/import", `{"user_id":"u1"}`, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/library/import", `{"user_id":"u1","folder":"relative"}`, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/library/install", `{"name":"go"}`, http.StatusBadRequest},
+		{http.MethodGet, "/api/v1/library/export", "", http.StatusBadRequest},
+		{http.MethodGet, "/api/v1/library/export?name=nope", "", http.StatusNotFound},
 		{http.MethodPost, "/api/v1/library/rollback", `{"user_id":"u1"}`, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/library/rollback", `{"user_id":"u1","name":"steady"}`, http.StatusNotFound},
 		{http.MethodPost, "/api/v1/library/install", `{"name":"nope","agent_id":"ag1","installed":true}`, http.StatusNotFound},
 	} {
 		if rec := do(t, handler, tc.method, tc.path, tc.body, nil); rec.Code != tc.status {
 			t.Errorf("%s %s %s = %d, want %d: %s", tc.method, tc.path, tc.body, rec.Code, tc.status, rec.Body)
+		}
+	}
+}
+
+// Skills from this machine's folders, and from the browser: a zip, or a
+// folder's files with their paths beside them.
+func TestLibraryLocalAndUpload(t *testing.T) {
+	handler, fake := wikiHandler()
+	var local LocalSkillsResponse
+	if do(t, handler, http.MethodGet, "/api/v1/library/local", "", &local); len(local.Skills) != 1 || local.Skills[0].Where != "~/.agents/skills" {
+		t.Errorf("local %+v", local)
+	}
+
+	send := func(fields [][2]string, files [][2]string) *httptest.ResponseRecorder {
+		t.Helper()
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		for _, f := range fields {
+			mw.WriteField(f[0], f[1])
+		}
+		for _, f := range files {
+			part, _ := mw.CreateFormFile("file", f[0])
+			part.Write([]byte(f[1]))
+		}
+		mw.Close()
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/library/upload", &body)
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, req)
+		return rec
+	}
+	var uploaded UploadSkillsResponse
+	rec := send([][2]string{{"user_id", "u1"}, {"project_id", "p2"}}, [][2]string{{"go.zip", "PK zip"}})
+	if json.Unmarshal(rec.Body.Bytes(), &uploaded); rec.Code != http.StatusOK || len(uploaded.Skills) != 1 || uploaded.Skills[0].Path != "/skills/go/SKILL.md" {
+		t.Errorf("zip: %d %s", rec.Code, rec.Body)
+	}
+	// A folder: the paths go in fields of their own, a file name keeping
+	// no folders.
+	rec = send([][2]string{{"user_id", "u1"}, {"path", "go/SKILL.md"}, {"path", "go/scripts/run.sh"}}, [][2]string{{"SKILL.md", "skill"}, {"run.sh", "script"}})
+	if json.Unmarshal(rec.Body.Bytes(), &uploaded); rec.Code != http.StatusOK || uploaded.Skills[0].Code != "skillExists" {
+		t.Errorf("folder: %d %s", rec.Code, rec.Body)
+	}
+	want := []string{"local skills", `upload zip go.zip (6 bytes) for "p2" by u1`, `upload folder go [go/SKILL.md=skill go/scripts/run.sh=script] for "" by u1`}
+	if fmt.Sprint(fake.asked) != fmt.Sprint(want) {
+		t.Errorf("asked %q, want %q", fake.asked, want)
+	}
+	for name, rec := range map[string]*httptest.ResponseRecorder{
+		"no files":                send([][2]string{{"user_id", "u1"}}, nil),
+		"paths that do not match": send([][2]string{{"user_id", "u1"}, {"path", "a/SKILL.md"}}, [][2]string{{"SKILL.md", "x"}, {"b.md", "y"}}),
+		"no person":               send(nil, [][2]string{{"go.zip", "PK"}}),
+	} {
+		if rec.Code != http.StatusBadRequest {
+			t.Errorf("%s: %d %s", name, rec.Code, rec.Body)
 		}
 	}
 }

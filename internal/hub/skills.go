@@ -60,9 +60,8 @@ func (m *TurnManager) librarySkills(ctx context.Context, agent store.Agent) []ru
 	return m.skillsOf(b, agent.Runtime, func(name string) bool { return slices.Contains(agent.Skills, name) })
 }
 
-// skillsOf are the skills of b a runtime may load that keep keeps: as
-// Agent Skills has them, their text files only, a runtime reading skills
-// and the set travelling as JSON.
+// skillsOf are the skills of b a runtime may load that keep keeps, as
+// Agent Skills has them: their text files as text, the rest as they are.
 func (m *TurnManager) skillsOf(b *wiki.Bundle, runtimeName string, keep func(string) bool) []runtime.Skill {
 	var out []runtime.Skill
 	for _, s := range b.Skills(runtimeName) {
@@ -75,34 +74,83 @@ func (m *TurnManager) skillsOf(b *wiki.Bundle, runtimeName string, keep func(str
 			m.logger.Warn("project a skill", "skill", name, "err", err)
 			continue
 		}
-		files := make(map[string]string, len(projected.Files))
+		skill := runtime.Skill{Name: name, Files: map[string]string{}}
 		for p, data := range projected.Files {
 			if utf8.Valid(data) {
-				files[p] = string(data)
+				skill.Files[p] = string(data)
+				continue
 			}
+			if skill.Blobs == nil {
+				skill.Blobs = map[string][]byte{}
+			}
+			skill.Blobs[p] = data
 		}
-		out = append(out, runtime.Skill{Name: name, Files: files})
+		out = append(out, skill)
 	}
 	return out
 }
 
 // skillHash names a set by what it gives, which skill as which, each
-// file and its text, so a machine that wrote it before need not again.
+// file and what is in it, so a machine that wrote it before need not again.
 func skillHash(skills []runtime.Skill) string {
 	hash := sha256.New()
+	write := func(parts ...string) {
+		for _, part := range parts {
+			hash.Write([]byte(strconv.Itoa(len(part)) + ":" + part))
+		}
+	}
 	for _, s := range skills {
 		scope := "library"
 		if s.Builtin {
 			scope = "builtin"
 		}
-		paths := slices.Sorted(maps.Keys(s.Files))
-		for _, p := range paths {
-			for _, part := range []string{scope, s.Name, p, s.Files[p]} {
-				hash.Write([]byte(strconv.Itoa(len(part)) + ":" + part))
-			}
+		for _, p := range slices.Sorted(maps.Keys(s.Files)) {
+			write(scope, s.Name, p, s.Files[p])
+		}
+		for _, p := range slices.Sorted(maps.Keys(s.Blobs)) {
+			write(scope+" blob", s.Name, p, string(s.Blobs[p]))
 		}
 	}
 	return hex.EncodeToString(hash.Sum(nil))[:16]
+}
+
+// noteSkillUse keeps what an event of at says of the skills it used,
+// with at.mu held. A call reaching for a skill counts once its result
+// comes back and the runtime did not refuse it: Claude Code refuses a
+// skill kept from the model, and a failed read of a skill's file read
+// nothing. A runtime that does not name its calls has its call count at
+// once.
+func (m *TurnManager) noteSkillUse(at *activeTurn, ev runtime.Event) {
+	use := func(names []string) {
+		for _, name := range names {
+			if !slices.Contains(at.skillsUsed, name) {
+				at.skillsUsed = append(at.skillsUsed, name)
+			}
+		}
+	}
+	switch ev.Kind {
+	case runtime.EventToolCall:
+		names := skillsIn(ev, at.spec.Skills)
+		switch {
+		case len(names) == 0:
+		case ev.CallID == "":
+			use(names)
+		default:
+			if at.skillCalls == nil {
+				at.skillCalls = map[string][]string{}
+			}
+			at.skillCalls[ev.CallID] = names
+		}
+	case runtime.EventToolResult:
+		names, ok := at.skillCalls[ev.CallID]
+		if !ok {
+			return
+		}
+		delete(at.skillCalls, ev.CallID)
+		if !ev.Failed {
+			use(names)
+		}
+	}
 }
 
 // skillsIn names the skills of set a tool call used. Claude Code loads one

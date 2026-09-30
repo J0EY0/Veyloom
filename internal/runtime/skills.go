@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -64,9 +65,12 @@ func (s *SkillSet) names(keep func(Skill) bool) []string {
 // among them. Builtin marks one of Veyloom's own, which every agent has
 // (design.md 5.23.6), apart from those installed from the library.
 type Skill struct {
-	Builtin bool              `json:"builtin,omitempty"`
-	Name    string            `json:"name"`
-	Files   map[string]string `json:"files,omitempty"`
+	Builtin bool   `json:"builtin,omitempty"`
+	Name    string `json:"name"`
+	// Files are its text files, by their path in its folder, SKILL.md
+	// among them; Blobs the rest, fonts, images, archives, as they are.
+	Files map[string]string `json:"files,omitempty"`
+	Blobs map[string][]byte `json:"blobs,omitempty"`
 }
 
 // keptSkillSets is how many sets a machine keeps written: the one a turn
@@ -80,9 +84,9 @@ const keptSkillSets = 16
 // skill at a time. Sets written long ago are cleared away.
 //
 // A skill whose name taken holds, a person's own skill's (see
-// UserSkillNames), goes by SkillAlias instead: Pi would keep the person's
-// and leave the library's out, Codex would list the two under one name.
-// The directory's name then carries the renames too.
+// ClashingSkillNames), goes by SkillAlias instead: Pi would keep the
+// person's and leave the set's out. The directory's name then carries the
+// renames too.
 func WriteSkills(root string, set *SkillSet, taken map[string]bool) (string, error) {
 	if set == nil || len(set.Skills) == 0 {
 		return "", nil
@@ -110,7 +114,7 @@ func WriteSkills(root string, set *SkillSet, taken map[string]bool) (string, err
 		"description": "Skills Veyloom gives this turn: its own, which every agent has, and those installed from its skill library.",
 		"version":     "1.0.0",
 	}, "", "  ")
-	files := map[string]string{".claude-plugin/plugin.json": string(manifest) + "\n"}
+	files := map[string][]byte{".claude-plugin/plugin.json": append(manifest, '\n')}
 	for _, s := range set.Skills {
 		if !isSkillName(s.Name) {
 			return "", fmt.Errorf("skills: %q is no skill name", s.Name)
@@ -123,12 +127,17 @@ func WriteSkills(root string, set *SkillSet, taken map[string]bool) (string, err
 			name = alias
 		}
 		for rel, content := range s.Files {
-			clean := filepath.ToSlash(filepath.Clean(rel))
-			if clean != rel || filepath.IsAbs(rel) || strings.HasPrefix(clean, "../") || clean == ".." {
+			if !inFolder(rel) {
 				return "", fmt.Errorf("skills: %s has a file outside its folder: %q", s.Name, rel)
 			}
 			if rel == "SKILL.md" && name != s.Name {
 				content = renameSkill(content, s.Name, name)
+			}
+			files["skills/"+name+"/"+rel] = []byte(content)
+		}
+		for rel, content := range s.Blobs {
+			if !inFolder(rel) || rel == "SKILL.md" {
+				return "", fmt.Errorf("skills: %s has a file outside its folder: %q", s.Name, rel)
 			}
 			files["skills/"+name+"/"+rel] = content
 		}
@@ -139,10 +148,10 @@ func WriteSkills(root string, set *SkillSet, taken map[string]bool) (string, err
 			return "", err
 		}
 		mode := fs.FileMode(0o644)
-		if strings.HasPrefix(content, "#!") {
+		if bytes.HasPrefix(content, []byte("#!")) {
 			mode = 0o755
 		}
-		if err := os.WriteFile(path, []byte(content), mode); err != nil {
+		if err := os.WriteFile(path, content, mode); err != nil {
 			return "", err
 		}
 	}
@@ -155,6 +164,12 @@ func WriteSkills(root string, set *SkillSet, taken map[string]bool) (string, err
 	}
 	clearOldSkillSets(root, dir)
 	return dir, nil
+}
+
+// inFolder reports whether rel is a path within a skill's folder.
+func inFolder(rel string) bool {
+	clean := filepath.ToSlash(filepath.Clean(rel))
+	return clean == rel && !filepath.IsAbs(rel) && !strings.HasPrefix(clean, "../") && clean != ".."
 }
 
 // clearOldSkillSets removes all but the latest sets under root.
@@ -235,30 +250,6 @@ func isSkillName(s string) bool {
 // SkillAlias is the name a skill of the library goes by on a machine where
 // a person's own skill has its name.
 func SkillAlias(name string) string { return SkillPlugin + "-" + name }
-
-// UserSkillNames names the skills a person keeps where Codex and Pi look
-// for their own: under the home directory, and in the working directory.
-// Claude Code's are left out: the library's reach it as a plugin, under
-// the plugin's prefix, and cannot clash with them.
-func UserSkillNames(workDir string) map[string]bool {
-	var dirs []string
-	if home, err := os.UserHomeDir(); err == nil {
-		dirs = append(dirs, filepath.Join(home, ".agents", "skills"), filepath.Join(home, ".pi", "agent", "skills"), filepath.Join(home, ".codex", "skills"))
-	}
-	if workDir != "" {
-		dirs = append(dirs, filepath.Join(workDir, ".agents", "skills"), filepath.Join(workDir, ".pi", "skills"), filepath.Join(workDir, ".codex", "skills"))
-	}
-	taken := map[string]bool{}
-	for _, dir := range dirs {
-		entries, _ := os.ReadDir(dir)
-		for _, e := range entries {
-			if _, err := os.Stat(filepath.Join(dir, e.Name(), "SKILL.md")); err == nil {
-				taken[e.Name()] = true
-			}
-		}
-	}
-	return taken
-}
 
 // SkillAliases are the skills of the set that go by another name where
 // taken are a person's own, by their name: the ones taken, unless the

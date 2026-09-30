@@ -57,6 +57,9 @@ func fakeCodexMain() {
 		fmt.Fprintln(os.Stderr, "fake codex: refusing to start")
 		os.Exit(3)
 	}
+	if path := os.Getenv("VEYLOOM_FAKE_CODEX_ARGS"); path != "" {
+		os.WriteFile(path, []byte(strings.Join(os.Args[1:], "\n")), 0o600)
+	}
 	var record io.Writer = io.Discard
 	if path := os.Getenv("VEYLOOM_FAKE_CODEX_RECORD"); path != "" {
 		f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
@@ -737,6 +740,10 @@ func TestCodex_HandshakeTurnAndEvents(t *testing.T) {
 	if results := byKind[EventToolResult]; results[0].Text != "a.txt\n[exit code 1]" || results[1].Text != "1 hit\nJ0EY0/veyloom" || results[2].Text != "error: server gone" {
 		t.Errorf("tool results: %+v", results)
 	}
+	// The command that exited 1 and the call that erred failed.
+	if results := byKind[EventToolResult]; !results[0].Failed || results[1].Failed || !results[2].Failed {
+		t.Errorf("failed: %+v", results)
+	}
 	checkCallIDs(t, events)
 	if byKind[EventFileChanged][0].Path != "notes.md" {
 		t.Errorf("file change: %+v", byKind[EventFileChanged])
@@ -1338,6 +1345,31 @@ func TestCodex_SkillsComeAsAnExtraRoot(t *testing.T) {
 	if roots := sent["skills/extraRoots/set"]; len(roots) != 1 || paramsOf(t, roots[0])["extraRoots"].([]any)[0] != filepath.Join(dir, "skills") {
 		t.Errorf("skills/extraRoots/set = %+v", roots)
 	}
+	// A person's own skill of a name the set has is off for the turn; the
+	// others, and the person's configuration, stay as they are.
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, ".codex"))
+	for _, name := range []string{"release-notes", "tdd"} {
+		os.MkdirAll(filepath.Join(home, ".agents", "skills", name), 0o755)
+		os.WriteFile(filepath.Join(home, ".agents", "skills", name, "SKILL.md"), []byte("---\nname: "+name+"\n---\n"), 0o644)
+	}
+	args := filepath.Join(t.TempDir(), "args")
+	t.Setenv("VEYLOOM_FAKE_CODEX_ARGS", args)
+	set := &SkillSet{Hash: "0123456789abcdef", Skills: []Skill{{Name: "release-notes"}, {Name: "go-table-tests"}}}
+	turn, err = h.runner.StartTurn(context.Background(), TurnSpec{Prompt: "go", SkillDir: dir, Skills: set, Options: map[string]any{"extra_args": []any{"--disable", "memories"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	drain(t, turn)
+	got, _ := os.ReadFile(args)
+	argv := strings.Split(string(got), "\n")
+	personal := filepath.Join(home, ".agents", "skills", "release-notes", "SKILL.md")
+	if len(argv) != 5 || argv[0] != "app-server" || argv[1] != "-c" || argv[2] != "skills.config="+first(codexSkillsConfig(set, "")) ||
+		!strings.Contains(argv[2], tomlString(personal)) || strings.Contains(argv[2], "tdd") || argv[3] != "--disable" {
+		t.Errorf("args %q", argv)
+	}
+
 	// Without skills Codex is not asked.
 	h2 := newCodexHarness(t)
 	turn, _ = h2.runner.StartTurn(context.Background(), TurnSpec{Prompt: "go"})
@@ -1346,3 +1378,6 @@ func TestCodex_SkillsComeAsAnExtraRoot(t *testing.T) {
 		t.Errorf("no skills, no roots: %+v", roots)
 	}
 }
+
+// first is the first of two values.
+func first[A, B any](a A, _ B) A { return a }

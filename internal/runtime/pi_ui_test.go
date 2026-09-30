@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -199,5 +200,12 @@ func TestPi_FailedEditChangesNoFile(t *testing.T) {
 	}
 	if strings.Join(changed, ",") != "main.go" {
 		t.Errorf("files changed = %q, want only the edit that went through", changed)
+	}
+	var failed []bool
+	for _, ev := range eventsOf(events, EventToolResult) {
+		failed = append(failed, ev.Failed)
+	}
+	if !slices.Equal(failed, []bool{true, false}) {
+		t.Errorf("failed %v, want the failed call's result marked", failed)
 	}
 }

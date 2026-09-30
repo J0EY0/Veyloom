@@ -1,14 +1,21 @@
 package hub
 
 import (
+	"archive/zip"
+	"bytes"
 	"errors"
+	"fmt"
+	"io"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"testing"
 
+	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
+	"github.com/J0EY0/veyloom/internal/wiki"
 	"github.com/J0EY0/veyloom/internal/wiki/okf"
 )
 
@@ -57,17 +64,17 @@ func TestHub_ImportSkill(t *testing.T) {
 		}
 		return string(data)
 	}
-	// SKILL.md keeps what Agent Skills knows, and a value of its own in
-	// metadata; it links to the files under their new names, as before.
+	// SKILL.md keeps all it had, what runtimes add to Agent Skills too, as
+	// it was written; it links to the files under their new names.
 	main := read("SKILL.md")
-	for _, want := range []string{"type: Skill", "license: MIT", "allowed-tools: Bash(git log:*)", "version: \"2\"", "veyloom-team: " + home.WikiSlug,
+	for _, want := range []string{"type: Skill", "license: MIT", "allowed-tools: Bash(git log:*)", "version: \"2\"", "hooks: [a, b]", "veyloom-team: " + home.WikiSlug,
 		"](references/style-guide.md)", "](references/index-page.md)"} {
 		if !strings.Contains(main, want) {
 			t.Errorf("SKILL.md lacks %q:\n%s", want, main)
 		}
 	}
-	if strings.Contains(main, "hooks") {
-		t.Errorf("a list of no field is dropped:\n%s", main)
+	if d, err := okf.Parse([]byte(main)); err != nil || d.Metadata()["version"] != "" {
+		t.Errorf("a field stays where it was, not in metadata: %v %v", d.Metadata(), err)
 	}
 	// References are pages of the library, linked from its root.
 	guide := read("references/style-guide.md")
@@ -108,6 +115,54 @@ func TestHub_ImportSkill(t *testing.T) {
 		t.Errorf("projected %v %v", files, err)
 	}
 
+	// Taken out again it is the folder it was, in Agent Skills form: the
+	// library's own record gone, the references linking from where they
+	// are, the script still one to run.
+	zipped, err := l.h.ExportSkill(l.ctx, "release-notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, err := zip.NewReader(bytes.NewReader(zipped), int64(len(zipped)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	exported := map[string]string{}
+	for _, f := range archive.File {
+		rc, _ := f.Open()
+		data, _ := io.ReadAll(rc)
+		rc.Close()
+		exported[f.Name] = string(data)
+		if f.Name == "release-notes/scripts/draft.sh" && f.Mode().Perm() != 0o755 {
+			t.Errorf("the script's mode %v", f.Mode())
+		}
+	}
+	if names := slices.Sorted(maps.Keys(exported)); !slices.Equal(names, []string{"release-notes/SKILL.md", "release-notes/references/index-page.md", "release-notes/references/style-guide.md", "release-notes/scripts/draft.sh"}) {
+		t.Errorf("exported %v", names)
+	}
+	out := exported["release-notes/SKILL.md"]
+	for _, gone := range []string{"type:", "title:", "generated:"} {
+		if strings.Contains(out, gone) {
+			t.Errorf("exported SKILL.md keeps %q:\n%s", gone, out)
+		}
+	}
+	for _, want := range []string{"name: release-notes", "license: MIT", "hooks: [a, b]", "](references/style-guide.md)"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("exported SKILL.md lacks %q:\n%s", want, out)
+		}
+	}
+	if got := exported["release-notes/references/style-guide.md"]; strings.HasPrefix(got, "---") || !strings.Contains(got, "](../SKILL.md)") {
+		t.Errorf("the guide as it was:\n%s", got)
+	}
+	if got := exported["release-notes/references/index-page.md"]; strings.HasPrefix(got, "---") || !strings.Contains(got, "](style-guide.md)") {
+		t.Errorf("the list as it was:\n%s", got)
+	}
+	if _, err := l.h.ExportSkill(l.ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
+		t.Errorf("no such skill: %v", err)
+	}
+	if _, err := l.h.ExportSkill(l.ctx, "../x"); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("no skill name: %v", err)
+	}
+
 	// A folder linked to from a runtime's skills folder is read where it is.
 	linked := filepath.Join(t.TempDir(), "linked")
 	if err := os.Symlink(skillFolder(t, "real", map[string]string{
@@ -121,6 +176,12 @@ func TestHub_ImportSkill(t *testing.T) {
 		t.Errorf("its files come along: %v", err)
 	}
 
+	big := skillFolder(t, "big", map[string]string{"SKILL.md": "---\ndescription: d\n---\nx"})
+	sparseFile(t, filepath.Join(big, "data.bin"), wiki.MaxSkillFile+1)
+	heavy := skillFolder(t, "heavy", map[string]string{"SKILL.md": "---\ndescription: d\n---\nx"})
+	for i := range int(wiki.MaxSkillBytes/wiki.MaxSkillFile) + 1 {
+		sparseFile(t, filepath.Join(heavy, fmt.Sprintf("f%d.bin", i)), wiki.MaxSkillFile)
+	}
 	for _, tc := range []struct {
 		name, folder, code string
 		kind               error
@@ -133,7 +194,8 @@ func TestHub_ImportSkill(t *testing.T) {
 		{"no name to use", skillFolder(t, "Not A Name", map[string]string{"SKILL.md": "---\ndescription: d\n---\nx"}), "skillBadName", store.ErrInvalidInput},
 		{"no description", skillFolder(t, "quiet", map[string]string{"SKILL.md": "---\nname: quiet\n---\nx"}), "skillNoDescription", store.ErrInvalidInput},
 		{"there already", src, "skillExists", store.ErrConflict},
-		{"a file too big", skillFolder(t, "big", map[string]string{"SKILL.md": "---\ndescription: d\n---\nx", "data.bin": strings.Repeat("x", importFileSize+1)}), "skillFileTooBig", store.ErrInvalidInput},
+		{"a file too big", big, "skillFileTooBig", store.ErrInvalidInput},
+		{"too much in all", heavy, "skillTooLarge", store.ErrInvalidInput},
 	} {
 		_, err := l.h.ImportSkill(l.ctx, tc.folder, "", l.user.ID)
 		var p *store.Problem
@@ -142,14 +204,69 @@ func TestHub_ImportSkill(t *testing.T) {
 		}
 	}
 	many := map[string]string{"SKILL.md": "---\ndescription: d\n---\nx"}
-	for i := range importFiles + 1 {
-		many[filepath.Join("data", strings.Repeat("a", i+1)+".txt")] = "x"
+	for i := range wiki.MaxSkillFiles + 1 {
+		many[filepath.Join("data", fmt.Sprintf("f%03d.txt", i))] = "x"
 	}
 	if _, err := l.h.ImportSkill(l.ctx, skillFolder(t, "many", many), "", l.user.ID); !errors.Is(err, store.ErrInvalidInput) {
 		t.Errorf("too many files: %v", err)
 	}
 	if catalog, _ := l.h.LibraryCatalog(l.ctx); len(catalog.Pages) != 5 {
 		t.Errorf("nothing refused is left behind: %d pages", len(catalog.Pages))
+	}
+}
+
+// sparseFile makes a file of size bytes that takes no room on disk.
+func sparseFile(t *testing.T, p string, size int64) {
+	t.Helper()
+	f, err := os.Create(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err := f.Truncate(size); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A skill as people share them, past the limits the library once had:
+// more files than 64, one of more than 256 KB, and ones that are not text,
+// which reach the runtime as they are.
+func TestHub_ImportSkill_AsPeopleShareThem(t *testing.T) {
+	l, _ := wikiLoop(t)
+	files := map[string]string{"SKILL.md": "---\nname: fonts\ndescription: Use when a design needs our fonts.\n---\n\nThe fonts are in assets/.\n"}
+	for i := range 90 {
+		files[fmt.Sprintf("assets/licence-%02d.txt", i)] = "OFL"
+	}
+	folder := skillFolder(t, "fonts", files)
+	font := bytes.Repeat([]byte{0x00, 0x01, 0xff, 0xfe}, 300<<10/4)
+	if err := os.WriteFile(filepath.Join(folder, "assets", "Serif.ttf"), font, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := l.h.ImportSkill(l.ctx, folder, "", l.user.ID); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := l.h.openLibrary(l.ctx)
+	skills := l.h.turns.skillsOf(r.bundle, "claude", func(name string) bool { return name == "fonts" })
+	if len(skills) != 1 || len(skills[0].Files) != 91 || !bytes.Equal(skills[0].Blobs["assets/Serif.ttf"], font) || skills[0].Files["assets/Serif.ttf"] != "" {
+		t.Fatalf("the turn gets its %d text files and the font as it is: %d blobs", len(skills[0].Files), len(skills[0].Blobs))
+	}
+	// Taken out as a zip, the font is as it was too.
+	zipped, err := l.h.ExportSkill(l.ctx, "fonts")
+	if err != nil {
+		t.Fatal(err)
+	}
+	archive, _ := zip.NewReader(bytes.NewReader(zipped), int64(len(zipped)))
+	if f, err := archive.Open("fonts/assets/Serif.ttf"); err != nil {
+		t.Errorf("the font in the zip: %v", err)
+	} else if got, _ := io.ReadAll(f); !bytes.Equal(got, font) {
+		t.Error("the font comes out of the zip as it went in")
+	}
+	// The font is part of what names the set: another font, another set.
+	other := slices.Clone(font)
+	other[0] = 0x7f
+	changed := []runtime.Skill{{Name: "fonts", Files: skills[0].Files, Blobs: map[string][]byte{"assets/Serif.ttf": other}}}
+	if skillHash(skills) == skillHash(changed) {
+		t.Error("the set's hash takes in its blobs")
 	}
 }
 

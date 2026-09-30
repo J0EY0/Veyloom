@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 
@@ -68,6 +69,8 @@ var (
 		"Record the way of working as a Pattern page instead (write_wiki, type Pattern, scope library)")
 	errSkillRetiredByPeople = errors.New("a skill is retired by a person, who takes it off the agents or removes it. " +
 		"If it misleads, set it right with patch_wiki, or record why as a Pattern page")
+	errSkillSettingsArePeoples = errors.New("a skill's settings for runtimes (allowed-tools, disable-model-invocation, hooks and the like) are set by people: " +
+		"leave its frontmatter beyond description and metadata as it is, and change its description and instructions")
 )
 
 func (m *TurnManager) patchLibrary(ctx context.Context, at *activeTurn, tw *turnWiki, args wikiArgs) (string, error) {
@@ -109,6 +112,12 @@ func (m *TurnManager) patchLibrary(ctx context.Context, at *activeTurn, tw *turn
 	}
 	if page.Type == "Skill" && edited.Metadata()[wiki.TeamKey] != page.Team {
 		return "", errors.New("a skill's team is not changed by patching it: a person hands a skill over to another team in the skill library")
+	}
+	// What a runtime lets the skill do, or keeps it from, is the person's
+	// who installed it: a skill reaches other agents' turns, in other
+	// projects too.
+	if page.Type == "Skill" && !maps.Equal(page.Doc.SkillSettings(), edited.SkillSettings()) {
+		return "", errSkillSettingsArePeoples
 	}
 	if page.Type != edited.Type() {
 		return "", fmt.Errorf("%s stays a %s", page.Path, page.Type)

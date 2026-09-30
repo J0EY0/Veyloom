@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -533,6 +535,14 @@ func TestClaude_RefusedEditChangesNoFile(t *testing.T) {
 	if strings.Join(changed, ",") != "main.go" {
 		t.Errorf("files changed = %q, want only the edit that went through", changed)
 	}
+	// The results say which call failed.
+	var failed []bool
+	for _, ev := range eventsOf(events, EventToolResult) {
+		failed = append(failed, ev.Failed)
+	}
+	if !slices.Equal(failed, []bool{true, false}) {
+		t.Errorf("failed %v, want the refused call's result marked", failed)
+	}
 }
 
 func TestClaude_SkillsComeAsAPlugin(t *testing.T) {
@@ -540,6 +550,32 @@ func TestClaude_SkillsComeAsAPlugin(t *testing.T) {
 	args := strings.Join(r.args(TurnSpec{Prompt: "x", SkillDir: "/tools/skills/0123456789abcdef"}), " ")
 	if !strings.Contains(args, "--plugin-dir /tools/skills/0123456789abcdef") {
 		t.Errorf("args %s", args)
+	}
+	// A person's own skill of a name the plugin has, here the project's:
+	// the run is told to use the plugin's, and the person's is refused;
+	// what was allowed comes along.
+	home, work := t.TempDir(), t.TempDir()
+	t.Setenv("HOME", home)
+	own := filepath.Join(work, ".claude", "skills", "release-notes")
+	os.MkdirAll(own, 0o755)
+	os.WriteFile(filepath.Join(own, "SKILL.md"), []byte("---\nname: release-notes\n---\n"), 0o644)
+	set := &SkillSet{Hash: "0123456789abcdef", Skills: []Skill{{Name: "release-notes"}, {Name: "team-practices", Builtin: true}}}
+	argv := r.args(TurnSpec{Prompt: "x", SystemPrompt: "Be brief.", WorkDir: work, SkillDir: "/tools/skills/0123456789abcdef", Skills: set, AllowedRules: []string{"Bash(make test)"}})
+	i := slices.Index(argv, "--settings")
+	if i < 0 || argv[i+1] != `{"permissions":{"allow":["Bash(make test)"],"deny":["Skill(release-notes)"]}}` {
+		t.Errorf("args %v", argv)
+	}
+	j := slices.Index(argv, "--append-system-prompt")
+	if j < 0 || !strings.HasPrefix(argv[j+1], "Be brief.\n\n") || !strings.Contains(argv[j+1], "veyloom:release-notes") || strings.Contains(argv[j+1], "team-practices") {
+		t.Errorf("system prompt %q", argv[j+1])
+	}
+	// No clash, no rule and no word of it; nor for a set not written.
+	if argv := r.args(TurnSpec{Prompt: "x", SystemPrompt: "Be brief.", WorkDir: t.TempDir(), SkillDir: "/tools/skills/0123456789abcdef", Skills: set}); slices.Contains(argv, "--settings") ||
+		argv[slices.Index(argv, "--append-system-prompt")+1] != "Be brief." {
+		t.Errorf("no clash: %v", argv)
+	}
+	if argv := r.args(TurnSpec{Prompt: "x", WorkDir: work, Skills: set}); slices.Contains(argv, "--settings") {
+		t.Errorf("no plugin, no rules: %v", argv)
 	}
 	if args := strings.Join(r.args(TurnSpec{Prompt: "x"}), " "); strings.Contains(args, "--plugin-dir") {
 		t.Errorf("no skills, no plugin: %s", args)

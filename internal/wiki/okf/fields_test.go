@@ -1,6 +1,7 @@
 package okf
 
 import (
+	"maps"
 	"slices"
 	"strings"
 	"testing"
@@ -82,6 +83,65 @@ func TestFields_SettersStartMissingKeys(t *testing.T) {
 	out, _ := d.Bytes()
 	if !strings.Contains(string(out), "stale_after: 2026-12-31T16:00:00Z\n") {
 		t.Errorf("times are stored in UTC:\n%s", out)
+	}
+}
+
+// A skill's fields for runtimes, Agent Skills' own and what runtimes add
+// to it, reach the runtime as they were written; OKF's do not.
+func TestAgentSkill_KeepsWhatRuntimesReadAsWritten(t *testing.T) {
+	page := mustParse(t, []byte(`---
+type: Skill
+title: Release notes
+name: release-notes
+description: Use when writing release notes.
+generated: { by: human:alice, at: 2026-09-29T00:00:00Z }
+tags: [runtime-claude]
+license: MIT
+disable-model-invocation: true
+argument-hint: "[version]"
+allowed-tools: Bash(git log:*)
+hooks:
+  PreToolUse:
+    - matcher: Bash
+metadata:
+  veyloom-team: docs
+---
+
+Group the changes by kind.
+`))
+	projected := page.AgentSkill()
+	if want := []string{"name", "description", "license", "disable-model-invocation", "argument-hint", "allowed-tools", "hooks", "metadata"}; !slices.Equal(projected.Keys(), want) {
+		t.Errorf("keys %v, want %v", projected.Keys(), want)
+	}
+	out, _ := projected.Bytes()
+	for _, want := range []string{"disable-model-invocation: true\n", "matcher: Bash", "veyloom-team: docs", "Group the changes by kind."} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("projected lacks %q:\n%s", want, out)
+		}
+	}
+	if !page.Has(KeyTitle) || !page.Has(KeyGenerated) {
+		t.Error("the page itself keeps OKF's keys")
+	}
+
+	settings := page.SkillSettings()
+	if want := []string{"allowed-tools", "argument-hint", "disable-model-invocation", "hooks", "license"}; !slices.Equal(slices.Sorted(maps.Keys(settings)), want) {
+		t.Errorf("settings %v, want %v", slices.Sorted(maps.Keys(settings)), want)
+	}
+	changed := page.Clone()
+	changed.SetBody("Group the changes by kind, newest first.")
+	changed.SetString(KeyDescription, "Use when writing release notes for a version.")
+	if !maps.Equal(page.SkillSettings(), changed.SkillSettings()) {
+		t.Error("its text and description are no settings")
+	}
+	for _, edit := range []string{"disable-model-invocation: false", "hooks: {}", "allowed-tools: Bash(*)"} {
+		key, value, _ := strings.Cut(edit, ": ")
+		other := page.Clone()
+		other.Delete(key)
+		src, _ := other.Bytes()
+		edited := mustParse(t, []byte(strings.Replace(string(src), "metadata:", key+": "+value+"\nmetadata:", 1)))
+		if maps.Equal(page.SkillSettings(), edited.SkillSettings()) {
+			t.Errorf("%s changes a setting", edit)
+		}
 	}
 }
 

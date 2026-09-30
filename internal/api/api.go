@@ -106,6 +106,13 @@ type Wikis interface {
 	// People add skills to the library and install them for agents
 	// (docs/design.md 5.15).
 	ImportSkill(ctx context.Context, folder, team, userID string) (hub.WikiPageView, error)
+	// ExportSkill is a skill's folder in Agent Skills form, as a zip file.
+	ExportSkill(ctx context.Context, name string) ([]byte, error)
+	// LocalSkills are the skills people keep for their runtimes on this
+	// machine; UploadSkills imports the skills a zip or folder from the
+	// browser holds.
+	LocalSkills(ctx context.Context) ([]hub.LocalSkill, error)
+	UploadSkills(ctx context.Context, up hub.SkillUpload) ([]hub.UploadedSkill, error)
 	InstallSkill(ctx context.Context, name, agentID string, installed bool) ([]store.AgentRef, error)
 	CheckSkills(ctx context.Context, names []string) error
 	// BuiltinSkills are Veyloom's own, which every agent has
@@ -334,6 +341,9 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/v1/library/verify", h.verifyLibraryPage)
 	mux.HandleFunc("POST /api/v1/library/transfer", h.transferSkill)
 	mux.HandleFunc("POST /api/v1/library/import", h.importSkill)
+	mux.HandleFunc("GET /api/v1/library/export", h.exportSkill)
+	mux.HandleFunc("GET /api/v1/library/local", h.localSkills)
+	mux.HandleFunc("POST /api/v1/library/upload", h.uploadSkills)
 	mux.HandleFunc("POST /api/v1/library/install", h.installSkill)
 	mux.HandleFunc("GET /api/v1/skills/builtin", h.builtinSkills)
 	mux.HandleFunc("POST /api/v1/library/rollback", h.rollbackSkill)

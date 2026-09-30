@@ -190,6 +190,10 @@ type Event struct {
 	// names its calls: a result carries its call's, so calls made at once,
 	// as when Claude Code reads two files, are told apart.
 	CallID string `json:"call_id,omitempty"`
+	// Failed is set on an EventToolResult the runtime reports as an error:
+	// the call did not do what it asked, as when Claude Code refuses a
+	// skill that is kept from the model.
+	Failed bool `json:"failed,omitempty"`
 	// Seq numbers the turn's events from 1 in the order the hub takes them
 	// in; the hub sets it, a runtime leaves it alone. The transcript and
 	// the room's stream carry the same numbers, so a reader can lay what

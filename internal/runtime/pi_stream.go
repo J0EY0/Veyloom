@@ -185,7 +185,7 @@ func (p *piParser) handle(ev piEvent) {
 		if ev.IsError {
 			text = "error: " + text
 		}
-		p.emit(Event{Kind: EventToolResult, Tool: ev.ToolName, CallID: ev.ToolCallID, Text: text})
+		p.emit(Event{Kind: EventToolResult, Tool: ev.ToolName, CallID: ev.ToolCallID, Text: text, Failed: ev.IsError})
 		if path, ok := p.edits[ev.ToolCallID]; ok {
 			delete(p.edits, ev.ToolCallID)
 			if !ev.IsError {

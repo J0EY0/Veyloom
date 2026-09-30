@@ -419,6 +419,15 @@ func TestTurn_RoomToolHearsWhyTheHubHasNoAnswer(t *testing.T) {
 
 func TestTurn_SaysWhichSkillsGoByAnotherName(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
+	codexHome := t.TempDir()
+	t.Setenv("CODEX_HOME", codexHome)
+	system := filepath.Join(codexHome, "skills", ".system", "go-table-tests")
+	if err := os.MkdirAll(system, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(system, "SKILL.md"), []byte("---\nname: go-table-tests\ndescription: Codex's own\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	work := t.TempDir()
 	own := filepath.Join(work, ".agents", "skills", "release-notes")
 	if err := os.MkdirAll(own, 0o755); err != nil {
@@ -427,18 +436,34 @@ func TestTurn_SaysWhichSkillsGoByAnotherName(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(own, "SKILL.md"), []byte("---\nname: release-notes\ndescription: mine\n---\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	hubEnd, _ := connectedMachine(t, Config{ToolDir: t.TempDir()})
+	// Only Pi's turns rename: Claude Code and Codex leave the person's
+	// skill of the name out of the turn instead. The fake plays them all.
+	runners := runtime.BuiltinRunners()
+	for _, name := range []string{"pi", "codex", "claude"} {
+		runners[name] = runners["fake"]
+	}
+	w := New(Config{Name: "laptop", ToolDir: t.TempDir()}, NewDiscovery(nil, time.Second), &MemoryIdentity{}, runners)
+	hubEnd, _, _ := startMachine(t, w)
+	recvKind[protocol.Hello](t, hubEnd)
+	if err := hubEnd.Send(context.Background(), protocol.Welcome{MachineID: "w1", HeartbeatInterval: protocol.Duration(time.Hour)}); err != nil {
+		t.Fatal(err)
+	}
 	skill := func(name string) runtime.Skill {
 		return runtime.Skill{Name: name, Files: map[string]string{"SKILL.md": "---\nname: " + name + "\ndescription: the library's\n---\n"}}
 	}
 	for _, c := range []struct {
-		turn, dir string
-		want      string
+		turn, runtime, dir string
+		want               string
 	}{
-		{"t1", work, "In this turn the skill library's release-notes goes by veyloom-release-notes, as a skill of your own on this machine has its name."},
-		{"t2", t.TempDir(), ""},
+		{"t1", "pi", work, "In this turn the skill library's release-notes goes by veyloom-release-notes, as another skill on this machine has its name, one of your own or one the runtime comes with."},
+		{"t2", "pi", t.TempDir(), ""},
+		// Codex turns the person's own release-notes off rather; the
+		// go-table-tests it comes with stays on, and the library's goes by
+		// another name beside it.
+		{"t3", "codex", work, "In this turn the skill library's go-table-tests goes by veyloom-go-table-tests, as another skill on this machine has its name, one of your own or one the runtime comes with."},
+		{"t4", "claude", work, ""},
 	} {
-		req := protocol.StartTurn{TurnID: c.turn, Runtime: "fake", Spec: runtime.TurnSpec{
+		req := protocol.StartTurn{TurnID: c.turn, Runtime: c.runtime, Spec: runtime.TurnSpec{
 			Prompt: "hello", WorkDir: c.dir,
 			Skills: &runtime.SkillSet{Hash: "0123456789abcdef", Skills: []runtime.Skill{skill("release-notes"), skill("go-table-tests")}},
 		}}
@@ -463,7 +488,7 @@ func TestRenamedSkills(t *testing.T) {
 		t.Errorf("none renamed: %q", got)
 	}
 	got := renamedSkills(map[string]string{"b": "veyloom-b", "a": "veyloom-a"})
-	if want := "In this turn the skill library's a goes by veyloom-a and b goes by veyloom-b, as skills of your own on this machine have their names."; got != want {
+	if want := "In this turn the skill library's a goes by veyloom-a and b goes by veyloom-b, as other skills on this machine have their names, of your own or ones the runtime comes with."; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }

@@ -420,8 +420,8 @@ func (w *Writer) PutFile(p string, data []byte) error {
 		return fmt.Errorf("%w: %s is a page: write it as one", store.ErrInvalidInput, p)
 	case strings.Contains(p, "/."):
 		return fmt.Errorf("%w: %s has a hidden part", store.ErrInvalidInput, p)
-	case len(data) > maxSkillFile:
-		return fmt.Errorf("%w: %s is %d KB; a skill's file should stay under %d KB", store.ErrInvalidInput, p, len(data)>>10, maxSkillFile>>10)
+	case len(data) > MaxSkillFile:
+		return fmt.Errorf("%w: %s is %s MB; a skill's file should stay under %s MB", store.ErrInvalidInput, p, MB(int64(len(data))), MB(MaxSkillFile))
 	}
 	w.b.mu.Lock()
 	defer w.b.mu.Unlock()

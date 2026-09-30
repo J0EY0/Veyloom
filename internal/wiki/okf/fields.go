@@ -282,18 +282,39 @@ func (d *Document) DeleteMetadata(key string) {
 	}
 }
 
-// AgentSkill is a skill page as Agent Skills has it: the same body, and of
-// the frontmatter only the keys that specification knows (name,
-// description, license, compatibility, metadata, allowed-tools). What a
-// runtime loads; the page itself keeps OKF's keys too.
+// AgentSkill is a skill page as Agent Skills has it: the same body, and
+// the frontmatter without OKF's keys, the library's own record of the page
+// (description aside, which both have). What a runtime loads: Agent
+// Skills' fields and whatever the runtimes add to them, as they were
+// written.
 func (d *Document) AgentSkill() *Document {
 	c := d.Clone()
 	for _, k := range c.Keys() {
-		if k != KeyDescription && !slices.Contains(skillKeys, k) {
+		if k != KeyDescription && slices.Contains(okfKeys, k) {
 			c.Delete(k)
 		}
 	}
 	return c
+}
+
+// SkillSettings are the fields of a skill's SKILL.md that tell runtimes
+// how to use it, each as YAML text: all but OKF's, its name and its
+// metadata. allowed-tools, disable-model-invocation, hooks and the like:
+// a person sets them (docs/design.md 5.15), an agent improving the skill
+// leaves them as they are.
+func (d *Document) SkillSettings() map[string]string {
+	out := map[string]string{}
+	for _, k := range d.Keys() {
+		if slices.Contains(okfKeys, k) || k == KeyName || k == KeyMetadata {
+			continue
+		}
+		text, err := yaml.Marshal(d.value(k))
+		if err != nil {
+			text = []byte(d.value(k).Value)
+		}
+		out[k] = string(text)
+	}
+	return out
 }
 
 // SetMetadata sets one entry of a skill page's metadata.

@@ -131,6 +131,11 @@ func TestCheck_Skill(t *testing.T) {
 			t.Errorf("%s: rules %v, want skill", tc.name, got)
 		}
 	}
+	// What runtimes add to Agent Skills stays on a skill as it was written.
+	withSettings := strings.Replace(skill, "metadata:", "disable-model-invocation: true\nallowed-tools: Bash(git:*)\nhooks:\n  PreToolUse: [x]\nmetadata:", 1)
+	if p := CheckFile("/skills/commit-message/SKILL.md", []byte(withSettings), false, Strict); len(p) > 0 {
+		t.Errorf("a skill's settings for runtimes pass: %v", p)
+	}
 	// Skill fields are only allowed on a skill's own file.
 	onFact := strings.Replace(skill, "type: Skill", "type: Fact", 1)
 	if got := rules(CheckFile("/facts/x.md", []byte(onFact), false, Strict)); !slices.Equal(got, []string{"key"}) {

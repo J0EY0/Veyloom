@@ -166,13 +166,27 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 		}
 	}
 
+	// The person's own skills of the set's names are off for this server,
+	// the set's being the ones installed (codexSkillsConfig). The agent's
+	// extra_args come later and win.
+	args := []string{"app-server"}
+	var skillsWarning string
+	if spec.SkillDir != "" {
+		var config string
+		config, skillsWarning = codexSkillsConfig(spec.Skills, spec.WorkDir)
+		if config != "" {
+			args = append(args, "-c", "skills.config="+config)
+		}
+	}
+	args = append(args, optStrings(spec.Options, "extra_args")...)
+
 	ctx, cancel := context.WithCancel(ctx)
 	// The server runs under its own context so it can be stopped once the
 	// turn is over without that looking like a cancelled turn.
 	procCtx, stopProc := context.WithCancel(ctx)
 	proc, err := startCLI(procCtx, cliOptions{
 		Binary:      bin,
-		Args:        append([]string{"app-server"}, optStrings(spec.Options, "extra_args")...),
+		Args:        args,
 		Dir:         spec.WorkDir,
 		StdinPipe:   true,
 		Env:         spec.Env,
@@ -189,20 +203,21 @@ func (r *CodexRunner) StartTurn(ctx context.Context, spec TurnSpec) (Turn, error
 	}
 
 	t := &codexTurn{
-		mcpServer: mcpServer,
-		release:   release,
-		turnBase:  newTurnBase(ctx, cancel),
-		ctx:       ctx,
-		stopProc:  stopProc,
-		cfg:       r.cfg,
-		proc:      proc,
-		pending:   make(map[int64]chan codexMessage),
-		eof:       make(chan struct{}),
-		completed: make(chan codexTurnEnd, 1),
-		items:     make(map[string]codexItem),
-		mcpFailed: make(map[string]bool),
-		tokens:    make(map[string]*codexThreadTokens),
-		prefixes:  commandPrefixes(spec.AllowedRules),
+		skillsWarning: skillsWarning,
+		mcpServer:     mcpServer,
+		release:       release,
+		turnBase:      newTurnBase(ctx, cancel),
+		ctx:           ctx,
+		stopProc:      stopProc,
+		cfg:           r.cfg,
+		proc:          proc,
+		pending:       make(map[int64]chan codexMessage),
+		eof:           make(chan struct{}),
+		completed:     make(chan codexTurnEnd, 1),
+		items:         make(map[string]codexItem),
+		mcpFailed:     make(map[string]bool),
+		tokens:        make(map[string]*codexThreadTokens),
+		prefixes:      commandPrefixes(spec.AllowedRules),
 	}
 	go t.run(spec)
 	return t, nil
@@ -376,6 +391,9 @@ type codexItem struct {
 
 type codexTurn struct {
 	*turnBase
+	// skillsWarning says why the person's own skills of the set's names
+	// stay on in this turn, "" when nothing kept them.
+	skillsWarning string
 	// mcpServer is the turn's entry for the thread's mcp_servers config,
 	// nil without room tools; release gives the turn's endpoint back.
 	mcpServer map[string]any
@@ -492,6 +510,9 @@ func (t *codexTurn) converse(spec TurnSpec) (Result, error) {
 		if _, err := t.call(setupCtx, "skills/extraRoots/set", roots); err != nil {
 			t.emit(t.ctx, Event{Kind: EventNotice, Level: NoticeWarning, Text: "Codex did not take the skill library's skills: " + err.Error()})
 		}
+	}
+	if t.skillsWarning != "" {
+		t.emit(t.ctx, Event{Kind: EventNotice, Level: NoticeWarning, Text: t.skillsWarning})
 	}
 
 	policy := t.policy(spec)
@@ -1056,17 +1077,21 @@ func (t *codexTurn) itemCompleted(item codexItemView, ours bool) {
 		}
 	case "commandExecution":
 		text := item.AggregatedOutput
+		// Only a command that completed and exited 0 did what it asked.
+		failed := item.Status != "completed"
 		switch {
 		case item.Status == "declined":
 			text = "declined"
 		case item.ExitCode != nil && *item.ExitCode != 0:
 			text = strings.TrimRight(text, "\n") + fmt.Sprintf("\n[exit code %d]", *item.ExitCode)
+			failed = true
 		}
-		t.emit(t.ctx, Event{Kind: EventToolResult, Tool: "commandExecution", CallID: item.ID, Text: truncate(text, t.cfg.MaxEventBytes)})
+		t.emit(t.ctx, Event{Kind: EventToolResult, Tool: "commandExecution", CallID: item.ID, Text: truncate(text, t.cfg.MaxEventBytes), Failed: failed})
 	case "mcpToolCall":
 		tool := item.Server + "/" + item.Tool
 		text := mcpResultText(item.Result)
-		if jsonPresent(item.Error) {
+		failed := jsonPresent(item.Error)
+		if failed {
 			var e struct {
 				Message string `json:"message"`
 			}
@@ -1075,7 +1100,7 @@ func (t *codexTurn) itemCompleted(item codexItemView, ours bool) {
 			}
 			text = "error: " + e.Message
 		}
-		t.emit(t.ctx, Event{Kind: EventToolResult, Tool: tool, CallID: item.ID, Text: truncate(text, t.cfg.MaxEventBytes)})
+		t.emit(t.ctx, Event{Kind: EventToolResult, Tool: tool, CallID: item.ID, Text: truncate(text, t.cfg.MaxEventBytes), Failed: failed})
 	case "fileChange":
 		if item.Status != "completed" {
 			return

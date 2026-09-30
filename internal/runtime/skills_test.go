@@ -1,6 +1,9 @@
 package runtime
 
 import (
+	"bytes"
+	"github.com/pelletier/go-toml/v2"
+	"maps"
 	"os"
 	"path/filepath"
 	"slices"
@@ -37,6 +40,17 @@ func TestWriteSkills(t *testing.T) {
 	if len(dirs) != 2 || filepath.Base(dirs[0]) != "go-table-tests" {
 		t.Errorf("skill folders %v", dirs)
 	}
+	// A file that is not text lands as it came, byte for byte.
+	blob := []byte{0x89, 'P', 'N', 'G', 0x00, 0xff, 0xfe, '\n'}
+	withBlob := testSkillSet("0123456789abcdee")
+	withBlob.Skills[0].Blobs = map[string][]byte{"assets/logo.png": blob}
+	blobDir, err := WriteSkills(t.TempDir(), withBlob, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err := os.ReadFile(filepath.Join(blobDir, "skills", "go-table-tests", "assets", "logo.png")); err != nil || !bytes.Equal(got, blob) {
+		t.Errorf("the picture %v %v", got, err)
+	}
 	// The same set again is not written again.
 	os.WriteFile(filepath.Join(dir, "marker"), []byte("x"), 0o644)
 	if again, err := WriteSkills(root, testSkillSet("0123456789abcdef"), nil); err != nil || again != dir {
@@ -53,6 +67,7 @@ func TestWriteSkills(t *testing.T) {
 		"a name that is none":   {Hash: "0123456789abcde0", Skills: []Skill{{Name: "Bad Name", Files: map[string]string{"SKILL.md": "x"}}}},
 		"a file outside":        {Hash: "0123456789abcde1", Skills: []Skill{{Name: "x", Files: map[string]string{"SKILL.md": "x", "../escape": "x"}}}},
 		"a skill with no SKILL": {Hash: "0123456789abcde2", Skills: []Skill{{Name: "x", Files: map[string]string{"README.md": "x"}}}},
+		"a blob outside":        {Hash: "0123456789abcde3", Skills: []Skill{{Name: "x", Files: map[string]string{"SKILL.md": "x"}, Blobs: map[string][]byte{"../escape": {0}}}}},
 	} {
 		if _, err := WriteSkills(root, set, nil); err == nil {
 			t.Errorf("%s: written", name)
@@ -118,21 +133,128 @@ func TestWriteSkills_RenamesWhatAPersonsSkillsHave(t *testing.T) {
 	}
 }
 
-func TestUserSkillNames(t *testing.T) {
+// Only Pi's clashes rename a skill of the set: Claude Code and Codex leave
+// the person's same-named skill out of the turn instead. A skill is known
+// by the name it gives itself, else by its folder's.
+func TestClashingSkillNames(t *testing.T) {
 	home, work := t.TempDir(), t.TempDir()
 	t.Setenv("HOME", home)
-	for _, dir := range []string{
-		filepath.Join(home, ".agents", "skills", "tdd"),
-		filepath.Join(home, ".codex", "skills", "create-plan"),
-		filepath.Join(work, ".pi", "skills", "local-one"),
+	for dir, front := range map[string]string{
+		filepath.Join(home, ".agents", "skills", "tdd"):            "---\nname: tdd\n---\n",
+		filepath.Join(home, ".pi", "agent", "skills", "folder"):    "---\nname: \"named-inside\"\n---\n",
+		filepath.Join(home, ".codex", "skills", "create-plan"):     "---\nname: create-plan\n---\n",
+		filepath.Join(work, ".pi", "skills", "local-one"):          "---\ndescription: d\n---\n",
+		filepath.Join(work, ".agents", "skills", "no-frontmatter"): "just text",
 	} {
 		os.MkdirAll(dir, 0o755)
-		os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: x\n---\n"), 0o644)
+		os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte(front), 0o644)
 	}
 	// A folder without a SKILL.md is no skill.
 	os.MkdirAll(filepath.Join(home, ".agents", "skills", "notes"), 0o755)
-	got := UserSkillNames(work)
-	if !got["tdd"] || !got["create-plan"] || !got["local-one"] || got["notes"] || len(got) != 3 {
-		t.Errorf("taken %v", got)
+	got := ClashingSkillNames("pi", work)
+	want := []string{"local-one", "named-inside", "no-frontmatter", "tdd"}
+	if names := slices.Sorted(maps.Keys(got)); !slices.Equal(names, want) {
+		t.Errorf("pi's %v, want %v", names, want)
+	}
+	for _, runtime := range []string{"claude", "codex", "fake"} {
+		if got := ClashingSkillNames(runtime, work); len(got) != 0 {
+			t.Errorf("%s renames %v", runtime, got)
+		}
+	}
+}
+
+// Codex runs a turn with the person's own skills of the set's names off,
+// found where Codex looks, up to the repository's root, by what they call
+// themselves; the person's own entries are kept.
+func TestCodexSkillsConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	codexHome := filepath.Join(home, "codex-home")
+	t.Setenv("CODEX_HOME", codexHome)
+	repo := t.TempDir()
+	work := filepath.Join(repo, "services", "api")
+	os.MkdirAll(filepath.Join(repo, ".git"), 0o755)
+	elsewhere := t.TempDir()
+	for dir, name := range map[string]string{
+		filepath.Join(home, ".agents", "skills", "pdf"):            "pdf",
+		filepath.Join(codexHome, "skills", ".system", "imagegen"):  "imagegen",
+		filepath.Join(repo, ".agents", "skills", "release-notes"):  "release-notes",
+		filepath.Join(work, ".codex", "skills", "renamed-folder"):  "go-table-tests",
+		filepath.Join(elsewhere, "linked"):                         "linked",
+		filepath.Join(home, ".agents", "skills", "not-in-the-set"): "not-in-the-set",
+	} {
+		os.MkdirAll(dir, 0o755)
+		os.WriteFile(filepath.Join(dir, "SKILL.md"), []byte("---\nname: "+name+"\n---\n"), 0o644)
+	}
+	os.Symlink(filepath.Join(elsewhere, "linked"), filepath.Join(home, ".agents", "skills", "linked"))
+	os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte("model = \"gpt-5\"\n\n[[skills.config]]\npath = \"/opt/old/SKILL.md\"\nenabled = false\n"), 0o644)
+
+	set := &SkillSet{Skills: []Skill{{Name: "pdf"}, {Name: "imagegen"}, {Name: "release-notes"}, {Name: "go-table-tests"}, {Name: "linked"}, {Name: "fresh"}}}
+	got, warning := codexSkillsConfig(set, work)
+	if warning != "" {
+		t.Errorf("warning %q", warning)
+	}
+	var parsed struct {
+		V []struct {
+			Path    string `toml:"path"`
+			Enabled bool   `toml:"enabled"`
+		} `toml:"v"`
+	}
+	if err := toml.Unmarshal([]byte("v = "+got), &parsed); err != nil {
+		t.Fatalf("%v: %s", err, got)
+	}
+	// Each as found and, where a link leads elsewhere, where it is.
+	var off []string
+	for _, e := range parsed.V {
+		if e.Enabled {
+			t.Errorf("%s is on", e.Path)
+		}
+		off = append(off, e.Path)
+	}
+	want := []string{"/opt/old/SKILL.md"}
+	for _, p := range []string{
+		filepath.Join(home, ".agents", "skills", "pdf", "SKILL.md"),
+		filepath.Join(repo, ".agents", "skills", "release-notes", "SKILL.md"),
+		filepath.Join(work, ".codex", "skills", "renamed-folder", "SKILL.md"),
+		filepath.Join(home, ".agents", "skills", "linked", "SKILL.md"),
+	} {
+		want = append(want, p)
+		if real, _ := filepath.EvalSymlinks(p); real != p {
+			want = append(want, real)
+		}
+	}
+	slices.Sort(want[1:])
+	if !slices.Equal(off, want) {
+		t.Errorf("off:\n%s\nwant:\n%s", strings.Join(off, "\n"), strings.Join(want, "\n"))
+	}
+	// A skill Codex comes with stays on: OpenAI keeps it up to date. The
+	// set's of its name goes by another name instead (ClashingSkillNames).
+	if strings.Contains(got, "imagegen") {
+		t.Errorf("Codex's own imagegen is turned off: %s", got)
+	}
+	if clashes := ClashingSkillNames("codex", work); !clashes["imagegen"] || len(clashes) != 1 {
+		t.Errorf("codex renames beside %v, want its own imagegen only", clashes)
+	}
+	if got, _ := codexSkillsConfig(&SkillSet{Skills: []Skill{{Name: "fresh"}}}, work); got != "" {
+		t.Errorf("nothing of the person's to turn off: %q", got)
+	}
+	// A config.toml that does not read: the turn goes as the person has it,
+	// the override taking the place of their own entries, and says why.
+	os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte("[[skills.config]\npath = \n"), 0o644)
+	if got, warning := codexSkillsConfig(set, work); got != "" || warning == "" {
+		t.Errorf("an unreadable config.toml: %q %q", got, warning)
+	}
+	// Nor is one whose skills.config is no list of tables used.
+	os.WriteFile(filepath.Join(codexHome, "config.toml"), []byte("[skills]\nconfig = \"off\"\n"), 0o644)
+	if got, warning := codexSkillsConfig(set, work); got != "" || warning == "" {
+		t.Errorf("an odd skills.config: %q %q", got, warning)
+	}
+	// No config.toml at all is none to keep.
+	os.Remove(filepath.Join(codexHome, "config.toml"))
+	if got, warning := codexSkillsConfig(set, work); got == "" || warning != "" || strings.Contains(got, "/opt/old") {
+		t.Errorf("no config.toml: %q %q", got, warning)
+	}
+	if got := tomlString("a\"b\\c\n"); got != `"a\"b\\c\u000A"` {
+		t.Errorf("tomlString %s", got)
 	}
 }

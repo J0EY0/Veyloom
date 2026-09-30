@@ -19,15 +19,9 @@ import (
 // Adding a skill to the library from a folder on this machine (docs/
 // design.md 5.15). Skills come from people, and many have some already, in
 // ~/.claude/skills say, in Agent Skills form: the folder's SKILL.md is
-// given the fields OKF asks for; its other markdown files, references,
-// become Reference pages under names the library allows, the links to them
-// following; everything else goes in as it is.
-
-// Limits of an imported skill, as for one the library projects.
-const (
-	importFiles    = 64
-	importFileSize = 256 << 10
-)
+// given the fields OKF asks for and keeps all it had; its other markdown
+// files, references, become Reference pages under names the library
+// allows, the links to them following; everything else goes in as it is.
 
 var (
 	importSlugJunk = regexp.MustCompile(`[^a-z0-9]+`)
@@ -39,6 +33,12 @@ var (
 // looked after by the team of the project team, or by none when team is
 // "". It is not installed for anyone yet.
 func (h *Hub) ImportSkill(ctx context.Context, folder, team, userID string) (WikiPageView, error) {
+	return h.importSkill(ctx, folder, "", team, userID)
+}
+
+// importSkill is ImportSkill; from says where the folder came from for the
+// library's history, when it is not the folder itself, as for an upload.
+func (h *Hub) importSkill(ctx context.Context, folder, from, team, userID string) (WikiPageView, error) {
 	folder = strings.TrimSpace(folder)
 	if !filepath.IsAbs(folder) {
 		return WikiPageView{}, store.Invalid("folderNotAbsolute", store.Params{"path": folder}, "%s is not a full path", folder)
@@ -90,7 +90,8 @@ func (h *Hub) ImportSkill(ctx context.Context, folder, team, userID string) (Wik
 	if err != nil {
 		return WikiPageView{}, err
 	}
-	d.KeepToSpec(true)
+	// Its fields beyond OKF's stay as they are: the runtimes act on them
+	// (disable-model-invocation, hooks and the like).
 	d.SetString(okf.KeyType, "Skill")
 	d.SetString(okf.KeyName, name)
 	if d.Title() == "" {
@@ -148,7 +149,10 @@ func (h *Hub) ImportSkill(ctx context.Context, folder, team, userID string) (Wik
 			return WikiPageView{}, err
 		}
 	}
-	if _, err := w.Commit(ctx, "Imported the skill "+name+" from "+folder); err != nil {
+	if from == "" {
+		from = folder
+	}
+	if _, err := w.Commit(ctx, "Imported the skill "+name+" from "+from); err != nil {
 		return WikiPageView{}, err
 	}
 	h.changed(r)
@@ -156,10 +160,12 @@ func (h *Hub) ImportSkill(ctx context.Context, folder, team, userID string) (Wik
 }
 
 // importFilesOf lists the files of a skill's folder besides its SKILL.md,
-// by their path in it: hidden ones stay behind; too many, or one too big
-// for a runtime to read, refuse the import.
+// by their path in it: hidden ones stay behind; too many, one too big, or
+// too much in all for a turn to carry (wiki.MaxSkillFile and its likes)
+// refuse the import.
 func importFilesOf(folder string) ([]string, error) {
 	var files []string
+	var total int64
 	err := filepath.WalkDir(folder, func(fp string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
@@ -182,13 +188,16 @@ func importFilesOf(folder string) ([]string, error) {
 		if err != nil {
 			return err
 		}
-		if info.Size() > importFileSize {
-			return store.Invalid("skillFileTooBig", store.Params{"path": rel, "kb": strconv.FormatInt(info.Size()>>10, 10), "max": strconv.Itoa(importFileSize >> 10)},
-				"%s is %d KB; a skill's file should stay under %d KB", rel, info.Size()>>10, importFileSize>>10)
+		if info.Size() > wiki.MaxSkillFile {
+			return store.Invalid("skillFileTooBig", store.Params{"path": rel, "mb": wiki.MB(info.Size()), "max": wiki.MB(wiki.MaxSkillFile)},
+				"%s is %s MB; a skill's file should stay under %s MB", rel, wiki.MB(info.Size()), wiki.MB(wiki.MaxSkillFile))
 		}
 		files = append(files, rel)
-		if len(files) > importFiles {
-			return store.Invalid("skillTooManyFiles", store.Params{"max": strconv.Itoa(importFiles)}, "a skill holds at most %d files", importFiles)
+		if len(files) > wiki.MaxSkillFiles {
+			return store.Invalid("skillTooManyFiles", store.Params{"max": strconv.Itoa(wiki.MaxSkillFiles)}, "a skill holds at most %d files", wiki.MaxSkillFiles)
+		}
+		if total += info.Size(); total > wiki.MaxSkillBytes {
+			return store.Invalid("skillTooLarge", store.Params{"max": wiki.MB(wiki.MaxSkillBytes)}, "a skill holds at most %s MB in all", wiki.MB(wiki.MaxSkillBytes))
 		}
 		return nil
 	})
@@ -246,7 +255,7 @@ func importReference(from string, data []byte, renamed map[string]string) *okf.D
 		d.SetString(okf.KeyTitle, title)
 		d.SetBody(body)
 	} else {
-		d.KeepToSpec(false)
+		d.KeepToSpec()
 	}
 	d.SetBody(okf.RewriteLinks(d.Body(), func(link string) (string, bool) {
 		to, ok := okf.Resolve(from, link)

@@ -186,8 +186,11 @@ type activeTurn struct {
 	// order first touched; fileSeen tells which are in.
 	files    []string
 	fileSeen map[string]bool
-	// skillsUsed are the library's skills its tool calls used, each once.
+	// skillsUsed are the library's skills its tool calls used, each once;
+	// skillCalls the calls that reach for skills whose results are still
+	// to come, by call id: a call the runtime refused uses nothing.
 	skillsUsed []string
+	skillCalls map[string][]string
 	// position is where the room stood when the brief of the run in flight
 	// was put together, wikiPosition the project wiki, and briefParts what
 	// the brief showed of its parts that change now and then: how far the
@@ -1029,11 +1032,7 @@ func (m *TurnManager) OnEvent(turnID string, ev runtime.Event) {
 		at.fileSeen[ev.Path] = true
 		at.files = append(at.files, ev.Path)
 	}
-	for _, name := range skillsIn(ev, at.spec.Skills) {
-		if !slices.Contains(at.skillsUsed, name) {
-			at.skillsUsed = append(at.skillsUsed, name)
-		}
-	}
+	m.noteSkillUse(at, ev)
 	// Whatever the runtime says, it is alive (quiet.go).
 	woke := m.stirLocked(at)
 	at.mu.Unlock()

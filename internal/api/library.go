@@ -1,7 +1,11 @@
 package api
 
 import (
+	"errors"
+	"io"
+	"mime"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/J0EY0/veyloom/internal/hub"
@@ -295,6 +299,110 @@ func (h *handlers) skillUses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, SkillUsesResponse{Uses: uses})
+}
+
+// exportSkill hands a skill of the library over as a zip file of its
+// folder, in Agent Skills form, to be saved.
+func (h *handlers) exportSkill(w http.ResponseWriter, r *http.Request) {
+	wikis, ok := h.wikis(w)
+	if !ok {
+		return
+	}
+	name := r.URL.Query().Get("name")
+	if name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	data, err := wikis.ExportSkill(r.Context(), name)
+	if err != nil {
+		h.writeWikiError(w, r, err)
+		return
+	}
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", mime.FormatMediaType("attachment", map[string]string{"filename": name + ".zip"}))
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
+}
+
+// LocalSkillsResponse is the body of GET /library/local.
+type LocalSkillsResponse struct {
+	Skills []hub.LocalSkill `json:"skills"`
+}
+
+// UploadSkillsResponse is the body of POST /library/upload: how each
+// skill the upload held went.
+type UploadSkillsResponse struct {
+	Skills []hub.UploadedSkill `json:"skills"`
+}
+
+// localSkills lists the skills on this machine a person may bring into
+// the library.
+func (h *handlers) localSkills(w http.ResponseWriter, r *http.Request) {
+	wikis, ok := h.wikis(w)
+	if !ok {
+		return
+	}
+	skills, err := wikis.LocalSkills(r.Context())
+	if err != nil {
+		h.writeWikiError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, LocalSkillsResponse{Skills: skills})
+}
+
+// uploadSkills takes a multipart form from the browser: one zip file in
+// the file field, or a folder's files in file fields, each with its path in
+// a path field of its own, in the same order (a multipart file name keeps
+// no folders); project_id names the team, user_id the person.
+func (h *handlers) uploadSkills(w http.ResponseWriter, r *http.Request) {
+	wikis, ok := h.wikis(w)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, hub.MaxUploadBytes+formMemory)
+	if err := r.ParseMultipartForm(formMemory); err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			writeCoded(w, http.StatusRequestEntityTooLarge, "uploadTooLarge", store.Params{"mb": strconv.Itoa(hub.MaxUploadBytes >> 20), "files": strconv.Itoa(hub.MaxUploadFiles)}, "upload too large")
+			return
+		}
+		writeError(w, http.StatusBadRequest, "expected a multipart form with file fields")
+		return
+	}
+	defer r.MultipartForm.RemoveAll() //nolint:errcheck // temp files only
+	userID, ok := deciderID(r, r.FormValue("user_id"))
+	if !ok {
+		writeError(w, http.StatusBadRequest, "user_id is required")
+		return
+	}
+	files := r.MultipartForm.File["file"]
+	paths := r.MultipartForm.Value["path"]
+	up := hub.SkillUpload{Team: r.FormValue("project_id"), UserID: userID}
+	switch {
+	case len(files) == 1 && len(paths) == 0:
+		f, err := files[0].Open()
+		if err != nil {
+			writeError(w, http.StatusBadRequest, "the file does not read")
+			return
+		}
+		defer f.Close()
+		up.Name, up.Zip, up.ZipSize = files[0].Filename, f, files[0].Size
+	case len(files) > 0 && len(paths) == len(files):
+		for i, header := range files {
+			up.Files = append(up.Files, hub.UploadFile{Path: paths[i], Open: func() (io.ReadCloser, error) { return header.Open() }})
+		}
+		up.Name = strings.SplitN(paths[0], "/", 2)[0]
+	default:
+		writeError(w, http.StatusBadRequest, "expected one zip file, or files each with its path")
+		return
+	}
+	skills, err := wikis.UploadSkills(r.Context(), up)
+	if err != nil {
+		h.writeWikiError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, UploadSkillsResponse{Skills: skills})
 }
 
 // listLimit reads ?limit=, at most and by default a page's worth.
