@@ -83,13 +83,36 @@ describe('TurnPart', () => {
     applyTurnEvent('x1', { kind: 'notice', level: 'warning', text: 'MCP server node_repl failed to start' })
     applyTurnEvent('x1', { kind: 'tool_call', tool: 'Bash', input: '{"command":"make"}' })
     const { unmount } = renderWithProviders(<TurnPart turn={turn('x1', 't1', { status: 'running', ended_at: undefined })} messages={[]} who={who} first last />)
-    // Not folded into the activity line: there without opening anything.
+    // Not folded into the activity line: there without opening anything,
+    // a warning as a block that stands out.
     expect(screen.getByRole('note')).toHaveTextContent('警告: MCP server node_repl failed to start')
+    expect(screen.getByRole('note')).toHaveClass('bg-muted')
     expect(screen.getByRole('button', { name: '过程 · 运行了 1 条命令' })).toBeInTheDocument()
     unmount()
 
     renderWithProviders(<TurnPart turn={turn('x2', 't1')} messages={[]} who={who} first last />)
     expect(await screen.findByRole('note')).toHaveTextContent('错误: Codex asked for item/x, which Veyloom cannot answer yet')
+  })
+
+  it('folds the hub’s own steps of readying the worktree with the tools, and says what is for information on a quiet line', async () => {
+    const transcript = [
+      { kind: 'event', event: { kind: 'notice', level: 'info', text: "Making Coder's worktree, on the branch veyloom/coder." } },
+      { kind: 'event', event: { kind: 'notice', level: 'info', text: 'Claude Code switched to permission mode plan' } },
+      { kind: 'event', event: { kind: 'tool_call', tool: 'Bash', input: '{"command":"make"}' } },
+    ]
+    stubApi({
+      '/turns/x2/approvals': { approvals: [] },
+      '/turns/x2/transcript': new Response(transcript.map((line) => JSON.stringify(line) + '\n').join('')),
+    })
+    renderWithProviders(<TurnPart turn={turn('x2', 't1')} messages={[]} who={who} first last />)
+    // What the runtime said stays in sight, not as a block.
+    const said = await screen.findByRole('note')
+    expect(said).toHaveTextContent('Claude Code switched to permission mode plan')
+    expect(said).not.toHaveClass('bg-muted')
+    // The hub's own step is in the folded line with the command.
+    expect(screen.queryByText('已为 Coder 创建工作区（分支 veyloom/coder）')).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: /^过程 · 运行了 1 条命令/ }))
+    expect(screen.getByText('已为 Coder 创建工作区（分支 veyloom/coder）')).toBeInTheDocument()
   })
 
   it('leaves the tools to the first stretch of a turn and the words arriving to the last', () => {

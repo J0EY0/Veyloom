@@ -156,15 +156,24 @@ export function stepsText(t: T, steps: string): string {
 }
 
 // The hub's own notices in a turn whose worktree is being got ready.
+const waitLeaderNotice = "Waiting for the project's leader to set the project up for worktrees."
+const waitPersonNotice = 'Waiting for a person to adopt the setup steps the leader wrote down.'
 const makingNotice = /^Making (.+)'s worktree, on the branch (.+)\.$/
 const preparingNotice = /^Getting the worktree ready: (.+)\.$/
+
+// isSetupNotice says a notice is one of the hub's own about getting the
+// turn's worktree ready: a step of the turn like its tools, where what a
+// runtime told people is shown apart (docs/design.md 4.6).
+export function isSetupNotice(text: string): boolean {
+  return text === waitLeaderNotice || text === waitPersonNotice || makingNotice.test(text) || preparingNotice.test(text)
+}
 
 // noticeText is a notice the hub showed in a turn, in the UI's words; a
 // runtime's are shown as it said them. The hub's say what it is doing
 // before the turn begins: once past, done says so, and they read as done.
 export function noticeText(t: T, text: string, done = false): string {
-  if (text === "Waiting for the project's leader to set the project up for worktrees.") return t(done ? 'setup.notice.waitedLeader' : 'setup.notice.waitLeader')
-  if (text === 'Waiting for a person to adopt the setup steps the leader wrote down.') return t(done ? 'setup.notice.waitedPerson' : 'setup.notice.waitPerson')
+  if (text === waitLeaderNotice) return t(done ? 'setup.notice.waitedLeader' : 'setup.notice.waitLeader')
+  if (text === waitPersonNotice) return t(done ? 'setup.notice.waitedPerson' : 'setup.notice.waitPerson')
   const making = makingNotice.exec(text)
   if (making) return t(done ? 'setup.notice.made' : 'setup.notice.making', { name: making[1], branch: making[2] })
   const preparing = preparingNotice.exec(text)

@@ -63,6 +63,30 @@ describe('InboxPage', () => {
     expect(screen.getByText('选择一条查看。')).toBeInTheDocument()
   })
 
+  it('shows who a row is from as a tag with its agent’s face, a person with the initial', async () => {
+    stubApi({
+      '/agents': { agents: [{ id: 'ag1', name: 'Builder', runtime: 'codex', avatar: 'builder.webp' }] },
+      '/approvals': { approvals: [pending('ap1', { agent_id: 'ag1' })] },
+      '/users/u1/inbox': {
+        items: [
+          mention('m9', 9, { sender_name: 'Builder', sender_agent_id: 'ag1' }),
+          mention('m3', 3, { sender_kind: 'user', member_id: undefined, user_id: 'u2', sender_name: 'bob', read: true }),
+        ],
+      },
+    })
+    renderWithProviders(<InboxPage />, { route: '/inbox', path: '/inbox' })
+    const rows = within(await screen.findByRole('list')).getAllByRole('link')
+    // The request and the agent's mention carry its picture.
+    await waitFor(() => expect(rows[0].querySelector('[data-avatar="builder.webp"]')).not.toBeNull())
+    expect(rows[1].querySelector('[data-avatar="builder.webp"]')).not.toBeNull()
+    // A person's is the initial; read, it stays on the list's grey and is
+    // not bold.
+    expect(rows[2].querySelector('[data-avatar]')).toBeNull()
+    expect(within(rows[2]).getByText('B')).toBeInTheDocument()
+    expect(rows[2]).not.toHaveAttribute('data-unread')
+    expect(within(rows[2]).getByText('bob').closest('[data-slot="badge"]')).toHaveClass('font-medium')
+  })
+
   it('says so with nobody signed in, and when nothing arrived', async () => {
     setCurrentUser(null)
     const first = renderWithProviders(<InboxPage />)

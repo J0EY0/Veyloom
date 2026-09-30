@@ -2,6 +2,7 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react'
 import { ChevronDownIcon } from 'lucide-react'
 import { useT } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
+import { lineCut } from './lineCut'
 
 // How tall a message stands in the chat before the rest waits to be asked
 // for: three lines of its words.
@@ -13,28 +14,32 @@ const CLAMP_REM = 4.5
 export function Clamped({ children }: { children: ReactNode }) {
   const t = useT()
   const content = useRef<HTMLDivElement>(null)
-  const [long, setLong] = useState(false)
+  // How far down it is cut, in rem; none while it all fits.
+  const [cut, setCut] = useState<number>()
   const [open, setOpen] = useState(false)
   useLayoutEffect(() => {
     const element = content.current
     if (!element) return
     const measure = () => {
-      const limit = CLAMP_REM * parseFloat(getComputedStyle(document.documentElement).fontSize)
+      const rem = parseFloat(getComputedStyle(document.documentElement).fontSize)
+      const limit = CLAMP_REM * rem
       // A line more than fits is not worth a button.
-      setLong(element.offsetHeight > limit * 1.4)
+      setCut(element.offsetHeight > limit * 1.4 ? lineCut(element, limit) / rem : undefined)
     }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(element)
     return () => observer.disconnect()
   }, [])
-  const cut = long && !open
+  const long = cut !== undefined
+  const shut = long && !open
   return (
     <>
-      {/* Cut, the last line fades out rather than stopping mid-letter. */}
+      {/* Cut after a whole line, and that line fades out, rather than
+          stopping in the middle of one. */}
       <div
-        className={cn(cut && 'overflow-hidden [mask-image:linear-gradient(to_bottom,black_55%,transparent)]')}
-        style={cut ? { maxHeight: `${CLAMP_REM}rem` } : undefined}
+        className={cn(shut && 'overflow-hidden [mask-image:linear-gradient(to_bottom,black_calc(100%_-_1.5rem),transparent)]')}
+        style={shut ? { maxHeight: `${cut}rem` } : undefined}
       >
         <div ref={content}>{children}</div>
       </div>

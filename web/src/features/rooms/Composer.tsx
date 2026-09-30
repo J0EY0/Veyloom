@@ -1,4 +1,4 @@
-import { useEffect, useId, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
 import { useAddressee } from '@/api/addressee'
 import { blobFromUrl, uploadAttachment } from '@/api/attachments'
 import { usePostMessage } from '@/api/messages'
@@ -23,6 +23,7 @@ import { Kbd } from '@/components/ui/kbd'
 import { Label } from '@/components/ui/label'
 import { registerComposer } from '@/lib/composer'
 import { useCurrentUser } from '@/lib/currentUser'
+import { draftKey, readDraft, writeDraft } from '@/lib/drafts'
 import { composerHint } from './composerHint'
 import { MentionPicker } from './MentionPicker'
 import { useMentionInput } from './useMentionInput'
@@ -71,6 +72,14 @@ export function Composer({ roomId, roomName, threadId, compact }: ComposerProps)
   // try, which leaves the query waiting without fetching for a moment.
   const hint = addressee.isPending ? undefined : composerHint(addressee.data, targets.names, threadId !== undefined, t)
 
+  // What was typed here and not sent comes back with the box: after another
+  // tab of the chat, or another chat. Before anything a take-over button
+  // hands over below, which goes into it.
+  const draft = draftKey(roomId, threadId)
+  useLayoutEffect(() => {
+    if (textarea.current) textarea.current.value = readDraft(draft)
+  }, [draft])
+
   // A take-over button elsewhere on the page drops its @ in here.
   useEffect(
     () =>
@@ -81,11 +90,12 @@ export function Composer({ roomId, roomName, threadId, compact }: ComposerProps)
         const after = el.value.slice(el.selectionEnd)
         const glue = before !== '' && !/\s$/.test(before) ? ' ' : ''
         el.value = before + glue + text + after
+        writeDraft(draft, el.value)
         const caret = (before + glue + text).length
         el.setSelectionRange(caret, caret)
         el.focus()
       }),
-    [threadId],
+    [threadId, draft],
   )
 
   // Rejecting tells the prompt input to keep the files for another try.
@@ -109,6 +119,7 @@ export function Composer({ roomId, roomName, threadId, compact }: ComposerProps)
         ...(attachmentIds.length > 0 ? { attachment_ids: attachmentIds } : {}),
         ...(threadId ? { thread_id: threadId } : {}),
       })
+      writeDraft(draft, '')
       setError(undefined)
       el.focus()
     } catch (err) {
@@ -164,7 +175,10 @@ export function Composer({ roomId, roomName, threadId, compact }: ComposerProps)
               aria-controls={mention.open ? pickerId : undefined}
               aria-expanded={mention.open}
               onKeyDown={onKeyDown}
-              onInput={mention.onInput}
+              onInput={(event) => {
+                mention.onInput()
+                writeDraft(draft, event.currentTarget.value)
+              }}
               onBlur={mention.close}
             />
           </PromptInputBody>

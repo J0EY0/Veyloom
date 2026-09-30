@@ -44,6 +44,34 @@ describe('Composer', () => {
     expect(calls.filter((call) => call.startsWith('POST'))).toEqual([])
   })
 
+  it('keeps what was typed and not sent for when the box comes back, apart for each chat', async () => {
+    stubApi({ '/users': { users: [] }, '/rooms/r1/members': { members: [] }, '/rooms/r2/members': { members: [] } })
+    const first = renderWithProviders(<Composer roomId="r1" roomName="main" />)
+    await userEvent.type(screen.getByLabelText('消息'), 'half a thought')
+    first.unmount()
+
+    // Off to another tab of the chat and back: the words are still there.
+    const again = renderWithProviders(<Composer roomId="r1" roomName="main" />)
+    expect(screen.getByLabelText('消息')).toHaveValue('half a thought')
+    again.unmount()
+
+    // Another chat has its own box.
+    renderWithProviders(<Composer roomId="r2" roomName="other" />)
+    expect(screen.getByLabelText('消息')).toHaveValue('')
+  })
+
+  it('forgets the draft once it is sent', async () => {
+    stubApi({ '/rooms/r1/messages': Response.json({ message: message('m1', 1, { body: 'hello' }) }, { status: 201 }) })
+    const first = renderWithProviders(<Composer roomId="r1" roomName="main" />)
+    const box = screen.getByLabelText('消息')
+    await userEvent.type(box, 'hello{Enter}')
+    await waitFor(() => expect(box).toHaveValue(''))
+    first.unmount()
+
+    renderWithProviders(<Composer roomId="r1" roomName="main" />)
+    expect(screen.getByLabelText('消息')).toHaveValue('')
+  })
+
   it('shows the server error and keeps the text', async () => {
     stubApi({ '/rooms/r1/messages': Response.json({ error: 'user u1: not found' }, { status: 404 }) })
     renderWithProviders(<Composer roomId="r1" roomName="main" />)

@@ -65,7 +65,7 @@ export function AddMemberDialog({ roomId, roomName, open, onClose }: AddMemberDi
       <DialogContent className="sm:max-w-md" aria-describedby={undefined}>
         <form onSubmit={onSubmit}>
           <DialogHeader>
-            <DialogTitle>{t('member.addTitle', { room: roomName })}</DialogTitle>
+            <DialogTitle>{t('member.addTitle')}</DialogTitle>
           </DialogHeader>
           <FieldGroup className="my-4 gap-4">
             <Field>

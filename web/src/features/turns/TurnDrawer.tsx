@@ -142,7 +142,7 @@ function DrawerBody({ roomId, turnId }: { roomId: string; turnId: string }) {
         ) : (
           <ol>
             {lines.map((line, index) => (
-              <TurnEventRow key={index} line={line} />
+              <TurnEventRow key={index} line={line} past={!running || index < lines.length - 1} />
             ))}
           </ol>
         )}

@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
+import { setCurrentUser } from '@/lib/currentUser'
 import { stubApi } from '@/test/fetch'
 import { project, room } from '@/test/fixtures'
 import { renderWithProviders } from '@/test/render'
@@ -57,14 +58,28 @@ describe('AppSidebar', () => {
     expect(screen.getByRole('link', { name: /Veyloom/ })).toHaveAttribute('href', '/rooms/r1')
     expect(screen.getByRole('link', { name: /Veyloom/ })).not.toHaveAttribute('aria-current')
     expect(screen.getByRole('link', { name: '收件箱' })).toHaveAttribute('href', '/inbox')
-    // One pending approval anywhere counts in the inbox.
-    await waitFor(() => expect(screen.getByRole('link', { name: '收件箱' }).closest('li')).toHaveTextContent('1'))
+    // A pending approval anywhere: an orange dot by the inbox, and no
+    // number, as nothing is unread.
+    const inbox = screen.getByRole('link', { name: '收件箱' }).closest('li')!
+    await waitFor(() => expect(within(inbox).getByRole('img', { name: '有请求在等你审批' })).toBeInTheDocument())
+    expect(inbox).not.toHaveTextContent(/\d/)
     // Every project is listed right here, so there is no page of them.
     expect(screen.queryByRole('link', { name: '全部项目' })).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: 'Agents' })).toHaveAttribute('href', '/agents')
     expect(screen.getByRole('link', { name: '机器' })).toHaveAttribute('href', '/machines')
     expect(screen.getByRole('link', { name: 'Wiki' })).toHaveAttribute('href', '/wiki')
     expect(screen.getByRole('link', { name: '用量' })).toHaveAttribute('href', '/usage')
+  })
+
+  it('counts only what is unread in the inbox, what waits for approval a dot beside it', async () => {
+    setCurrentUser({ id: 'u1', name: 'alice' })
+    stubSidebar({ '/users/u1/inbox': { items: [], unread: 3 } })
+    renderWithProviders(<AppSidebar />, { route: '/rooms/r1' })
+    const inbox = (await screen.findByRole('link', { name: '收件箱' })).closest('li')!
+    // Three unread and one approval pending: 3, which "all read" clears.
+    await waitFor(() => expect(inbox).toHaveTextContent(/^收件箱3$/))
+    expect(within(inbox).getByRole('img', { name: '有请求在等你审批' })).toBeInTheDocument()
+    setCurrentUser(null)
   })
 
   it('marks the Wiki page on any of its addresses, not a chat’s Wiki tab', async () => {

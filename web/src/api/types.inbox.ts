@@ -7,6 +7,9 @@ export interface InboxItem extends Message {
   room_name: string
   project_name: string
   sender_name: string
+  // The agent behind the member an agent's message came from, whose face
+  // the inbox shows; absent for a person, or once that agent is gone.
+  sender_agent_id?: string
   // The person read it: in the inbox, in its topic, or all at once.
   read: boolean
 }

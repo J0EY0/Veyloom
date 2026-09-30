@@ -175,6 +175,20 @@ describe('TasksView', () => {
     expect(screen.getByRole('region', { name: 'Coder' })).toBeInTheDocument()
   })
 
+  it('tints only the columns that have cards', async () => {
+    stub(tasks.filter((task) => task.state === 'done'))
+    open()
+    expect(await screen.findByRole('region', { name: '已完成' })).toHaveClass('bg-status-ok/[0.04]')
+    // Nothing under way or to merge: those columns stand bare, a heading.
+    expect(screen.getByRole('region', { name: '进行中' })).not.toHaveClass('bg-status-run/[0.05]')
+    expect(screen.getByRole('region', { name: '待合并' })).not.toHaveClass('bg-status-merge/[0.05]')
+
+    await userEvent.click(screen.getByRole('tab', { name: '按成员' }))
+    expect(await screen.findByRole('region', { name: 'Coder' })).toHaveClass('bg-muted/60')
+    // The tester has done nothing yet.
+    expect(screen.getByRole('region', { name: 'Tester' })).not.toHaveClass('bg-muted/60')
+  })
+
   it('says so when there is nothing yet', async () => {
     stub([])
     open()

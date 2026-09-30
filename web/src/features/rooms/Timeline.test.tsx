@@ -77,7 +77,8 @@ describe('Timeline', () => {
     // none, and its pill shows its name's letter.
     const architect = await row(/你来/)
     expect(architect.querySelector('[data-avatar]')).toHaveAttribute('data-avatar', picture)
-    expect(within(within(architect).getByText('Pi Tester')).getByText('P')).toBeInTheDocument()
+    const pill = within(architect).getByText('Pi Tester').closest<HTMLElement>('[data-slot="badge"]')!
+    expect(within(pill).getByText('P')).toBeInTheDocument()
     // The tester speaks with its letter, Pi's mark in the corner.
     const tester = await row(/好的/)
     expect(tester.querySelector('[data-avatar]')).toBeNull()
@@ -85,7 +86,8 @@ describe('Timeline', () => {
     expect(tester.querySelector('svg')).not.toBeNull()
     // A person mentioning the architect draws its picture in the pill.
     const thanks = await row(/谢谢/)
-    expect(within(thanks).getByText('Claude Architect').querySelector(`[data-avatar="${picture}"]`)).not.toBeNull()
+    const mentioned = within(thanks).getByText('Claude Architect').closest('[data-slot="badge"]')!
+    expect(mentioned.querySelector(`[data-avatar="${picture}"]`)).not.toBeNull()
   })
 
   it('redraws a row drawn already when its agent takes a new picture', async () => {

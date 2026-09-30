@@ -35,8 +35,9 @@ import { WorkspaceMenu } from './WorkspaceMenu'
 export function AppSidebar() {
   const t = useT()
   const location = useLocation()
-  // The inbox counts every pending approval plus what mentioned you that
-  // you have not read (docs/webui.md 4.19).
+  // The inbox counts what mentioned you that you have not read, which "all
+  // read" clears; a request waiting for your approval, which no reading
+  // clears, is an orange dot beside it until decided (docs/webui.md 4.19).
   const pending = usePendingApprovalsAll()
   const pendingCount = pending.data?.length ?? 0
   const user = useCurrentUser()
@@ -84,8 +85,8 @@ export function AppSidebar() {
                 label={t('nav.inbox')}
                 icon={<InboxIcon />}
                 active={location.pathname === '/inbox'}
-                count={pendingCount + unread}
-                urgent={pendingCount > 0}
+                count={unread}
+                waiting={pendingCount > 0}
               />
             </SidebarMenu>
           </SidebarGroupContent>
@@ -127,11 +128,12 @@ interface NavItemProps {
   icon: React.ReactNode
   active: boolean
   count?: number
-  // A count that asks for a decision is drawn in the waiting colour.
-  urgent?: boolean
+  // Something waits for a person's decision: an orange dot by the count.
+  waiting?: boolean
 }
 
-function NavItem({ to, label, icon, active, count, urgent }: NavItemProps) {
+function NavItem({ to, label, icon, active, count, waiting }: NavItemProps) {
+  const t = useT()
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={active} className={cn('h-7 text-[0.8125rem]', active && 'text-foreground')}>
@@ -140,7 +142,16 @@ function NavItem({ to, label, icon, active, count, urgent }: NavItemProps) {
           <span>{label}</span>
         </Link>
       </SidebarMenuButton>
-      {count ? <SidebarMenuBadge className={cn('top-1', urgent ? 'text-status-wait' : 'text-subtle')}>{count}</SidebarMenuBadge> : null}
+      {/* The count round and lifted; the orange dot on its left while a
+          decision waits, alone when nothing is unread. */}
+      {count || waiting ? (
+        <SidebarMenuBadge className="top-1 gap-1.5 px-0">
+          {waiting ? <span role="img" aria-label={t('nav.inboxWaiting')} className="size-2 rounded-full bg-status-wait" /> : null}
+          {count ? (
+            <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-background px-1.5 text-muted-foreground shadow-sm">{count}</span>
+          ) : null}
+        </SidebarMenuBadge>
+      ) : null}
     </SidebarMenuItem>
   )
 }

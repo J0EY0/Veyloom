@@ -114,7 +114,8 @@ describe('UsagePage', () => {
         .getAllByRole('listitem')
         .map((row) => row.textContent),
     ).toEqual(['Claude Code2 轮1.5万', 'Codex1 轮3000'])
-    expect(runtimes).toHaveTextContent('83%Claude Code')
+    // The shares over the bar; each runtime named once, in its row below.
+    expect(runtimes).toHaveTextContent(/^运行时83%17%Claude Code2 轮1\.5万Codex1 轮3000$/)
 
     const members = screen.getByRole('region', { name: '成员' })
     const first = within(members).getAllByRole('listitem')[0]

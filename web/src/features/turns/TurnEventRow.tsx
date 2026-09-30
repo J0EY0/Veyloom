@@ -3,7 +3,7 @@ import type { TranscriptLine } from '@/api/types'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { runtimeName } from '@/lib/runtimes'
-import { formatTime } from '@/lib/format'
+import { formatHour } from '@/lib/format'
 import { cn } from '@/lib/utils'
 import { describeTool } from './activity'
 import { useT } from '@/lib/i18n'
@@ -11,20 +11,29 @@ import { decisionNote } from '@/features/approvals/describe'
 import { turnErrorText } from './turnError'
 import { BriefFold } from './BriefFold'
 import { quotaText } from '@/features/machines/quota'
+import { noticeText } from '@/features/threads/systemNote'
+
+// How a notice reads by how much it matters (docs/design.md 4.6).
+const noticeTones = { info: 'text-muted-foreground', warning: 'text-status-wait', error: 'text-status-fail' } as const
 
 // One line of a turn's record. Long tool output is folded to three lines
-// until asked for.
-export function TurnEventRow({ line }: { line: TranscriptLine }) {
+// until asked for. past says something came after it, so what it said was
+// under way is over.
+export function TurnEventRow({ line, past = true }: { line: TranscriptLine; past?: boolean }) {
   const time = line.at ?? line.event?.at
+  // The time of day only: the drawer's heading says which day the turn
+  // began, and a date in this narrow column breaks over three lines.
   return (
-    <li className="grid grid-cols-[44px_minmax(0,1fr)] gap-x-3 py-1.5 text-[0.78125rem] [contain-intrinsic-size:auto_28px] [content-visibility:auto]">
-      <time className="pt-px text-xs text-subtle tabular-nums">{time ? formatTime(time) : ''}</time>
-      <Detail line={line} />
+    <li className="grid grid-cols-[2.75rem_minmax(0,1fr)] gap-x-3 py-1.5 text-[0.78125rem] [contain-intrinsic-size:auto_1.75rem] [content-visibility:auto]">
+      <time dateTime={time} className="pt-px text-xs text-subtle tabular-nums">
+        {time ? formatHour(time) : ''}
+      </time>
+      <Detail line={line} past={past} />
     </li>
   )
 }
 
-function Detail({ line }: { line: TranscriptLine }) {
+function Detail({ line, past }: { line: TranscriptLine; past: boolean }) {
   const event = line.event
   const t = useT()
   switch (line.kind) {
@@ -78,13 +87,23 @@ function Detail({ line }: { line: TranscriptLine }) {
     case 'status':
       return <span className="text-subtle">{event.text}</span>
     case 'tool_call':
+      // A long path breaks where it must, as the output under it does,
+      // rather than run out of the drawer.
       return (
-        <span className="font-mono text-foreground" translate="no">
+        <span className="min-w-0 font-mono break-words text-foreground" translate="no">
           {describeTool(event.tool ?? '', event.input ?? '')}
         </span>
       )
     case 'tool_result':
-      return <Folded text={event.text ?? ''} className="font-mono text-muted-foreground" />
+      // A call that gave nothing back says so, rather than leave a time
+      // with nothing after it.
+      return event.text ? <Folded text={event.text} className="font-mono text-muted-foreground" /> : <span className="text-subtle">{t('event.noOutput')}</span>
+    case 'notice': {
+      // What was said for people as the turn ran, the hub's own in the UI's
+      // words; not an error unless it says so.
+      const level = event.level === 'warning' || event.level === 'error' ? event.level : 'info'
+      return <span className={cn('min-w-0 break-words', noticeTones[level])}>{noticeText(t, event.text ?? '', past)}</span>
+    }
     case 'file_changed':
       return (
         <span className="font-mono text-muted-foreground" translate="no">

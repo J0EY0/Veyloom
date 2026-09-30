@@ -17,7 +17,9 @@ export interface NoticeListProps {
 
 // What a runtime told people during a turn, shown as it is rather than
 // folded into the activity line: its warnings, the errors it carried on
-// after, the requests Veyloom could not answer (docs/design.md 4.6).
+// after, the requests Veyloom could not answer (docs/design.md 4.6). A
+// warning or an error is a block that stands out; what is only for
+// people's information, a quiet line.
 export function NoticeList({ notices, className }: NoticeListProps) {
   const t = useT()
   if (notices.length === 0) return null
@@ -29,7 +31,10 @@ export function NoticeList({ notices, className }: NoticeListProps) {
           <Alert
             key={index}
             role="note"
-            className="rounded-md border-0 bg-muted px-2.5 py-1.5 has-[>svg]:gap-x-2 [&>svg]:size-3.5 [&>svg]:translate-y-[0.15625rem]"
+            className={cn(
+              'border-0 has-[>svg]:gap-x-2 [&>svg]:size-3.5 [&>svg]:translate-y-[0.15625rem]',
+              notice.level === 'info' ? 'bg-transparent px-0 py-0.5' : 'rounded-md bg-muted px-2.5 py-1.5',
+            )}
           >
             <Icon className={tone} aria-hidden />
             <AlertDescription className="text-[0.78125rem] leading-normal break-words text-muted-foreground">

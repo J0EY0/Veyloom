@@ -23,7 +23,9 @@ export interface TaskBoardProps {
   onOpenThread: (threadId: string) => void
 }
 
-// Column tints: the state's colour, barely there.
+// Column tints: the state's colour, barely there. A column with no cards
+// has none: a tinted stretch of nothing would stand out more than the
+// cards beside it.
 const tints: Record<TaskState, string> = {
   running: 'bg-status-run/[0.05]',
   merge: 'bg-status-merge/[0.05]',
@@ -45,7 +47,11 @@ function StateColumns({ tasks, roomId, names, looks, now, onOpenThread }: TaskBo
       {taskStates.map((state) => {
         const label = t(`tasks.state.${state}`)
         return (
-          <section key={state} aria-label={label} className={cn('flex min-w-0 flex-col gap-2 rounded-xl px-2 pt-1.5 pb-2', tints[state])}>
+          <section
+            key={state}
+            aria-label={label}
+            className={cn('flex min-w-0 flex-col gap-2 rounded-xl px-2 pt-1.5 pb-2', columns[state].length > 0 && tints[state])}
+          >
             <h2 className="flex h-7 items-center gap-2 px-1 text-[0.8125rem] font-medium">
               <StatusMark kind={state === 'running' ? 'run' : state} />
               {label}
@@ -84,7 +90,7 @@ function MemberColumns({ tasks, roomId, members, names, looks, now, onOpenThread
         const name = names.get(id) ?? t('sender.unknownMember')
         const look = looks.get(id)
         return (
-          <section key={id} aria-label={name} className="flex min-w-0 flex-col gap-2 rounded-xl bg-muted/60 px-2 pt-1.5 pb-2">
+          <section key={id} aria-label={name} className={cn('flex min-w-0 flex-col gap-2 rounded-xl px-2 pt-1.5 pb-2', column.length > 0 && 'bg-muted/60')}>
             <div className="flex h-7.5 items-center gap-2 px-1">
               {look ? <AgentAvatar look={look} name={name} size="sm" mark={false} /> : null}
               <h2 className="min-w-0 truncate text-[0.8125rem] font-medium">{name}</h2>

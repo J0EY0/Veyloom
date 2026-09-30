@@ -3,6 +3,7 @@ import { AgentAvatar } from '@/components/shared/agent-avatar'
 import { UserAvatar } from '@/components/shared/user-avatar'
 import type { AgentLook } from '@/lib/agentLooks'
 import { formatCompactCount, formatHour, formatSpan } from '@/lib/format'
+import { useWidthRem } from '@/features/rooms/panelLayout'
 import { useT } from '@/lib/i18n'
 import { totalTokens } from '@/lib/tokens'
 import { cn } from '@/lib/utils'
@@ -19,6 +20,12 @@ export interface WaterfallProps {
 // right: the same columns on every row, the ticks and the grid behind.
 const columns = 'grid grid-cols-[18.75rem_minmax(0,1fr)_4.75rem_4.75rem_4rem] items-center gap-x-4'
 
+// How much of the time column a tick's label takes, in rem, with room to
+// the next: five characters of the 0.71875rem mono type, eight with seconds.
+function labelRem(seconds: boolean): number {
+  return (seconds ? 8 : 5) * 0.6 * 0.71875 + 0.75
+}
+
 // Waterfall draws a piece of work's turns the way Datadog and Vercel draw a
 // trace (docs/webui.md 4.20): a row a turn, its bar at its real time,
 // orange where it waited on a person, no words on the bars; how long it
@@ -27,24 +34,33 @@ const columns = 'grid grid-cols-[18.75rem_minmax(0,1fr)_4.75rem_4.75rem_4rem] it
 export function Waterfall({ work, names, looks, now }: WaterfallProps) {
   const t = useT()
   const scale = scaleOf(work, now)
+  const seconds = withSeconds(scale)
+  // Each label centred on its tick, and as many as the column holds side
+  // by side: every tick's, or every other one's, and so on, when it is
+  // narrow. Not measured yet, every tick's.
+  const [axisRef, axisRem] = useWidthRem()
+  const apart = axisRem / Math.max(scale.ticks.length - 1, 1)
+  const every = axisRem > 0 ? Math.max(1, Math.ceil(labelRem(seconds) / apart)) : 1
   return (
     <div role="table" aria-label={t('work.turns')} className="relative">
       <div role="row" className={cn(columns, 'h-5 text-[0.71875rem] text-subtle')}>
         <span role="columnheader">
           <span className="sr-only">{t('work.who')}</span>
         </span>
-        <span role="columnheader" className="relative h-full">
+        <span role="columnheader" ref={axisRef} className="relative h-full">
           <span className="sr-only">{t('work.when')}</span>
-          {scale.ticks.map((tick, index) => (
-            <span
-              key={tick}
-              aria-hidden="true"
-              className={cn('absolute font-mono tabular-nums', index === 0 ? '' : index === scale.ticks.length - 1 ? '-translate-x-full' : '-translate-x-1/2')}
-              style={{ left: `${at(scale, tick)}%` }}
-            >
-              {tickLabel(tick, withSeconds(scale))}
-            </span>
-          ))}
+          {scale.ticks.map((tick, index) =>
+            index % every === 0 ? (
+              <span
+                key={tick}
+                aria-hidden="true"
+                className="absolute -translate-x-1/2 font-mono whitespace-nowrap tabular-nums"
+                style={{ left: `${at(scale, tick)}%` }}
+              >
+                {tickLabel(tick, seconds)}
+              </span>
+            ) : null,
+          )}
         </span>
         <span role="columnheader" className="text-right">
           {t('work.took')}

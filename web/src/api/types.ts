@@ -380,6 +380,9 @@ export interface ApprovalResponse {
 // next to it.
 export interface PendingApproval extends Approval {
   member_name: string
+  // The agent behind the member, whose face the inbox shows; absent once
+  // that agent is gone.
+  agent_id?: string
   project_name: string
 }
 

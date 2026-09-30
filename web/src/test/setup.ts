@@ -1,6 +1,7 @@
 import '@testing-library/jest-dom/vitest'
 import { cleanup } from '@testing-library/react'
 import { afterEach, beforeEach, vi } from 'vitest'
+import { clearDrafts } from '@/lib/drafts'
 import { setLocale } from '@/lib/i18n'
 import { installIntersectionObserver } from './intersection'
 import { installObjectUrls } from './objectUrls'
@@ -12,6 +13,7 @@ afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
   localStorage.clear()
+  clearDrafts()
 })
 
 installIntersectionObserver()

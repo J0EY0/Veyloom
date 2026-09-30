@@ -31,8 +31,10 @@ export function Card({ title, aside, children, className }: { title: string; asi
   )
 }
 
-// Runtimes shares the tokens out by runtime: a bar in parts, each part its
-// runtime's colour and share written over it, the turns and tokens below.
+// Runtimes shares the tokens out by runtime (docs/webui.md 4.20): a bar in
+// parts, each part its runtime's colour and its share written over it, the
+// runtimes by name with their turns and tokens right below. A part too
+// narrow for its share goes without rather than show it cut.
 export function Runtimes({ usage }: { usage: Usage }) {
   const t = useT()
   const total = totalTokens(usage.total)
@@ -41,13 +43,10 @@ export function Runtimes({ usage }: { usage: Usage }) {
       <div className="flex flex-col gap-2.5">
         <div className="flex gap-0.5">
           {usage.runtimes.map((r) => (
-            <span
-              key={r.runtime}
-              className="flex min-w-0 items-baseline gap-1.5 overflow-hidden whitespace-nowrap"
-              style={{ width: `${shareOf(r.tokens, total) * 100}%` }}
-            >
-              <span className="text-xl font-semibold tracking-[-0.01em]">{Math.round(shareOf(r.tokens, total) * 100)}%</span>
-              <span className="text-xs text-subtle">{runtimeName(r.runtime)}</span>
+            <span key={r.runtime} className="@container min-w-0" style={{ width: `${shareOf(r.tokens, total) * 100}%` }}>
+              <span className="hidden text-xl font-semibold tracking-[-0.01em] whitespace-nowrap @min-[2.75rem]:block">
+                {Math.round(shareOf(r.tokens, total) * 100)}%
+              </span>
             </span>
           ))}
         </div>
@@ -61,7 +60,7 @@ export function Runtimes({ usage }: { usage: Usage }) {
           ))}
         </div>
       </div>
-      <ul className="mt-auto flex flex-col">
+      <ul className="mt-1 flex flex-col">
         {usage.runtimes.map((r) => (
           <li key={r.runtime} className="grid h-8 grid-cols-[0.625rem_minmax(0,1fr)_auto_auto] items-center gap-x-3 border-t text-[0.8125rem]">
             <span aria-hidden="true" className={cn('size-2 rounded-[0.125rem]', runtimeColours[r.runtime] ?? 'bg-chart-mark')} />

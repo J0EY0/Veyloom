@@ -8,7 +8,7 @@ import { askKind, waitingKeys } from '@/features/approvals/kinds'
 import { Button } from '@/components/ui/button'
 import type { Sender } from '@/features/rooms/useSenderNames'
 import { ActivityBlock } from '@/features/turns/ActivityBlock'
-import { activityFromEvents, activityFromTranscript, isNotice, withApprovals } from '@/features/turns/activity'
+import { activityFromEvents, activityFromTranscript, standsOut, withApprovals } from '@/features/turns/activity'
 import { NoticeList } from '@/features/turns/NoticeList'
 import { formatDuration } from '@/lib/format'
 import { useT } from '@/lib/i18n'
@@ -49,9 +49,10 @@ export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, 
   const transcript = useTranscript(turn.id, first && !running)
   const cancel = useCancelTurn()
   const activity = running ? withApprovals(activityFromEvents(live?.events ?? []), approvals.data ?? []) : activityFromTranscript(transcript.data ?? [])
-  // What the runtime told people stays in sight; the rest folds into a line.
-  const notices = activity.filter(isNotice)
-  const items = activity.filter((item) => !isNotice(item))
+  // What the runtime told people stays in sight; the rest folds into a
+  // line, the hub's own steps of getting the worktree ready with it.
+  const notices = activity.filter(standsOut)
+  const items = activity.filter((item) => !standsOut(item))
   const took = turn.ended_at ? formatDuration(turn.started_at, turn.ended_at) : undefined
   const waiting = (approvals.data ?? []).find((a) => a.status === 'pending')
 

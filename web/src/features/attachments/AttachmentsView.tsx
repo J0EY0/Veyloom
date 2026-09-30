@@ -1,17 +1,18 @@
 import { useCallback, useMemo, useState } from 'react'
-import { DownloadIcon } from 'lucide-react'
+import { DownloadIcon, PaperclipIcon } from 'lucide-react'
 import { useSearchParams } from 'react-router'
 import { archiveUrl, attachmentUrl, useRoomAttachments } from '@/api/attachments'
 import { errorText } from '@/api/errorText'
 import type { RoomAttachment } from '@/api/types'
 import { Button } from '@/components/ui/button'
-import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/ui/empty'
+import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Spinner } from '@/components/ui/spinner'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { formatBytes, formatCount, formatDay } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import { useInView } from '@/lib/useInView'
+import { cn } from '@/lib/utils'
 import { AttachmentCard } from './AttachmentCard'
 import { AttachmentsToolbar } from './AttachmentsToolbar'
 import { byDay, queryOf, readFilter, relativeDay, splitDays, whenSent, writeFilter, type TabFilter } from './filter'
@@ -75,6 +76,11 @@ export function AttachmentsView({ roomId }: { roomId: string }) {
     />
   )
 
+  const narrowed = q.trim() !== '' || group !== 'all' || sender !== ''
+  // A room with nothing in it has nothing to search, filter or pick: only
+  // the one line, in the middle (docs/webui.md §0).
+  const bare = list.isSuccess && shown.length === 0 && !narrowed
+
   let body
   if (list.isPending) {
     body = (
@@ -97,8 +103,18 @@ export function AttachmentsView({ roomId }: { roomId: string }) {
       </Empty>
     )
   } else if (shown.length === 0) {
-    const narrowed = q.trim() !== '' || group !== 'all' || sender !== ''
-    body = <p className="flex flex-1 items-center justify-center text-sm text-subtle">{narrowed ? t('attachments.noMatch') : t('attachments.none')}</p>
+    body = (
+      <Empty>
+        <EmptyHeader>
+          {narrowed ? null : (
+            <EmptyMedia variant="icon">
+              <PaperclipIcon />
+            </EmptyMedia>
+          )}
+          <EmptyTitle>{narrowed ? t('attachments.noMatch') : t('attachments.none')}</EmptyTitle>
+        </EmptyHeader>
+      </Empty>
+    )
   } else if (inDays) {
     const days = splitDays(shown)
     body = (
@@ -118,23 +134,25 @@ export function AttachmentsView({ roomId }: { roomId: string }) {
 
   return (
     <div className="relative flex min-h-0 flex-1 flex-col">
-      <div className="flex-none px-5 pt-4.5 pb-2.5">
-        <div className="mx-auto max-w-250">
-          <AttachmentsToolbar
-            roomId={roomId}
-            filter={filter}
-            onChange={change}
-            // Days count their own; a list not in days is counted up here.
-            total={inDays ? undefined : total}
-            picking={picking}
-            onPicking={(on) => (on ? setPicking(true) : stopPicking())}
-            allPicked={allPicked}
-            onPickAll={(all) => setPicked(all ? new Map(shown.map((a) => [a.id, a])) : new Map())}
-          />
+      {bare ? null : (
+        <div className="flex-none px-5 pt-4.5 pb-2.5">
+          <div className="mx-auto max-w-250">
+            <AttachmentsToolbar
+              roomId={roomId}
+              filter={filter}
+              onChange={change}
+              // Days count their own; a list not in days is counted up here.
+              total={inDays ? undefined : total}
+              picking={picking}
+              onPicking={(on) => (on ? setPicking(true) : stopPicking())}
+              allPicked={allPicked}
+              onPickAll={(all) => setPicked(all ? new Map(shown.map((a) => [a.id, a])) : new Map())}
+            />
+          </div>
         </div>
-      </div>
+      )}
       <div className="flex min-h-0 flex-1 flex-col overflow-y-auto">
-        <div className="@container mx-auto flex w-full max-w-250 flex-1 flex-col px-5 pt-3 pb-24">
+        <div className={cn('@container mx-auto flex w-full max-w-250 flex-1 flex-col px-5', bare ? 'py-5' : 'pt-3 pb-24')}>
           {body}
           {/* A new one after each page, so a short page still asks for the next. */}
           <div key={shown.length} ref={more} aria-hidden="true" className="h-px" />

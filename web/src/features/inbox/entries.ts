@@ -1,4 +1,4 @@
-import type { InboxItem, PendingApproval } from '@/api/types'
+import type { InboxItem, PendingApproval, SenderKind } from '@/api/types'
 import { approvalCommand } from '@/features/approvals/describe'
 import { systemText } from '@/features/threads/systemNote'
 import type { t as translate } from '@/lib/i18n'
@@ -16,6 +16,10 @@ export interface InboxEntry {
   threadId?: string
   turnId?: string
   sender: string
+  // Who that is: a member, drawn with its agent's face when the agent is
+  // known; a person; or Veyloom itself.
+  senderKind: SenderKind
+  agentId?: string
   project: string
   // What the row shows under the names, as plain text; search reads it too.
   excerpt: string
@@ -41,6 +45,8 @@ export function toEntries(approvals: PendingApproval[], items: InboxItem[], me: 
       threadId: approval.thread_id,
       turnId: approval.turn_id,
       sender: approval.member_name,
+      senderKind: 'agent',
+      agentId: approval.agent_id,
       project: approval.project_name,
       excerpt: approvalCommand(approval),
       createdAt: approval.created_at,
@@ -52,6 +58,8 @@ export function toEntries(approvals: PendingApproval[], items: InboxItem[], me: 
       threadId: item.thread_id,
       turnId: item.turn_id,
       sender: item.sender_kind === 'system' ? t('inbox.system') : item.sender_name,
+      senderKind: item.sender_kind,
+      agentId: item.sender_agent_id,
       project: item.project_name,
       excerpt:
         excerptOf(item.sender_kind === 'system' ? systemText(t, item.body) : item.body, me) ||

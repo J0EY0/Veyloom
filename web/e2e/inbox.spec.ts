@@ -59,11 +59,12 @@ test('what reaches the person shows in the open inbox as it happens', async ({ p
   await expect(answer).toContainText(careful)
 
   // Unread until opened, and counted meanwhile (docs/webui.md 4.19): the
-  // signed-in account, which is no users row, reads it all the same.
-  await expect(answer.getByRole('img', { name: '未读' })).toBeVisible()
+  // signed-in account, which is no users row, reads it all the same. An
+  // unread row is lifted onto the page's background.
+  await expect(answer).toHaveAttribute('data-unread')
   const unread = async () => (await call<{ unread: number }>(request, 'get', `/users/${user.id}/inbox`)).unread
   const before = await unread()
   await answer.click()
-  await expect(answer.getByRole('img', { name: '未读' })).toHaveCount(0)
+  await expect(answer).not.toHaveAttribute('data-unread')
   await expect.poll(unread).toBe(before - 1)
 })

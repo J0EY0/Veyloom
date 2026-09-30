@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { formatTime } from '@/lib/format'
-import { activityFromEvents, activityFromTranscript, describeTool, summarize, withApprovals, steered } from './activity'
+import { activityFromEvents, activityFromTranscript, describeTool, standsOut, summarize, withApprovals, steered } from './activity'
 
 describe('activity', () => {
   it('pairs tool calls with results and lists files once', () => {
@@ -39,11 +39,20 @@ describe('activity', () => {
 
   it('says what the hub was doing as the turn began as done, once something came after', () => {
     const making = { kind: 'notice' as const, level: 'info', text: "Making Coder's worktree, on the branch veyloom/coder." }
-    expect(activityFromEvents([making])).toEqual([{ kind: 'notice', level: 'info', text: '正在为 Coder 创建工作区（分支 veyloom/coder）' }])
+    expect(activityFromEvents([making])).toEqual([{ kind: 'notice', level: 'info', text: '正在为 Coder 创建工作区（分支 veyloom/coder）', setup: true }])
     expect(activityFromEvents([making, { kind: 'tool_call', tool: 'Bash', input: '{"command":"ls"}' }])[0]).toMatchObject({
       text: '已为 Coder 创建工作区（分支 veyloom/coder）',
     })
     expect(activityFromEvents([making], true)[0]).toMatchObject({ text: '已为 Coder 创建工作区（分支 veyloom/coder）' })
+  })
+
+  it('sets apart what a runtime told people, not the hub’s own steps of readying the worktree', () => {
+    const [making, said] = activityFromEvents([
+      { kind: 'notice', level: 'info', text: "Making Coder's worktree, on the branch veyloom/coder." },
+      { kind: 'notice', level: 'info', text: 'Claude Code switched to permission mode plan' },
+    ])
+    expect(standsOut(making)).toBe(false)
+    expect(standsOut(said)).toBe(true)
   })
 
   it('has the call a request holds up wait, the one with its command, and run once allowed', () => {
@@ -180,6 +189,9 @@ describe('activity', () => {
     expect(describeTool('Glob', '{"pattern":"**/*.go"}')).toBe('Glob **/*.go')
     expect(describeTool('fileChange', '{"paths":["a.go","b.go"],"reason":"x"}')).toBe('fileChange a.go b.go')
     expect(describeTool('mcp__veyloom__read_topic', '{"topic":"3"}')).toBe('read_topic 3')
+    // The skill a runtime took up, the file whose wiki pages were asked for.
+    expect(describeTool('Skill', '{"skill":"veyloom:team-practices"}')).toBe('Skill veyloom:team-practices')
+    expect(describeTool('veyloom/related_wiki', '{"file":"main.go","depth":1}')).toBe('veyloom/related_wiki main.go')
     expect(describeTool('TodoWrite', '{}')).toBe('TodoWrite')
     expect(describeTool('Task', '{"description":"look","subagent_type":"x"}')).toBe('Task {"description":"look","subagent_type":"x"}')
   })

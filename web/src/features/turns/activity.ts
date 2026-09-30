@@ -2,7 +2,7 @@ import { eventsOf } from '@/api/transcript'
 import type { Approval, TranscriptLine, TurnEvent } from '@/api/types'
 import { type AskKind, askKind } from '@/features/approvals/kinds'
 import { confirmationOf, planTitle } from '@/features/approvals/plans'
-import { noticeText } from '@/features/threads/systemNote'
+import { isSetupNotice, noticeText } from '@/features/threads/systemNote'
 import { t } from '@/lib/i18n'
 import { talkCall } from './talkCalls'
 
@@ -21,16 +21,20 @@ export type ActivityItem =
   // reviewer is set when the runtime's own reviewer settled it.
   | { kind: 'approval'; id?: string; tool: string; input: string; status: string; reviewer?: string; asks?: AskKind }
   | { kind: 'error'; text: string }
-  // What the runtime told people: shown as it is, never folded away.
-  | { kind: 'notice'; level: NoticeLevel; text: string }
+  // What the runtime told people: shown as it is, never folded away
+  // (docs/design.md 4.6). setup marks the hub's own, about getting the
+  // turn's worktree ready, which folds with the tools.
+  | { kind: 'notice'; level: NoticeLevel; text: string; setup?: true }
   // What people said in the turn's topic that it was passed as it ran:
   // who said the last of it, and that, on one line.
   | { kind: 'steer'; who: string; text: string }
 
 export type Notice = Extract<ActivityItem, { kind: 'notice' }>
 
-export function isNotice(item: ActivityItem): item is Notice {
-  return item.kind === 'notice'
+// standsOut says an item is shown apart from the line the rest folds into:
+// what a runtime told people.
+export function standsOut(item: ActivityItem): item is Notice {
+  return item.kind === 'notice' && !item.setup
 }
 
 // activityFromEvents reads a turn's events; ended says the turn is over,
@@ -84,10 +88,12 @@ export function activityFromEvents(events: TurnEvent[], ended = false): Activity
           asks: event.approval_kind ? askKind(event.approval_kind) : undefined,
         })
         break
-      case 'notice':
+      case 'notice': {
         // Something happened after it: what it said was under way is done.
-        items.push({ kind: 'notice', level: noticeLevel(event.level), text: noticeText(t, event.text ?? '', ended || index < events.length - 1) })
+        const text = noticeText(t, event.text ?? '', ended || index < events.length - 1)
+        items.push({ kind: 'notice', level: noticeLevel(event.level), text, ...(isSetupNotice(event.text ?? '') ? { setup: true as const } : {}) })
         break
+      }
       case 'error':
         items.push({ kind: 'error', text: event.text ?? '' })
         break
@@ -296,7 +302,7 @@ export function describeTool(tool: string, input: string): string {
 
 // The fields of a tool's input that say what it works on, by the names the
 // runtimes give them, most telling first.
-const subjectFields = ['file_path', 'notebook_path', 'path', 'paths', 'pattern', 'query', 'url', 'slug', 'title', 'topic']
+const subjectFields = ['file_path', 'notebook_path', 'path', 'paths', 'file', 'pattern', 'query', 'url', 'skill', 'slug', 'title', 'topic']
 
 // subjectOf is what a tool's input says the call works on, for one line:
 // a file, what it searches for, a page; else the input as it came. A long

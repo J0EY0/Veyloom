@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { ChevronRightIcon, FileTextIcon, MessageSquarePlusIcon, ShieldCheckIcon, TerminalIcon } from 'lucide-react'
+import { ChevronRightIcon, FileTextIcon, InfoIcon, MessageSquarePlusIcon, ShieldCheckIcon, TerminalIcon } from 'lucide-react'
 import { Task, TaskContent, TaskItem, TaskItemFile, TaskTrigger } from '@/components/ai-elements/task'
 import { StatusDot } from '@/components/shared/status-dot'
 import { Button } from '@/components/ui/button'
@@ -111,6 +111,14 @@ function Row({ item }: { item: ActivityItem }) {
         <>
           <MessageSquarePlusIcon className="size-3.5 flex-none text-subtle" />
           <span className="min-w-0 truncate">{t('activity.steer', { who: item.who, text: item.text })}</span>
+        </>
+      )
+    case 'notice':
+      // The hub's own steps of getting the worktree ready (activity.ts).
+      return (
+        <>
+          <InfoIcon className="size-3.5 flex-none text-subtle" />
+          <span className="min-w-0 truncate">{item.text}</span>
         </>
       )
     default:

@@ -43,18 +43,23 @@ describe('reading the inbox', () => {
     })
     renderWithProviders(<InboxPage />, { route: '/inbox', path: '/inbox' })
     const rows = within(await screen.findByRole('list')).getAllByRole('link')
-    expect(within(rows[0]).getByRole('img', { name: '未读' })).toBeInTheDocument()
-    expect(within(rows[2]).queryByRole('img', { name: '未读' })).toBeNull()
+    // Unread rows are lifted onto the page's background, read ones stay on
+    // the list's grey; a screen reader hears 未读.
+    expect(rows[0]).toHaveAttribute('data-unread')
+    expect(rows[0]).toHaveClass('bg-background')
+    expect(within(rows[0]).getByText('未读')).toHaveClass('sr-only')
+    expect(rows[2]).not.toHaveAttribute('data-unread')
+    expect(rows[2]).not.toHaveClass('bg-background')
 
     await userEvent.click(rows[1])
     await waitFor(() => expect(reads).toEqual([{ message_ids: ['m7'] }]))
     const row = (n: number) => within(screen.getByRole('list')).getAllByRole('link')[n]
-    await waitFor(() => expect(within(row(1)).queryByRole('img', { name: '未读' })).toBeNull())
+    await waitFor(() => expect(row(1)).not.toHaveAttribute('data-unread'))
 
-    await userEvent.click(screen.getByRole('button', { name: '全部标为已读' }))
+    await userEvent.click(screen.getByRole('button', { name: '全部已读' }))
     await waitFor(() => expect(reads[1]).toEqual({ up_to: 9 }))
-    await waitFor(() => expect(within(row(0)).queryByRole('img', { name: '未读' })).toBeNull())
-    expect(screen.queryByRole('button', { name: '全部标为已读' })).toBeNull()
+    await waitFor(() => expect(row(0)).not.toHaveAttribute('data-unread'))
+    expect(screen.queryByRole('button', { name: '全部已读' })).toBeNull()
   })
 
   it('offers nothing to read when all is read', async () => {
@@ -65,6 +70,6 @@ describe('reading the inbox', () => {
     })
     renderWithProviders(<InboxPage />, { route: '/inbox', path: '/inbox' })
     await screen.findByRole('list')
-    expect(screen.queryByRole('button', { name: '全部标为已读' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '全部已读' })).toBeNull()
   })
 })

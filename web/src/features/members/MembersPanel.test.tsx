@@ -186,6 +186,8 @@ describe('MembersPanel', () => {
     })
     renderPanel()
     await userEvent.click(await screen.findByRole('button', { name: '添加成员' }))
+    // Named as the button that opened it: what joins a chat is a member.
+    expect(await screen.findByRole('dialog', { name: '添加成员' })).toBeInTheDocument()
     // The repository starts as where the project is checked out.
     expect(await screen.findByDisplayValue('/src/veyloom')).toHaveAccessibleName('仓库路径')
 

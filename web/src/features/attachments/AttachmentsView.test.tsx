@@ -132,10 +132,15 @@ describe('the attachments tab', () => {
     expect(screen.getByRole('button', { name: '预览 shot.png' })).toBeInTheDocument()
   })
 
-  it('says so, in a line, when the room has none or none match', async () => {
+  it('keeps only the line, nothing to search or pick, when the room has none', async () => {
     stubRoom([])
     show()
     expect(await screen.findByText('群里还没有附件')).toBeInTheDocument()
+    // docs/webui.md §0: a page that is only its empty state drops the
+    // search and the filters.
+    expect(screen.queryByRole('searchbox', { name: '搜索附件' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('tab', { name: '文档' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '选择' })).not.toBeInTheDocument()
   })
 
   it('says none match when a filter is on', async () => {

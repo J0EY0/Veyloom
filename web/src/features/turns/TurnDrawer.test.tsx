@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { applyTurnEvent, resetLiveTurns } from '@/lib/liveTurns'
@@ -38,6 +38,37 @@ describe('TurnDrawer', () => {
     expect(screen.queryByRole('button', { name: '取消轮次' })).not.toBeInTheDocument()
     // The runtime reported no tokens: no count at all rather than a zero.
     expect(screen.queryByText(/token/)).not.toBeInTheDocument()
+  })
+
+  it('says a call gave nothing back, and shows notes for people by how much they matter', async () => {
+    stubApi({
+      '/rooms/r1/members': members,
+      '/turns/x8': { turn: turn('x8', 't1', { error: '' }) },
+      '/turns/x8/transcript': new Response(
+        [
+          '{"kind":"start","at":"2026-09-14T02:00:00Z","runtime":"fake"}',
+          '{"kind":"event","at":"2026-09-14T02:00:00Z","event":{"kind":"notice","level":"info","text":"Making Coder\'s worktree, on the branch veyloom/coder."}}',
+          '{"kind":"event","at":"2026-09-14T02:00:01Z","event":{"kind":"notice","level":"warning","text":"rate limits are close"}}',
+          '{"kind":"event","at":"2026-09-14T02:00:02Z","event":{"kind":"tool_call","tool":"ToolSearch","input":"{\\"query\\":\\"select:send_message\\"}"}}',
+          '{"kind":"event","at":"2026-09-14T02:00:03Z","event":{"kind":"tool_result","tool":"ToolSearch"}}',
+          '{"kind":"done","at":"2026-09-14T02:00:42Z"}',
+        ].join('\n'),
+        { headers: { 'Content-Type': 'application/x-ndjson' } },
+      ),
+    })
+    renderWithProviders(<TurnDrawer roomId="r1" turnId="x8" onClose={() => {}} />)
+
+    // The hub's own note in the UI's words, quiet; a warning as a warning.
+    const made = await screen.findByText('已为 Coder 创建工作区（分支 veyloom/coder）')
+    expect(made).toHaveClass('text-muted-foreground')
+    expect(screen.getByText('rate limits are close')).toHaveClass('text-status-wait')
+    // A result with nothing in it says so rather than leave a bare time.
+    expect(screen.getByText('没有输出')).toBeInTheDocument()
+    // A turn of another day: each line its time of day, the date only in
+    // the heading.
+    for (const row of within(screen.getByRole('list')).getAllByRole('listitem')) {
+      expect(row.querySelector('time')?.textContent).toMatch(/^\d{2}:\d{2}$/)
+    }
   })
 
   it('shows the brief each run began with, folded until asked for', async () => {
