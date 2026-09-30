@@ -181,9 +181,20 @@ func TestLoop_SkillsRolledBack(t *testing.T) {
 	if _, err := l.h.RollbackSkill(l.ctx, "go-table-tests", l.user.ID, ""); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("nothing on trial to roll back: %v", err)
 	}
+	// Whoever reads the skill next is told what was rolled back, and why.
+	reader := l.member("Reader", map[string]any{"tool_calls": []any{
+		call(runtime.WikiToolRead, map[string]any{"scope": "library", "path": "/skills/go-table-tests/SKILL.md"}),
+	}})
+	asked := l.say("@Reader read the skill", "", reader)
+	l.settled(2, "Reader's turn")
+	if answer := l.root(l.topic(asked)).Body; !strings.Contains(answer, "rolled back before") || !strings.Contains(answer, "by human:alice: copying drifts") ||
+		!strings.Contains(answer, "+Copy each case.") {
+		t.Errorf("the rollback told:\n%s", answer)
+	}
+	turns := 2
 
 	// A person's confirmation keeps a change.
-	change(2)
+	change(turns + 1)
 	if _, err := l.h.VerifyLibraryPage(l.ctx, wiki.SkillPath("go-table-tests"), l.user.ID); err != nil {
 		t.Fatal(err)
 	}
@@ -192,7 +203,7 @@ func TestLoop_SkillsRolledBack(t *testing.T) {
 	}
 
 	// So does a person's own edit, made in their editor.
-	change(3)
+	change(turns + 2)
 	data, _ := os.ReadFile(file)
 	if err := os.WriteFile(file, []byte(string(data)+"\nBy hand.\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -204,9 +215,10 @@ func TestLoop_SkillsRolledBack(t *testing.T) {
 		t.Errorf("edited by hand %+v", kept)
 	}
 
-	// The maintainer of the team that owns it sees the trial, and rolls it
-	// back; a skill of another team is not its to roll back.
-	change(4)
+	// The maintainer of the team that owns it sees the trial and what was
+	// rolled back before, and rolls it back; a skill of another team is not
+	// its to roll back.
+	change(turns + 3)
 	keeper := l.member("Keeper", nil)
 	l.keep(keeper, store.UpkeepManual)
 	l.setOptions(keeper, map[string]any{"tool_calls": []any{
@@ -218,7 +230,9 @@ func TestLoop_SkillsRolledBack(t *testing.T) {
 	}
 	upkeep := l.upkeeps(1)[0]
 	if brief := promptOf(t, upkeep); !strings.Contains(brief, "Changes on trial to those skills (1):\n- go-table-tests: changed by Coder of project \"p\"") ||
-		!strings.Contains(brief, "roll it back with rollback_skill") {
+		!strings.Contains(brief, "roll it back with rollback_skill") ||
+		!strings.Contains(brief, "rolled back lately, not to be made again") || !strings.Contains(brief, "- go-table-tests: rolled back on ") ||
+		!strings.Contains(brief, "by human:alice: copying drifts") {
 		t.Errorf("the upkeep's brief:\n%s", brief)
 	}
 	back = l.trialOf("go-table-tests", store.TrialRolledBack)
@@ -261,5 +275,17 @@ func TestLoop_ASkillsReferenceIsTheSkill(t *testing.T) {
 	l.settled(2, "Writer's second turn")
 	if trial := l.trialOf("release-notes", store.TrialOpen); trial.ChangedBy != "Writer" {
 		t.Errorf("the skill is on trial for its reference: %+v", trial)
+	}
+	// Taken out, the reference is the file it was with the change, not the
+	// library's page of it.
+	r, _ := l.h.openLibrary(l.ctx)
+	skill, err := r.bundle.ProjectSkill("release-notes")
+	if got := string(skill.Files["references/style.md"]); err != nil || strings.HasPrefix(got, "---") || !strings.Contains(got, "Short lines.") || !strings.Contains(got, "Group by kind.") {
+		t.Errorf("the changed reference: %q %v", got, err)
+	}
+	// On trial for it, the skill is not updated from its folder.
+	var p *store.Problem
+	if _, err := l.h.UpdateSkill(l.ctx, folder, l.user.ID); !errors.As(err, &p) || p.Code != "skillOnTrial" {
+		t.Errorf("updated while on trial: %v", err)
 	}
 }

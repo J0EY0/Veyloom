@@ -31,7 +31,9 @@ type change struct {
 	deprecated  bool
 	verified    bool
 	renamedFrom string
-	gone        bool // renamed away; the old path is in the commit
+	gone        bool // renamed or removed; the old path is in the commit
+	// removed marks the page of a skill a person removed, for the log.
+	removed bool
 	// note is said after the page's line in the log, why say.
 	note string
 }
@@ -333,8 +335,8 @@ func (w *Writer) Rename(from, to string) (Page, error) {
 
 // check holds an authored page to what Veyloom writes.
 func (w *Writer) check(p string, d *okf.Document, data []byte) error {
-	if len(data) > maxPageSize {
-		return tooBig(p, len(data))
+	if err := sizeOK(p, len(data)); err != nil {
+		return err
 	}
 	if problems := okf.CheckConcept(p, d, okf.Strict); len(problems) > 0 {
 		return &InvalidError{Path: p, Problems: problems}
@@ -381,8 +383,8 @@ func (w *Writer) save(p string, d *okf.Document, own bool, note func(*change)) (
 		if err := w.check(p, d, data); err != nil {
 			return Page{}, err
 		}
-	} else if len(data) > maxPageSize {
-		return Page{}, tooBig(p, len(data))
+	} else if err := sizeOK(p, len(data)); err != nil {
+		return Page{}, err
 	}
 	c := w.touch(p)
 	if err := writeFile(w.b.file(p), data); err != nil {
@@ -407,16 +409,16 @@ func (w *Writer) save(p string, d *okf.Document, own bool, note func(*change)) (
 
 // PutFile writes a file of a skill's folder that is not a page: a script,
 // a template, whatever the skill's instructions point at (design.md 5.9:
-// they go in as they are). Pages go through Create and Put, which hold
-// them to OKF. Hidden files and ones too big for a runtime to read are
-// refused.
+// they go in as they are), an index.md or log.md of the skill's own among
+// them. Pages go through PutPage, Create and Put. Hidden files and ones
+// too big for a runtime to read are refused.
 func (w *Writer) PutFile(p string, data []byte) error {
 	p = path.Clean("/" + p)
 	name := SkillOfFile(p)
 	switch {
 	case name == "" || !slug.MatchString(name) || len(name) > 64:
 		return fmt.Errorf("%w: %s is in no skill's folder", store.ErrInvalidInput, p)
-	case path.Ext(p) == ".md":
+	case path.Ext(p) == ".md" && !isReserved(p):
 		return fmt.Errorf("%w: %s is a page: write it as one", store.ErrInvalidInput, p)
 	case strings.Contains(p, "/."):
 		return fmt.Errorf("%w: %s has a hidden part", store.ErrInvalidInput, p)
@@ -427,6 +429,46 @@ func (w *Writer) PutFile(p string, data []byte) error {
 	defer w.b.mu.Unlock()
 	w.touch(p)
 	return writeFile(w.b.file(p), data)
+}
+
+// PutPage writes a page of a skill's folder as the bytes given, a file of
+// the skill as its author wrote it with a type put in front
+// (okf.WithType): not stamped, as nothing in it is the writer's own, but
+// held to OKF, to the size a skill's file may have and screened for
+// secrets like any page the writer writes.
+func (w *Writer) PutPage(p string, data []byte) (Page, error) {
+	p, err := CleanPath(p)
+	if err != nil {
+		return Page{}, err
+	}
+	if !okf.SkillFolderFile(p) || !slug.MatchString(SkillOfFile(p)) {
+		return Page{}, fmt.Errorf("%w: %s is no file of a skill's folder", store.ErrInvalidInput, p)
+	}
+	d, err := okf.Parse(data)
+	if err != nil {
+		return Page{}, fmt.Errorf("%w: %s: %v", store.ErrInvalidInput, p, err)
+	}
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	if err := w.check(p, d, data); err != nil {
+		return Page{}, err
+	}
+	c := w.touch(p)
+	if err := writeFile(w.b.file(p), data); err != nil {
+		return Page{}, err
+	}
+	info, err := os.Stat(w.b.file(p))
+	if err != nil {
+		return Page{}, err
+	}
+	e, err := newEntry(p, data, info)
+	if err != nil {
+		return Page{}, err
+	}
+	w.b.pages[p] = e
+	delete(w.b.problems, p)
+	c.content = true
+	return e.page()
 }
 
 // touch returns what the writer did to p, starting the record on first use.
@@ -484,6 +526,11 @@ func (w *Writer) logEntries() []okf.LogEntry {
 	for _, p := range w.order {
 		c := w.changes[p]
 		e := w.b.pages[p]
+		if c.removed {
+			// As a removal outside Veyloom is logged, the page gone.
+			entries = append(entries, okf.LogEntry{Kind: okf.LogRemoval, Text: p + " was removed by " + w.author})
+			continue
+		}
 		if c.gone || e == nil {
 			continue
 		}
@@ -557,8 +604,20 @@ func linkText(s string) string {
 	return strings.NewReplacer(`[`, `\[`, `]`, `\]`).Replace(s)
 }
 
-// tooBig is what a page over maxPageSize is refused with.
-func tooBig(p string, size int) error {
-	return store.Invalid("pageTooBig", store.Params{"path": p, "kb": strconv.Itoa(size >> 10), "max": strconv.Itoa(maxPageSize >> 10)},
-		"%s is %d KB; a page should stay under %d KB", p, size>>10, maxPageSize>>10)
+// sizeOK refuses a page too big to write: over maxPageSize, or for a page
+// of a skill's folder, its SKILL.md among them, over MaxSkillFile, the
+// most a file of a skill may be (docs/design.md 5.11).
+func sizeOK(p string, size int) error {
+	if SkillOfFile(p) != "" {
+		if size > MaxSkillFile {
+			return store.Invalid("skillFileTooBig", store.Params{"path": p, "mb": MB(int64(size)), "max": MB(MaxSkillFile)},
+				"%s is %s MB; a skill's file should stay under %s MB", p, MB(int64(size)), MB(MaxSkillFile))
+		}
+		return nil
+	}
+	if size > maxPageSize {
+		return store.Invalid("pageTooBig", store.Params{"path": p, "kb": strconv.Itoa(size >> 10), "max": strconv.Itoa(maxPageSize >> 10)},
+			"%s is %d KB; a page should stay under %d KB", p, size>>10, maxPageSize>>10)
+	}
+	return nil
 }

@@ -263,6 +263,90 @@ func relayFolder(t *testing.T) string {
 	return dir
 }
 
+// TestClaudeRealSmoke_SkillFilesAsWritten: the files of a skill reach
+// Claude Code as their author wrote them: SKILL.md names FORMS.md in
+// plain text, and the word is put together from the frontmatter of a
+// template whose name is no slug, both of which the library once changed.
+func TestClaudeRealSmoke_SkillFilesAsWritten(t *testing.T) {
+	if os.Getenv("VEYLOOM_CLAUDE_REAL_SMOKE") != "1" {
+		t.Skip("set VEYLOOM_CLAUDE_REAL_SMOKE=1 to run against the real claude CLI and model")
+	}
+	if _, err := exec.LookPath("claude"); err != nil {
+		t.Skipf("claude is not installed: %v", err)
+	}
+	r := newSmokeRoom(t, wikiSmokeRunners(t), store.NewAgent{
+		Name: "Claude skills", Runtime: "claude", Model: "haiku", PermissionPreset: store.PermissionReadOnly,
+		RoleCard: "Answer in as few words as you can.",
+	}, t.TempDir())
+	r.asWrittenRound(1, "")
+}
+
+// TestCodexSmoke_SkillFilesAsWritten is
+// TestClaudeRealSmoke_SkillFilesAsWritten on Codex.
+func TestCodexSmoke_SkillFilesAsWritten(t *testing.T) {
+	if os.Getenv("VEYLOOM_CODEX_SMOKE") != "1" {
+		t.Skip("set VEYLOOM_CODEX_SMOKE=1 to run against the real codex CLI")
+	}
+	if _, err := exec.LookPath("codex"); err != nil {
+		t.Skipf("codex is not installed: %v", err)
+	}
+	r := newSmokeRoom(t, wikiSmokeRunners(t), store.NewAgent{
+		Name: "Codex skills", Runtime: "codex", PermissionPreset: store.PermissionReadOnly,
+		RoleCard: "Answer in as few words as you can.",
+	}, t.TempDir())
+	r.asWrittenRound(1, "")
+}
+
+// asWrittenRound imports a skill whose word comes from FORMS.md, named in
+// SKILL.md's text, and from the frontmatter of templates/Agent_Form.md,
+// installs it for the member and, as turn n, asks for the word.
+func (r *smokeRoom) asWrittenRound(n int, threadID string) store.Turn {
+	r.t.Helper()
+	dir := filepath.Join(r.t.TempDir(), "form-word")
+	for rel, text := range map[string]string{
+		"SKILL.md": "---\nname: form-word\ndescription: \"Use this skill whenever someone asks for the Veyloom form word: it says how to put the word together.\"\n---\n\n" +
+			"To put the Veyloom form word together, first read FORMS.md in this skill's folder and do as it says. Reply with just the word.\n",
+		"FORMS.md": "# Forms\n\nThe form word is the value of the code key in the frontmatter of templates/Agent_Form.md, in this skill's folder, " +
+			"then a hyphen, then how many tools that frontmatter's tools key lists.\n",
+		"templates/Agent_Form.md": "---\nname: agent-form\ncode: MAPLE\ntools: Read, Grep, Glob\n---\n\nA form for agents.\n",
+	} {
+		p := filepath.Join(dir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			r.t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(text), 0o644); err != nil {
+			r.t.Fatal(err)
+		}
+	}
+	if _, err := r.h.ImportSkill(r.ctx, dir, "", r.user.ID); err != nil {
+		r.t.Fatal(err)
+	}
+	if _, err := r.h.InstallSkill(r.ctx, "form-word", r.agent.ID, true); err != nil {
+		r.t.Fatal(err)
+	}
+	r.say("What is the Veyloom form word? Use the skill that has it, then reply with just the word.", threadID)
+	turn := r.waitDone(n)
+	if threadID == "" {
+		threadID = topicOf(r.t, r, turn)
+	}
+	reply := r.lastReply(threadID)
+	tx, _ := os.ReadFile(turn.TranscriptPath)
+	var calls []string
+	for _, line := range strings.Split(string(tx), "\n") {
+		if strings.Contains(line, `"tool_call"`) && strings.Contains(line, "form-word") {
+			calls = append(calls, excerpt(line, 300))
+		}
+	}
+	if !strings.Contains(reply, "MAPLE-3") {
+		r.t.Errorf("turn %d should have put the word together from the skill's files as written, said %q, through:\n%s", n, reply, strings.Join(calls, "\n"))
+	}
+	if !slices.Contains(turn.SkillsUsed, "form-word") {
+		r.t.Errorf("turn %d should be recorded as using the skill: %v", n, turn.SkillsUsed)
+	}
+	r.t.Logf("turn %d answered %q through %d calls on the skill: %s", n, reply, len(calls), strings.Join(calls, " | "))
+	return turn
+}
+
 // referencesRound imports the relay skill, installs it for the member and,
 // as turn n, asks for the word only its list holds.
 func (r *smokeRoom) referencesRound(n int, threadID string) store.Turn {

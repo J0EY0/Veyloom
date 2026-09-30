@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -243,9 +244,15 @@ func (r *ClaudeRunner) args(spec TurnSpec) []string {
 	// With them, the rules refusing the person's own skills of the
 	// plugin's names. A --settings among the agent's extra_args comes later
 	// and wins.
+	// And the reading of the skills it is given, which sit outside the
+	// folder the run works in (claudeSkillReads).
 	permissions := map[string]any{}
-	if len(spec.AllowedRules) > 0 {
-		permissions["allow"] = spec.AllowedRules
+	allow := spec.AllowedRules
+	if spec.SkillDir != "" {
+		allow = append(slices.Clip(allow), claudeSkillReads(spec.SkillDir)...)
+	}
+	if len(allow) > 0 {
+		permissions["allow"] = allow
 	}
 	if len(clashes) > 0 {
 		denies := make([]string, len(clashes))
@@ -259,6 +266,20 @@ func (r *ClaudeRunner) args(spec TurnSpec) []string {
 		args = append(args, "--settings", string(settings))
 	}
 	return append(args, optStrings(spec.Options, "extra_args")...)
+}
+
+// claudeSkillReads are the permission rules that let a run read the
+// skills it is given, their references and templates: they sit outside
+// the folder it works in, where Claude Code asks before it reads, and a
+// read-only member's asking is turned down (docs/design.md 5.11). The
+// folder goes by the name given and by the one it really has, as a path
+// the run reads may be either.
+func claudeSkillReads(dir string) []string {
+	rules := []string{"Read(/" + filepath.ToSlash(dir) + "/**)"}
+	if real, err := filepath.EvalSymlinks(dir); err == nil && real != dir {
+		rules = append(rules, "Read(/"+filepath.ToSlash(real)+"/**)")
+	}
+	return rules
 }
 
 // claudeUserMessage is the prompt as the stream-json user message the CLI

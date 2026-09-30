@@ -106,6 +106,13 @@ type Wikis interface {
 	// People add skills to the library and install them for agents
 	// (docs/design.md 5.15).
 	ImportSkill(ctx context.Context, folder, team, userID string) (hub.WikiPageView, error)
+	// UpdateSkill takes the skill in folder into the library again,
+	// replacing the library's copy of it.
+	UpdateSkill(ctx context.Context, folder, userID string) (hub.WikiPageView, error)
+	// RetireSkill takes a skill out of use, or puts it back; DeleteSkill
+	// removes it and takes it off the agents it is installed for.
+	RetireSkill(ctx context.Context, name string, retired bool, userID string) (hub.WikiPageView, error)
+	DeleteSkill(ctx context.Context, name, userID string) error
 	// ExportSkill is a skill's folder in Agent Skills form, as a zip file.
 	ExportSkill(ctx context.Context, name string) ([]byte, error)
 	// LocalSkills are the skills people keep for their runtimes on this
@@ -341,6 +348,9 @@ func NewHandler(deps Deps) http.Handler {
 	mux.HandleFunc("POST /api/v1/library/verify", h.verifyLibraryPage)
 	mux.HandleFunc("POST /api/v1/library/transfer", h.transferSkill)
 	mux.HandleFunc("POST /api/v1/library/import", h.importSkill)
+	mux.HandleFunc("POST /api/v1/library/update", h.updateSkill)
+	mux.HandleFunc("POST /api/v1/library/retire", h.retireSkill)
+	mux.HandleFunc("POST /api/v1/library/delete", h.deleteSkill)
 	mux.HandleFunc("GET /api/v1/library/export", h.exportSkill)
 	mux.HandleFunc("GET /api/v1/library/local", h.localSkills)
 	mux.HandleFunc("POST /api/v1/library/upload", h.uploadSkills)

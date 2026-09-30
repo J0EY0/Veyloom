@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/J0EY0/veyloom/internal/store"
 	"github.com/J0EY0/veyloom/internal/wiki/okf"
@@ -124,9 +125,10 @@ func TestProjectSkill(t *testing.T) {
 	}
 }
 
-// What a runtime reads, and a person takes elsewhere, is the skill as it
-// is anywhere else: its references plain markdown that link from where
-// they are, not pages of the library linking from its root.
+// Pages the library made of a skill's references before it kept them as
+// written, and links an agent writes from the library's root: a runtime
+// reads them linking from where each file is, and without the library's
+// type and stamps. What the page has of its own, its title here, stays.
 func TestProjectSkill_ReferencesAsTheyWere(t *testing.T) {
 	b := openLibrary(t)
 	w := writer(t, b, okf.Human("alice"))
@@ -154,15 +156,129 @@ func TestProjectSkill_ReferencesAsTheyWere(t *testing.T) {
 	if !strings.Contains(main, "](references/guide.md)") || !strings.Contains(main, "](/patterns/relays.md)") {
 		t.Errorf("SKILL.md links into its folder from there:\n%s", main)
 	}
-	want := "# Guide\n\nRead [the list](list.md#words), then [the skill](../SKILL.md) again, or [elsewhere](/patterns/relays.md).\n"
+	want := "---\ntitle: Guide\n---\n\n# Guide\n\nRead [the list](list.md#words), then [the skill](../SKILL.md) again, or [elsewhere](/patterns/relays.md).\n"
 	if got := string(got.Files["references/guide.md"]); got != want {
 		t.Errorf("the guide:\n%q\nwant\n%q", got, want)
 	}
-	if got := string(got.Files["references/list.md"]); got != "The relay word is FERN-77.\n" {
+	if got := string(got.Files["references/list.md"]); got != "---\ntitle: List\n---\n\nThe relay word is FERN-77.\n" {
 		t.Errorf("the list: %q", got)
 	}
 	if !strings.Contains(readFile(t, b, "/skills/relay-word/references/guide.md"), "](/skills/relay-word/references/list.md#words)") {
 		t.Error("the library's page links from its root")
+	}
+}
+
+// The markdown files of a skill's folder are kept as their author wrote
+// them, a type line in front, and reach a runtime to the byte: names,
+// frontmatter and links as they were, an index.md of the skill's own as a
+// file. Changed by an agent since, a file keeps its own keys and text and
+// loses the library's.
+func TestProjectSkill_FilesAsTheyWere(t *testing.T) {
+	ctx := context.Background()
+	b := openLibrary(t)
+	w := writer(t, b, okf.Human("alice"))
+	if _, err := w.Create(SkillPath("pdf"), skill("pdf", "", "Use for PDFs.", "If you fill a form, read FORMS.md.\n\nSee [the API](references/API_Guide.md).")); err != nil {
+		t.Fatal(err)
+	}
+	files := map[string]string{
+		"FORMS.md":                "# Forms\n\nFill them.\n",
+		"references/API_Guide.md": "# API\n\nBack to [forms](../FORMS.md) and [the list](index.md).\n",
+		"templates/agent.md":      "---\nname: reviewer\ndescription: Reviews code.\ntools: Read, Grep\n---\n\nYou review code.\n",
+		"templates/SKILL.md":      "---\nname: my-template\ndescription: A template.\n---\n\n# Template\n",
+		"big.md":                  "# Big\n\n" + strings.Repeat("A line of a long guide.\n", 317<<10/24),
+	}
+	for rel, text := range files {
+		if _, err := w.PutPage("/skills/pdf/"+rel, okf.WithType([]byte(text), ReferenceType)); err != nil {
+			t.Fatalf("%s: %v", rel, err)
+		}
+	}
+	if err := w.PutFile("/skills/pdf/references/index.md", []byte("---\ntitle: All\n---\n# All\n")); err != nil {
+		t.Fatal(err)
+	}
+	files["references/index.md"] = "---\ntitle: All\n---\n# All\n"
+	if _, err := w.Commit(ctx, "Import pdf"); err != nil {
+		t.Fatal(err)
+	}
+	if page, err := b.Page("/skills/pdf/references/API_Guide.md"); err != nil || page.Type != ReferenceType || page.Title != "API_Guide" {
+		t.Errorf("a page of the library, named as it was: %+v %v", page.Summary, err)
+	}
+	if h := b.Health(time.Now()); len(h.Problems) > 0 || len(h.Broken) > 0 {
+		t.Errorf("the library holds them to OKF: %+v %+v", h.Problems, h.Broken)
+	}
+	got, err := b.ProjectSkill("pdf")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel, text := range files {
+		if string(got.Files[rel]) != text {
+			t.Errorf("%s:\n%q\nwant\n%q", rel, got.Files[rel], text)
+		}
+	}
+	if main := string(got.Files["SKILL.md"]); !strings.Contains(main, "read FORMS.md.\n\nSee [the API](references/API_Guide.md).") {
+		t.Errorf("SKILL.md links as it was written:\n%s", main)
+	}
+
+	// An agent improves the template; the runtime gets its keys and the
+	// change, not the library's.
+	agent := writer(t, b, "codex/gpt-5")
+	if _, err := agent.Edit("/skills/pdf/templates/agent.md", []Edit{{Op: "replace", Target: "You review code.", Content: "You review code closely, with [the form](/skills/pdf/FORMS.md)."}}, ""); err != nil {
+		t.Fatal(err)
+	}
+	got, _ = b.ProjectSkill("pdf")
+	if out := string(got.Files["templates/agent.md"]); out != "---\nname: reviewer\ndescription: Reviews code.\ntools: Read, Grep\n---\n\nYou review code closely, with [the form](../FORMS.md).\n" {
+		t.Errorf("the changed template:\n%q", out)
+	}
+
+	// Too big for a skill's file, a page is refused as one; a page outside
+	// a skill's folder is no file of a skill.
+	var p *store.Problem
+	if _, err := w.PutPage("/skills/pdf/huge.md", okf.WithType([]byte(strings.Repeat("x", MaxSkillFile+1)), ReferenceType)); !errors.As(err, &p) || p.Code != "skillFileTooBig" {
+		t.Errorf("too big: %v", err)
+	}
+	for _, bad := range []string{"/patterns/x.md", "/skills/pdf/SKILL.md", "/skills/pdf/.hidden.md", "/skills/pdf/index.md"} {
+		if _, err := w.PutPage(bad, []byte("---\ntype: Reference\n---\nx\n")); err == nil {
+			t.Errorf("%s: written", bad)
+		}
+	}
+	if _, err := w.PutPage("/skills/pdf/notes.md", []byte("no type\n")); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("no concept: %v", err)
+	}
+}
+
+// How a skill's folder changed between two commits, and before one; a
+// name or commit that is none is refused.
+func TestSkillDiff(t *testing.T) {
+	ctx := context.Background()
+	b := openLibrary(t)
+	w := writer(t, b, okf.Human("alice"))
+	if _, err := w.Create(SkillPath("notes"), skill("notes", "", "Use when taking notes.", "Keep them short.")); err != nil {
+		t.Fatal(err)
+	}
+	first, err := w.Commit(ctx, "Add notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Edit(SkillPath("notes"), []Edit{{Op: "append", Content: "Date each one."}}, ""); err != nil {
+		t.Fatal(err)
+	}
+	second, err := w.Commit(ctx, "Date notes")
+	if err != nil {
+		t.Fatal(err)
+	}
+	diff, err := b.SkillDiff(ctx, "notes", first[:7], second)
+	if err != nil || !strings.Contains(diff, "+Date each one.") || !strings.Contains(diff, "skills/notes/SKILL.md") {
+		t.Errorf("the diff %v:\n%s", err, diff)
+	}
+	if diff, err := b.SkillDiff(ctx, "notes", first, second+"^"); err != nil || strings.TrimSpace(diff) != "" {
+		t.Errorf("nothing between a commit and itself: %v %q", err, diff)
+	}
+	for _, bad := range [][2]string{{"--output=x", second}, {first, "HEAD"}, {first, second + "^^"}} {
+		if _, err := b.SkillDiff(ctx, "notes", bad[0], bad[1]); !errors.Is(err, store.ErrInvalidInput) {
+			t.Errorf("%v: %v", bad, err)
+		}
+	}
+	if _, err := b.SkillDiff(ctx, "../x", first, second); !errors.Is(err, store.ErrInvalidInput) {
+		t.Errorf("no skill name: %v", err)
 	}
 }
 

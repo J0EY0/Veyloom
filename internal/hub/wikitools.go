@@ -151,6 +151,11 @@ func (m *TurnManager) commitWiki(ctx context.Context, at *activeTurn) []string {
 			subject = fmt.Sprintf("%s of %s in topic #%d", at.member.DisplayName, tw.project.WikiSlug, at.thread.Number)
 			trailers = append(trailers, wiki.Trailer{Key: "Veyloom-Project", Value: tw.project.WikiSlug})
 		}
+		if tw.scope == store.WikiLibrary {
+			if err := patternsAsSources(tw); err != nil {
+				m.logger.Warn("note the turn's patterns on its skills", "turn", at.turn.ID, "err", err)
+			}
+		}
 		if _, err := tw.writer.Commit(ctx, subject, trailers...); err != nil {
 			m.logger.Error("commit the turn's wiki changes", "turn", at.turn.ID, "scope", tw.scope, "err", err)
 		}
@@ -354,6 +359,10 @@ func (m *TurnManager) readWiki(ctx context.Context, tw *turnWiki, args wikiArgs)
 			fmt.Fprintf(&sb, "(on trial since %s changed it on %s: kept once %d turns have used it and ended well, or rolled back)\n",
 				trial.ChangedBy, trial.ChangedAt.Local().Format("2006-01-02"), m.trialUses)
 		}
+		// What was rolled back of it, and the patterns about it, for
+		// whoever changes it next.
+		sb.WriteString(rollbacksText(skillRollbacks(ctx, tw.bundle, name, rollbacksTold, true)))
+		sb.WriteString(patternsText(skillPatterns(tw.bundle, name)))
 	}
 	return sb.String(), page.Path, nil
 }

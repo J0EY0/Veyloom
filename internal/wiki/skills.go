@@ -1,11 +1,14 @@
 package wiki
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -24,6 +27,11 @@ import (
 // TeamKey is the metadata key that names the project owning a skill, by
 // its wiki folder name.
 const TeamKey = "veyloom-team"
+
+// ReferenceType is the type the library gives the markdown files of a
+// skill's folder that have none, its references and templates, so that
+// they are OKF concepts like every page (okf.WithType).
+const ReferenceType = "Reference"
 
 // RuntimeTagPrefix starts a tag that keeps a skill for one runtime:
 // runtime-claude, runtime-codex, runtime-pi. A skill with none is for all.
@@ -109,18 +117,22 @@ type ProjectedSkill struct {
 // ProjectSkill reads a skill as Agent Skills has it, for a runtime to load
 // or a person to take elsewhere. The library keeps its own record on the
 // skill's pages, which a skill anywhere else has not: SKILL.md comes without
-// OKF's fields, and the other pages of its folder, its references, as the
-// plain markdown they were, their links into the folder written from where
-// each file is, the library's pages linking from its root. Other files come
-// as they are. Hidden files, and files too big to be meant for reading,
-// stay behind.
+// OKF's fields, and the other markdown files of its folder as their author
+// wrote them, without the type line the library put in front of them and
+// the stamps of who changed them since (okf.WithoutType). Links into the
+// folder written from the library's root, as an agent improving the skill
+// may write them, lead there from where each file is; the others stay as
+// written. Other files come as they are. Hidden files, and files too big to
+// be meant for reading, stay behind.
 func (b *Bundle) ProjectSkill(name string) (ProjectedSkill, error) {
 	page, err := b.Page(SkillPath(name))
 	if err != nil {
 		return ProjectedSkill{}, err
 	}
 	skill := page.Doc.AgentSkill()
-	skill.SetBody(inSkillLinks(page.Path, skill.Body()))
+	if body := inSkillLinks(page.Path, skill.Body()); body != skill.Body() {
+		skill.SetBody(body)
+	}
 	main, err := skill.Bytes()
 	if err != nil {
 		return ProjectedSkill{}, err
@@ -160,10 +172,8 @@ func (b *Bundle) ProjectSkill(name string) (ProjectedSkill, error) {
 		if err != nil {
 			return err
 		}
-		if path.Ext(rel) == ".md" {
-			if doc, err := okf.Parse(data); err == nil && doc.Type() != "" {
-				data = []byte(inSkillLinks(path.Dir(page.Path)+"/"+rel, doc.Body()))
-			}
+		if p := path.Dir(page.Path) + "/" + rel; path.Ext(rel) == ".md" && !isReserved(p) {
+			data = []byte(inSkillLinks(p, string(okf.WithoutType(data, ReferenceType))))
 		}
 		out.Files[rel] = data
 		return nil
@@ -171,24 +181,27 @@ func (b *Bundle) ProjectSkill(name string) (ProjectedSkill, error) {
 	return out, err
 }
 
-// inSkillLinks rewrites the links of body, the text of the file at p in a
-// skill's folder, that lead into that folder to lead there from p's own
-// directory, as a runtime reads them where the skill is. Links elsewhere
-// stay as they are.
-func inSkillLinks(p, body string) string {
+// inSkillLinks rewrites the links of text, a file at p in a skill's
+// folder, that lead into that folder from the library's root to lead there
+// from p's own directory, as a runtime reads them where the skill is.
+// Links written from where the file is, and links elsewhere, stay as they
+// are.
+func inSkillLinks(p, text string) string {
 	name := SkillOfFile(p)
 	folder := "/skills/" + name + "/"
-	return okf.RewriteLinks(body, func(target string) (string, bool) {
+	return okf.RewriteLinks(text, func(target string) (string, bool) {
+		if name == "" || !strings.HasPrefix(target, "/") {
+			return "", false
+		}
 		to, ok := okf.Resolve(p, target)
-		if !ok || name == "" || !strings.HasPrefix(to, folder) {
+		if !ok || !strings.HasPrefix(to, folder) {
 			return "", false
 		}
 		rest := ""
 		if i := strings.IndexAny(target, "#?"); i >= 0 {
 			rest = target[i:]
 		}
-		rel := relativePath(path.Dir(p), to) + rest
-		return rel, rel != target
+		return relativePath(path.Dir(p), to) + rest, true
 	})
 }
 
@@ -206,6 +219,181 @@ func relativePath(dir, to string) string {
 		out = append(out, "..")
 	}
 	return strings.Join(append(out, parts[i:]...), "/")
+}
+
+// SkillHistory lists the commits that changed the folder of the skill
+// called name, any file of it, newest first.
+func (b *Bundle) SkillHistory(ctx context.Context, name string, limit int) ([]Commit, error) {
+	if !slug.MatchString(name) {
+		return nil, fmt.Errorf("%w: %q is no skill name", store.ErrInvalidInput, name)
+	}
+	if b.git == nil {
+		return nil, nil
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.git.logOf(ctx, limit, "--", "skills/"+name+"/")
+}
+
+// SkillDiff is how the folder of the skill called name changed from
+// commit from to commit to, a diff as git shows it; a commit may be
+// followed by ^ for the one before it.
+func (b *Bundle) SkillDiff(ctx context.Context, name, from, to string) (string, error) {
+	if !slug.MatchString(name) {
+		return "", fmt.Errorf("%w: %q is no skill name", store.ErrInvalidInput, name)
+	}
+	if !commitRef.MatchString(from) || !commitRef.MatchString(to) {
+		return "", fmt.Errorf("%w: %q or %q names no commit", store.ErrInvalidInput, from, to)
+	}
+	if b.git == nil {
+		return "", ErrNoHistory
+	}
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	out, err := b.git.run(ctx, "diff", "--no-color", "--no-ext-diff", from, to, "--", "skills/"+name+"/")
+	return string(out), err
+}
+
+// commitRef is a commit by its hash, whole or cut short, or the one before.
+var commitRef = regexp.MustCompile(`^[0-9a-f]{4,64}\^?$`)
+
+// SkillBusy reports whether a writer has changed a file of the skill
+// called name and not committed it yet: a turn improving it.
+func (b *Bundle) SkillBusy(name string) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	for p, n := range b.busy {
+		if n > 0 && SkillOfFile(p) == name {
+			return true
+		}
+	}
+	return false
+}
+
+// RemoveSkillFile deletes a file of a skill's folder, a page of it or not,
+// as part of the writer's commit: one the skill no longer has, updated from
+// where it came from. The skill's SKILL.md is not removed this way.
+func (w *Writer) RemoveSkillFile(p string) error {
+	p = path.Clean("/" + p)
+	if !okf.SkillFolderFile(p) {
+		return fmt.Errorf("%w: %s is no file of a skill's folder besides its %s", store.ErrInvalidInput, p, okf.SkillFile)
+	}
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	c := w.touch(p)
+	fp := w.b.file(p)
+	if err := os.Remove(fp); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return err
+	}
+	// Folders left empty go too, up to the skill's own.
+	top := w.b.file("/skills/" + SkillOfFile(p))
+	for dir := filepath.Dir(fp); dir != top && strings.HasPrefix(dir, top+string(filepath.Separator)); dir = filepath.Dir(dir) {
+		if os.Remove(dir) != nil {
+			break
+		}
+	}
+	delete(w.b.pages, p)
+	delete(w.b.problems, p)
+	c.gone, c.content = true, true
+	return nil
+}
+
+// SetStatus sets whether a page is in use, as a person decides it: a
+// skill they retire, or put back in use. The page says what it said, by
+// whom it said it; stable, the page's own default, leaves the key out.
+func (w *Writer) SetStatus(p string, status okf.Status) (Page, error) {
+	p, err := CleanPath(p)
+	if err != nil {
+		return Page{}, err
+	}
+	if !status.Valid() {
+		return Page{}, fmt.Errorf("%w: status %q", store.ErrInvalidInput, status)
+	}
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	e, err := w.current(p, "")
+	if err != nil {
+		return Page{}, err
+	}
+	d, err := okf.Parse(e.data)
+	if err != nil {
+		return Page{}, err
+	}
+	if d.Status() == status {
+		return e.page()
+	}
+	if status == okf.Stable {
+		d.Delete(okf.KeyStatus)
+	} else {
+		d.SetStatus(status)
+	}
+	return w.save(p, d, mechanical, func(c *change) { c.content, c.deprecated = true, status == okf.Deprecated })
+}
+
+// RemoveSkill deletes the folder of the skill called name, all of it, as
+// part of the writer's commit: a skill a person removes from the library.
+// The log says so; the history keeps it.
+func (w *Writer) RemoveSkill(name string) error {
+	if !slug.MatchString(name) {
+		return fmt.Errorf("%w: %q is no skill name", store.ErrInvalidInput, name)
+	}
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	page := SkillPath(name)
+	if w.b.pages[page] == nil {
+		return fmt.Errorf("%w: no skill %s", store.ErrNotFound, name)
+	}
+	dir := w.b.file("/skills/" + name)
+	var files []string
+	err := filepath.WalkDir(dir, func(fp string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return err
+		}
+		rel, err := filepath.Rel(w.b.dir, fp)
+		files = append(files, "/"+filepath.ToSlash(rel))
+		return err
+	})
+	if err != nil {
+		return err
+	}
+	for _, p := range files {
+		c := w.touch(p)
+		c.gone, c.content = true, true
+		delete(w.b.pages, p)
+		delete(w.b.problems, p)
+	}
+	w.touch(page).removed = true
+	if err := os.RemoveAll(dir); err != nil {
+		return err
+	}
+	return w.b.regenerate(page)
+}
+
+// AddSource adds a source to a page unless it cites that resource already:
+// a pattern a skill draws on, say. Like SetMetadata it is the page's
+// record, not its content: the author stamp stays as it is.
+func (w *Writer) AddSource(p string, src okf.Source) (Page, error) {
+	p, err := CleanPath(p)
+	if err != nil {
+		return Page{}, err
+	}
+	w.b.mu.Lock()
+	defer w.b.mu.Unlock()
+	e, err := w.current(p, "")
+	if err != nil {
+		return Page{}, err
+	}
+	d, err := okf.Parse(e.data)
+	if err != nil {
+		return Page{}, err
+	}
+	for _, s := range d.Sources() {
+		if s.Resource == src.Resource {
+			return e.page()
+		}
+	}
+	d.AddSource(src)
+	return w.save(p, d, mechanical, func(c *change) { c.content = true })
 }
 
 // SetMetadata sets one entry of a skill page's metadata, or removes it

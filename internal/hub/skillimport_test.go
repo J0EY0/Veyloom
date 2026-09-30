@@ -65,10 +65,10 @@ func TestHub_ImportSkill(t *testing.T) {
 		return string(data)
 	}
 	// SKILL.md keeps all it had, what runtimes add to Agent Skills too, as
-	// it was written; it links to the files under their new names.
+	// it was written, and links to its files as it did.
 	main := read("SKILL.md")
 	for _, want := range []string{"type: Skill", "license: MIT", "allowed-tools: Bash(git log:*)", "version: \"2\"", "hooks: [a, b]", "veyloom-team: " + home.WikiSlug,
-		"](references/style-guide.md)", "](references/index-page.md)"} {
+		"](references/Style_Guide.md)", "](references/index.md)"} {
 		if !strings.Contains(main, want) {
 			t.Errorf("SKILL.md lacks %q:\n%s", want, main)
 		}
@@ -76,16 +76,16 @@ func TestHub_ImportSkill(t *testing.T) {
 	if d, err := okf.Parse([]byte(main)); err != nil || d.Metadata()["version"] != "" {
 		t.Errorf("a field stays where it was, not in metadata: %v %v", d.Metadata(), err)
 	}
-	// References are pages of the library, linked from its root.
-	guide := read("references/style-guide.md")
-	if !strings.Contains(guide, "type: Reference") || !strings.Contains(guide, "title: House style") || !strings.Contains(guide, "](/skills/release-notes/SKILL.md)") {
-		t.Errorf("the guide:\n%s", guide)
+	// The other markdown files keep their names and what they say, a type
+	// line put in front of one that has none; an index.md of the skill's
+	// own is a file of it, as it was.
+	if guide := read("references/Style_Guide.md"); guide != "---\ntype: Reference\n---\n# House style\n\nShort lines. Back to [the skill](../SKILL.md).\n" {
+		t.Errorf("the guide:\n%q", guide)
 	}
-	list := read("references/index-page.md")
-	if !strings.Contains(list, "title: All of them") || strings.Contains(list, "owner") || !strings.Contains(list, "](/skills/release-notes/references/style-guide.md)") {
-		t.Errorf("the list:\n%s", list)
+	if list := read("references/index.md"); list != "---\ntype: Reference\ntitle: All of them\nowner: docs\n---\n\nSee [the guide](Style_Guide.md).\n" {
+		t.Errorf("the list:\n%q", list)
 	}
-	for _, rel := range []string{"SKILL.md", "references/style-guide.md", "references/index-page.md"} {
+	for _, rel := range []string{"SKILL.md", "references/Style_Guide.md", "references/index.md"} {
 		if probs := okf.CheckFile("/skills/release-notes/"+rel, []byte(read(rel)), false, okf.Strict); len(probs) > 0 {
 			t.Errorf("%s is to the spec: %v", rel, probs)
 		}
@@ -100,7 +100,7 @@ func TestHub_ImportSkill(t *testing.T) {
 	}
 	// One commit holds it all, by the person.
 	history, _ := l.h.LibraryHistory(l.ctx, "", 5)
-	if len(history) == 0 || history[0].Subject != "Imported the skill release-notes from "+src || history[0].Author != "human:alice" || len(history[0].Changes) != 3 {
+	if len(history) == 0 || history[0].Subject != "Imported the skill release-notes from "+src || history[0].Author != "human:alice" || len(history[0].Changes) != 2 {
 		t.Errorf("history %+v", history)
 	}
 	// The runtimes get all of it.
@@ -111,13 +111,13 @@ func TestHub_ImportSkill(t *testing.T) {
 		files = append(files, f)
 	}
 	slices.Sort(files)
-	if err != nil || !slices.Equal(files, []string{"SKILL.md", "references/index-page.md", "references/style-guide.md", "scripts/draft.sh"}) {
+	if err != nil || !slices.Equal(files, []string{"SKILL.md", "references/Style_Guide.md", "references/index.md", "scripts/draft.sh"}) {
 		t.Errorf("projected %v %v", files, err)
 	}
 
 	// Taken out again it is the folder it was, in Agent Skills form: the
-	// library's own record gone, the references linking from where they
-	// are, the script still one to run.
+	// library's own record gone, every other file to the byte, the script
+	// still one to run.
 	zipped, err := l.h.ExportSkill(l.ctx, "release-notes")
 	if err != nil {
 		t.Fatal(err)
@@ -136,8 +136,13 @@ func TestHub_ImportSkill(t *testing.T) {
 			t.Errorf("the script's mode %v", f.Mode())
 		}
 	}
-	if names := slices.Sorted(maps.Keys(exported)); !slices.Equal(names, []string{"release-notes/SKILL.md", "release-notes/references/index-page.md", "release-notes/references/style-guide.md", "release-notes/scripts/draft.sh"}) {
+	if names := slices.Sorted(maps.Keys(exported)); !slices.Equal(names, []string{"release-notes/SKILL.md", "release-notes/references/Style_Guide.md", "release-notes/references/index.md", "release-notes/scripts/draft.sh"}) {
 		t.Errorf("exported %v", names)
+	}
+	for _, rel := range []string{"references/Style_Guide.md", "references/index.md", "scripts/draft.sh"} {
+		if want, _ := os.ReadFile(filepath.Join(src, filepath.FromSlash(rel))); exported["release-notes/"+rel] != string(want) {
+			t.Errorf("exported %s:\n%q\nwant\n%q", rel, exported["release-notes/"+rel], want)
+		}
 	}
 	out := exported["release-notes/SKILL.md"]
 	for _, gone := range []string{"type:", "title:", "generated:"} {
@@ -145,16 +150,10 @@ func TestHub_ImportSkill(t *testing.T) {
 			t.Errorf("exported SKILL.md keeps %q:\n%s", gone, out)
 		}
 	}
-	for _, want := range []string{"name: release-notes", "license: MIT", "hooks: [a, b]", "](references/style-guide.md)"} {
+	for _, want := range []string{"name: release-notes", "license: MIT", "hooks: [a, b]", "](references/Style_Guide.md)"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("exported SKILL.md lacks %q:\n%s", want, out)
 		}
-	}
-	if got := exported["release-notes/references/style-guide.md"]; strings.HasPrefix(got, "---") || !strings.Contains(got, "](../SKILL.md)") {
-		t.Errorf("the guide as it was:\n%s", got)
-	}
-	if got := exported["release-notes/references/index-page.md"]; strings.HasPrefix(got, "---") || !strings.Contains(got, "](style-guide.md)") {
-		t.Errorf("the list as it was:\n%s", got)
 	}
 	if _, err := l.h.ExportSkill(l.ctx, "nope"); !errors.Is(err, store.ErrNotFound) {
 		t.Errorf("no such skill: %v", err)
@@ -210,8 +209,63 @@ func TestHub_ImportSkill(t *testing.T) {
 	if _, err := l.h.ImportSkill(l.ctx, skillFolder(t, "many", many), "", l.user.ID); !errors.Is(err, store.ErrInvalidInput) {
 		t.Errorf("too many files: %v", err)
 	}
-	if catalog, _ := l.h.LibraryCatalog(l.ctx); len(catalog.Pages) != 5 {
+	if catalog, _ := l.h.LibraryCatalog(l.ctx); len(catalog.Pages) != 4 {
 		t.Errorf("nothing refused is left behind: %d pages", len(catalog.Pages))
+	}
+}
+
+// A skill as its author keeps it comes in whole: a guide longer than a
+// wiki page may be, a template skill inside it with its own frontmatter,
+// files and folders reached by links, a folder linking back to its own.
+func TestHub_ImportSkill_AsWritten(t *testing.T) {
+	l, _ := wikiLoop(t)
+	shared := skillFolder(t, "shared", map[string]string{"run.py": "print('shared')\n", "assets/logo.txt": "LOGO\n"})
+	guide := "# Migration\n\n" + strings.Repeat("A line of the migration guide.\n", 317<<10/31)
+	folder := skillFolder(t, "claude-api", map[string]string{
+		"SKILL.md":                     "---\nname: claude-api\ndescription: Use when building on the Claude API.\n---\n\nRead `shared/model-migration.md`, then `python/README.md`.\n",
+		"shared/model-migration.md":    guide,
+		"python/README.md":             "# Python\n",
+		"templates/SKILL.md":           "---\nname: my-template\ndescription: A template.\n---\n\n# Template\n",
+		"templates/agent.md":           "---\nname: reviewer\ntools: Read, Grep\n---\n\nYou review code.\n",
+		"scripts/.cache/state":         "hidden",
+		"references/dangling-link.txt": "",
+	})
+	os.Remove(filepath.Join(folder, "references", "dangling-link.txt"))
+	for link, to := range map[string]string{
+		"scripts/shared.py":            filepath.Join(shared, "run.py"),
+		"assets":                       filepath.Join(shared, "assets"),
+		"templates/loop":               filepath.Join(folder, "templates"),
+		"references/dangling-link.txt": filepath.Join(shared, "gone.txt"),
+	} {
+		if err := os.Symlink(to, filepath.Join(folder, filepath.FromSlash(link))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := l.h.ImportSkill(l.ctx, folder, "", l.user.ID); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := l.h.openLibrary(l.ctx)
+	skill, err := r.bundle.ProjectSkill("claude-api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{
+		"shared/model-migration.md": guide,
+		"python/README.md":          "# Python\n",
+		"templates/SKILL.md":        "---\nname: my-template\ndescription: A template.\n---\n\n# Template\n",
+		"templates/agent.md":        "---\nname: reviewer\ntools: Read, Grep\n---\n\nYou review code.\n",
+		"scripts/shared.py":         "print('shared')\n",
+		"assets/logo.txt":           "LOGO\n",
+	}
+	names := append(slices.Collect(maps.Keys(want)), "SKILL.md")
+	slices.Sort(names)
+	if got := slices.Sorted(maps.Keys(skill.Files)); !slices.Equal(got, names) {
+		t.Errorf("the files %v, want %v", got, names)
+	}
+	for rel, text := range want {
+		if string(skill.Files[rel]) != text {
+			t.Errorf("%s comes as it was: %q", rel, excerpt(string(skill.Files[rel]), 80))
+		}
 	}
 }
 

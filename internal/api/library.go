@@ -35,6 +35,14 @@ type ImportSkillRequest struct {
 	ProjectID string `json:"project_id"`
 }
 
+// UpdateSkillRequest is the body of POST /library/update.
+type UpdateSkillRequest struct {
+	UserID string `json:"user_id"`
+	// Folder is the full path of a skill's folder on the hub's machine, the
+	// one the library's skill of its name came from, say.
+	Folder string `json:"folder"`
+}
+
 // InstallSkillRequest is the body of POST /library/install.
 type InstallSkillRequest struct {
 	Name    string `json:"name"`
@@ -50,6 +58,20 @@ type RollbackSkillRequest struct {
 	Name   string `json:"name"`
 	// Reason is why, for the library's log; it may be empty.
 	Reason string `json:"reason"`
+}
+
+// RetireSkillRequest is the body of POST /library/retire: retired takes
+// the skill out of use, false puts it back.
+type RetireSkillRequest struct {
+	UserID  string `json:"user_id"`
+	Name    string `json:"name"`
+	Retired bool   `json:"retired"`
+}
+
+// DeleteSkillRequest is the body of POST /library/delete.
+type DeleteSkillRequest struct {
+	UserID string `json:"user_id"`
+	Name   string `json:"name"`
 }
 
 // SkillInstallsResponse answers POST /library/install: the agents the
@@ -230,6 +252,35 @@ func (h *handlers) importSkill(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusCreated, WikiPageResponse{Page: page})
 }
 
+// updateSkill replaces the library's copy of a skill with what its folder
+// on this machine holds now (docs/design.md 5.15).
+func (h *handlers) updateSkill(w http.ResponseWriter, r *http.Request) {
+	wikis, ok := h.wikis(w)
+	if !ok {
+		return
+	}
+	var req UpdateSkillRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeReason(w, http.StatusBadRequest, err)
+		return
+	}
+	userID, ok := deciderID(r, req.UserID)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "user_id is required")
+		return
+	}
+	if strings.TrimSpace(req.Folder) == "" {
+		writeError(w, http.StatusBadRequest, "folder is required")
+		return
+	}
+	page, err := wikis.UpdateSkill(r.Context(), req.Folder, userID)
+	if err != nil {
+		h.writeWikiError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, WikiPageResponse{Page: page})
+}
+
 func (h *handlers) installSkill(w http.ResponseWriter, r *http.Request) {
 	wikis, ok := h.wikis(w)
 	if !ok {
@@ -250,6 +301,63 @@ func (h *handlers) installSkill(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, SkillInstallsResponse{Installed: installed})
+}
+
+// retireSkill takes a skill out of use or puts it back (docs/design.md
+// 5.15).
+func (h *handlers) retireSkill(w http.ResponseWriter, r *http.Request) {
+	wikis, ok := h.wikis(w)
+	if !ok {
+		return
+	}
+	var req RetireSkillRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeReason(w, http.StatusBadRequest, err)
+		return
+	}
+	userID, ok := deciderID(r, req.UserID)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "user_id is required")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	page, err := wikis.RetireSkill(r.Context(), req.Name, req.Retired, userID)
+	if err != nil {
+		h.writeWikiError(w, r, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, WikiPageResponse{Page: page})
+}
+
+// deleteSkill removes a skill from the library and takes it off the agents
+// it is installed for (docs/design.md 5.15).
+func (h *handlers) deleteSkill(w http.ResponseWriter, r *http.Request) {
+	wikis, ok := h.wikis(w)
+	if !ok {
+		return
+	}
+	var req DeleteSkillRequest
+	if err := decodeJSON(r, &req); err != nil {
+		writeReason(w, http.StatusBadRequest, err)
+		return
+	}
+	userID, ok := deciderID(r, req.UserID)
+	if !ok {
+		writeError(w, http.StatusBadRequest, "user_id is required")
+		return
+	}
+	if req.Name == "" {
+		writeError(w, http.StatusBadRequest, "name is required")
+		return
+	}
+	if err := wikis.DeleteSkill(r.Context(), req.Name, userID); err != nil {
+		h.writeWikiError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *handlers) rollbackSkill(w http.ResponseWriter, r *http.Request) {

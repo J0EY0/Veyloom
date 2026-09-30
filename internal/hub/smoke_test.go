@@ -530,6 +530,12 @@ func (r *smokeRoom) upkeepRound(n int) store.Turn {
 	if status, _ := r.h.UpkeepStatus(r.ctx, r.room.ProjectID); status.Waiting.Own != 0 {
 		r.t.Errorf("the upkeep should have gone over both turns: %+v", status.Waiting)
 	}
+	// The wiki had no conventions of its own: the upkeep wrote them first.
+	if page, err := b.Page(wiki.ConventionsPath); err != nil {
+		r.t.Errorf("the upkeep should have written the wiki's conventions, %s: %v; it called:\n%s", wiki.ConventionsPath, err, strings.Join(calls, "\n"))
+	} else {
+		r.t.Logf("the wiki's conventions, %q: %s", page.Title, excerpt(strings.Join(strings.Fields(page.Doc.Body()), " "), 400))
+	}
 	r.t.Logf("turn %d, the upkeep, recorded %v through %d calls: %s", n+2, recorded, len(calls), strings.Join(calls, " | "))
 	r.t.Logf("turn %d, the upkeep, ended saying: %q", n+2, r.lastReply(upkeep.ThreadID))
 	return upkeep

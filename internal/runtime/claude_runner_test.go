@@ -562,17 +562,26 @@ func TestClaude_SkillsComeAsAPlugin(t *testing.T) {
 	set := &SkillSet{Hash: "0123456789abcdef", Skills: []Skill{{Name: "release-notes"}, {Name: "team-practices", Builtin: true}}}
 	argv := r.args(TurnSpec{Prompt: "x", SystemPrompt: "Be brief.", WorkDir: work, SkillDir: "/tools/skills/0123456789abcdef", Skills: set, AllowedRules: []string{"Bash(make test)"}})
 	i := slices.Index(argv, "--settings")
-	if i < 0 || argv[i+1] != `{"permissions":{"allow":["Bash(make test)"],"deny":["Skill(release-notes)"]}}` {
+	if i < 0 || argv[i+1] != `{"permissions":{"allow":["Bash(make test)","Read(//tools/skills/0123456789abcdef/**)"],"deny":["Skill(release-notes)"]}}` {
 		t.Errorf("args %v", argv)
 	}
 	j := slices.Index(argv, "--append-system-prompt")
 	if j < 0 || !strings.HasPrefix(argv[j+1], "Be brief.\n\n") || !strings.Contains(argv[j+1], "veyloom:release-notes") || strings.Contains(argv[j+1], "team-practices") {
 		t.Errorf("system prompt %q", argv[j+1])
 	}
-	// No clash, no rule and no word of it; nor for a set not written.
-	if argv := r.args(TurnSpec{Prompt: "x", SystemPrompt: "Be brief.", WorkDir: t.TempDir(), SkillDir: "/tools/skills/0123456789abcdef", Skills: set}); slices.Contains(argv, "--settings") ||
+	// No clash, no rule and no word of it, only the reading of the skills;
+	// nor any of it for a set not written.
+	if argv := r.args(TurnSpec{Prompt: "x", SystemPrompt: "Be brief.", WorkDir: t.TempDir(), SkillDir: "/tools/skills/0123456789abcdef", Skills: set}); argv[slices.Index(argv, "--settings")+1] != `{"permissions":{"allow":["Read(//tools/skills/0123456789abcdef/**)"]}}` ||
 		argv[slices.Index(argv, "--append-system-prompt")+1] != "Be brief." {
 		t.Errorf("no clash: %v", argv)
+	}
+	// A folder reached through a link is named both ways.
+	real := t.TempDir()
+	linked := filepath.Join(t.TempDir(), "skills")
+	os.Symlink(real, linked)
+	whole, _ := filepath.EvalSymlinks(real)
+	if rules := claudeSkillReads(linked); len(rules) != 2 || rules[1] != "Read(/"+whole+"/**)" {
+		t.Errorf("rules %v", rules)
 	}
 	if argv := r.args(TurnSpec{Prompt: "x", WorkDir: work, Skills: set}); slices.Contains(argv, "--settings") {
 		t.Errorf("no plugin, no rules: %v", argv)

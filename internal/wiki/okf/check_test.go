@@ -143,14 +143,35 @@ func TestCheck_Skill(t *testing.T) {
 	}
 }
 
-func TestCheck_SkillLinksToItsOwnFiles(t *testing.T) {
+// A skill links as its author wrote it, from its directory, where a
+// runtime reads it; other pages link from the bundle's root.
+func TestCheck_SkillLinksAsWritten(t *testing.T) {
 	page := "---\ntype: Skill\nname: go-tests\ndescription: d\n---\n\nSee [cases](references/cases.md), [up](../other/SKILL.md) and [root](/patterns/a.md).\n"
-	probs := CheckFile("/skills/go-tests/SKILL.md", []byte(page), false, Strict)
-	if len(probs) != 1 || !strings.Contains(probs[0].Message, `"../other/SKILL.md"`) {
-		t.Errorf("a skill may link into its own directory, nowhere else relatively: %v", probs)
+	if probs := CheckFile("/skills/go-tests/SKILL.md", []byte(page), false, Strict); len(probs) > 0 {
+		t.Errorf("a skill's links pass as written: %v", probs)
 	}
 	fact := "---\ntype: Fact\n---\n\nSee [cases](references/cases.md).\n"
 	if probs := CheckFile("/facts/a.md", []byte(fact), false, Strict); len(probs) != 1 {
 		t.Errorf("other pages link from the root: %v", probs)
+	}
+}
+
+// The other files of a skill's folder are its author's: a type is all
+// they need, and an index.md or log.md there is no listing or history.
+func TestCheck_SkillFolderFiles(t *testing.T) {
+	template := "---\ntype: Reference\nname: reviewer\ntools: Read, Grep\nstatus: beta\n---\n\nSee [the form](../FORMS.md).\n"
+	if probs := CheckFile("/skills/pdf/templates/agent.md", []byte(template), false, Strict); len(probs) > 0 {
+		t.Errorf("a template of a skill passes as written: %v", probs)
+	}
+	if got := rules(CheckFile("/facts/agent.md", []byte(strings.Replace(template, "Reference", "Fact", 1)), false, Strict)); !slices.Contains(got, "key") || !slices.Contains(got, "link") {
+		t.Errorf("elsewhere the same is held to the strict rules: %v", got)
+	}
+	if got := rules(CheckFile("/skills/pdf/FORMS.md", []byte("---\nname: x\n---\nx\n"), false, Strict)); !slices.Equal(got, []string{"type"}) {
+		t.Errorf("a type it needs: %v", got)
+	}
+	for _, name := range []string{"index.md", "log.md"} {
+		if probs := CheckFile("/skills/pdf/references/"+name, []byte("---\ntitle: x\n---\n# x\n"), false, Strict); len(probs) > 0 {
+			t.Errorf("a skill's own %s: %v", name, probs)
+		}
 	}
 }

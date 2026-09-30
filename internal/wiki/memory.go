@@ -22,6 +22,10 @@ const (
 	MemoryPath = "/memory.md"
 	// MemoryType is a memory page's type.
 	MemoryType = "Memory"
+	// ConventionsPath is where a project's wiki keeps its own conventions:
+	// what goes into it and how its pages are written, which people set
+	// and its maintainer keeps (docs/design.md 5.12), LLM Wiki's schema.
+	ConventionsPath = "/conventions/wiki.md"
 )
 
 // PersonalLayout is the personal memory's bundle: the memory page alone.

@@ -49,6 +49,7 @@ func (m *TurnManager) upkeepBrief(ctx context.Context, up *upkeep, member store.
 		w.sb.WriteString(about + "\n")
 	}
 	m.wikis.writeMemories(ctx, w, bundle)
+	conventions := conventionsPart(w, bundle)
 
 	mounts := m.wikis.mounts(ctx, up.project)
 	health := mountedHealth(bundle.Health(time.Now()), mounts)
@@ -58,6 +59,7 @@ func (m *TurnManager) upkeepBrief(ctx context.Context, up *upkeep, member store.
 	prefs := m.wikis.memoryPrefs()
 	upkeepSteps(w, up, prefs, upkeepFound{
 		unhealthy: !health.Empty(m.residentBudget), checks: len(checks) > 0, misses: len(misses) > 0, unread: len(unread) > 0,
+		conventions: conventions,
 	})
 	fmt.Fprintf(&w.sb, "Your veyloom tools: %s; the wiki tools (%s, with scope library for the skill library); %sand for reading the chat %s.\n",
 		strings.Join(runtime.UpkeepToolNames, ", "), strings.Join(runtime.WikiToolNames, ", "), memoryToolsLine(prefs), strings.Join(runtime.RoomToolNames, ", "))
@@ -85,6 +87,18 @@ func (m *TurnManager) upkeepBrief(ctx context.Context, up *upkeep, member store.
 		for _, name := range up.owned {
 			fmt.Fprintf(&w.sb, "- %s: %s\n", name, wiki.SkillPath(name))
 		}
+		if about := m.ownedPatterns(ctx, up.owned); len(about) > 0 {
+			w.section("Patterns about those skills, newest first:")
+			for _, line := range about {
+				w.sb.WriteString(line + "\n")
+			}
+		}
+		if rolled := m.ownedRollbacks(ctx, up.owned); len(rolled) > 0 {
+			w.section("Changes to those skills rolled back lately, not to be made again (read_wiki on a skill shows the latest change undone):")
+			for _, line := range rolled {
+				w.sb.WriteString(line + "\n")
+			}
+		}
 		if len(up.trials) > 0 {
 			w.section(fmt.Sprintf("Changes on trial to those skills (%d):", len(up.trials)))
 			for _, trial := range up.trials {
@@ -100,6 +114,73 @@ func (m *TurnManager) upkeepBrief(ctx context.Context, up *upkeep, member store.
 	m.upkeepHistoryPart(ctx, w, bundle)
 	upkeepHealthPart(w, health, m.residentBudget)
 	return w.sb.String(), nil
+}
+
+// conventionsCap bounds the conventions an upkeep's brief carries whole.
+const conventionsCap = 6000
+
+// conventionsPart gives the maintainer the wiki's own conventions, LLM
+// Wiki's schema: what people want of the wiki, which win over the steps
+// where the two differ. It reports whether the wiki has them.
+func conventionsPart(w *briefWriter, bundle *wiki.Bundle) bool {
+	page, err := bundle.Page(wiki.ConventionsPath)
+	if err != nil || page.Status == okf.Deprecated {
+		return false
+	}
+	w.section("The wiki's conventions, " + wiki.ConventionsPath + ", which people set and you keep; where they and the steps below differ, the conventions win:")
+	w.sb.WriteString(excerpt(strings.TrimSpace(page.Doc.Body()), conventionsCap) + "\n")
+	return true
+}
+
+// ownedPatterns are the patterns about the team's skills, a line each:
+// which skill, which page, what it says.
+func (m *TurnManager) ownedPatterns(ctx context.Context, owned []string) []string {
+	lib, err := m.wikis.library(ctx)
+	if err != nil {
+		return nil
+	}
+	var lines []string
+	for _, name := range owned {
+		for i, s := range skillPatterns(lib, name) {
+			if i == patternsTold {
+				break
+			}
+			line := fmt.Sprintf("- %s: %s: %s", name, s.Path, s.Title)
+			if d := strings.TrimSpace(s.Description); d != "" {
+				line += ": " + excerpt(d, descriptionExcerpt)
+			}
+			lines = append(lines, line)
+		}
+	}
+	return lines
+}
+
+// rolledBackLately is how far back an upkeep's brief looks for the
+// rollbacks of its team's skills.
+const rolledBackLately = 30 * 24 * time.Hour
+
+// ownedRollbacks are the rollbacks of the team's skills lately, a line
+// each: which skill, when, by whom and why.
+func (m *TurnManager) ownedRollbacks(ctx context.Context, owned []string) []string {
+	lib, err := m.wikis.library(ctx)
+	if err != nil {
+		return nil
+	}
+	since := m.wikis.now().Add(-rolledBackLately)
+	var lines []string
+	for _, name := range owned {
+		for _, r := range skillRollbacks(ctx, lib, name, rollbacksTold, false) {
+			if r.at.Before(since) {
+				break
+			}
+			line := fmt.Sprintf("- %s: rolled back on %s by %s", name, r.at.Local().Format("2006-01-02"), r.by)
+			if r.reason != "" {
+				line += ": " + r.reason
+			}
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 // trialLine tells one change on trial: whose, since when, and how the
@@ -126,8 +207,9 @@ func (m *TurnManager) trialLine(ctx context.Context, trial store.SkillTrial) str
 type upkeepFound struct {
 	// unhealthy: the health check found something; checks: pages are due
 	// to be checked again; misses: the turns searched and found nothing;
-	// unread: pages no turn reads (design.md 5.23.7).
-	unhealthy, checks, misses, unread bool
+	// unread: pages no turn reads (design.md 5.23.7); conventions: the
+	// wiki has its conventions page.
+	unhealthy, checks, misses, unread, conventions bool
 }
 
 // upkeepSteps says what the upkeep is to do, only the steps there is
@@ -136,6 +218,11 @@ type upkeepFound struct {
 func upkeepSteps(w *briefWriter, up *upkeep, prefs store.MemoryPrefs, found upkeepFound) {
 	w.section("What to do, in this order:")
 	var steps []string
+	if !found.conventions {
+		steps = append(steps, "This wiki has no page of its own conventions yet. Write one first, "+wiki.ConventionsPath+" (write_wiki, type Convention, slug wiki), "+
+			"in the language the team works in and briefly: what goes into this wiki and what stays out, and how its pages are written, as the steps here have it "+
+			"and as people have said. People change it as they see fit; you keep it up to date with what they say, and keep the wiki by it.")
+	}
 	if len(up.turns)+len(up.uses) > 0 {
 		steps = append(steps,
 			"Read each turn listed below with read_turn; list_turns finds older ones. What a person said after a turn is often a correction, and outweighs what the agent concluded.",
@@ -178,14 +265,19 @@ func upkeepSteps(w *briefWriter, up *upkeep, prefs store.MemoryPrefs, found upke
 	}
 	if len(up.owned) > 0 {
 		steps = append(steps, "For the skills this team owns: where a turn that used one went wrong, or a person corrected it, write a Pattern page in the skill library (write_wiki, scope library) with the symptom, "+
-			"the root cause, the exact commands and the fix, and set the skill right with patch_wiki (scope library): the change takes effect at once, on trial like any agent's, "+
+			"the root cause, the exact commands and the fix, linking to the skill it is about, and set the skill right with patch_wiki (scope library), in the light of the patterns about it listed below: "+
+			"the change takes effect at once, on trial like any agent's, "+
 			"and a change you only describe in your reply reaches no one. Name another project's turns in the page's body by project and topic (project Storefront, topic #3); "+
 			"topics: [...] is for this chat's own. "+
-			"A way of working that keeps coming back and holds beyond this repository goes in a Pattern page too; skills themselves are added by people.")
+			"A way of working that keeps coming back and holds beyond this repository goes in a Pattern page too; skills themselves are added by people. "+
+			"A change that was rolled back is not made again unless something new calls for it.")
 	}
 	if len(up.trials) > 0 {
 		steps = append(steps, "For each change on trial listed below: read the turns that used the skill since the change (read_turn) and what people said after them. "+
 			"If the change made things worse, roll it back with rollback_skill, saying what went worse, and record why as a Pattern page; a change that goes well you leave alone: it is kept once enough turns have used it.")
+	}
+	if found.conventions {
+		steps = append(steps, "Where people said how they want the wiki kept, put it into its conventions page, "+wiki.ConventionsPath+", with patch_wiki.")
 	}
 	steps = append(steps,
 		"The wikis are no part of the repository: the wiki tools write them even where you may not change the repository. Change nothing in the repository and run nothing of it.",

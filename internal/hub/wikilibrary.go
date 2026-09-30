@@ -69,7 +69,8 @@ var (
 		"Record the way of working as a Pattern page instead (write_wiki, type Pattern, scope library)")
 	errSkillRetiredByPeople = errors.New("a skill is retired by a person, who takes it off the agents or removes it. " +
 		"If it misleads, set it right with patch_wiki, or record why as a Pattern page")
-	errSkillSettingsArePeoples = errors.New("a skill's settings for runtimes (allowed-tools, disable-model-invocation, hooks and the like) are set by people: " +
+	errSkillSettingsArePeoples = errors.New("a skill's settings for runtimes (allowed-tools, disable-model-invocation, hooks and the like), " +
+		"whether it is in use (status) and which runtimes it is for (tags) are set by people: " +
 		"leave its frontmatter beyond description and metadata as it is, and change its description and instructions")
 )
 
@@ -115,8 +116,11 @@ func (m *TurnManager) patchLibrary(ctx context.Context, at *activeTurn, tw *turn
 	}
 	// What a runtime lets the skill do, or keeps it from, is the person's
 	// who installed it: a skill reaches other agents' turns, in other
-	// projects too.
-	if page.Type == "Skill" && !maps.Equal(page.Doc.SkillSettings(), edited.SkillSettings()) {
+	// projects too. So is whether it goes to them at all: a status other
+	// than stable, or tags keeping it for some runtimes, would take it
+	// from every agent it is installed for (docs/design.md 5.15).
+	if page.Type == "Skill" && (!maps.Equal(page.Doc.SkillSettings(), edited.SkillSettings()) ||
+		page.Doc.Status() != edited.Status() || !slices.Equal(page.Doc.Tags(), edited.Tags())) {
 		return "", errSkillSettingsArePeoples
 	}
 	if page.Type != edited.Type() {

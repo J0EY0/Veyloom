@@ -205,6 +205,27 @@ func (f *fakeWikis) ImportSkill(ctx context.Context, folder, team, userID string
 	return f.LibraryPage(ctx, "/skills/go/SKILL.md")
 }
 
+func (f *fakeWikis) UpdateSkill(ctx context.Context, folder, userID string) (hub.WikiPageView, error) {
+	f.record("update from %s by %s", folder, userID)
+	if folder == "/on/trial" {
+		return hub.WikiPageView{}, store.Conflicting("skillOnTrial", store.Params{"name": "go"}, "the skill go is on trial")
+	}
+	return f.LibraryPage(ctx, "/skills/go/SKILL.md")
+}
+
+func (f *fakeWikis) RetireSkill(ctx context.Context, name string, retired bool, userID string) (hub.WikiPageView, error) {
+	f.record("retire %s %v by %s", name, retired, userID)
+	return f.LibraryPage(ctx, "/skills/go/SKILL.md")
+}
+
+func (f *fakeWikis) DeleteSkill(_ context.Context, name, userID string) error {
+	f.record("delete %s by %s", name, userID)
+	if name == "busy" {
+		return store.Conflicting("skillBusy", store.Params{"name": name}, "a turn is changing the skill %s", name)
+	}
+	return nil
+}
+
 func (f *fakeWikis) LocalSkills(context.Context) ([]hub.LocalSkill, error) {
 	f.record("local skills")
 	return []hub.LocalSkill{{Name: "pdf", Description: "Use with PDFs.", Folder: "/home/me/.agents/skills/pdf", Where: "~/.agents/skills"}}, nil
@@ -453,6 +474,15 @@ func TestLibrary(t *testing.T) {
 	if rec := do(t, handler, http.MethodPost, "/api/v1/library/import", `{"user_id":"u1","folder":"/skills/go","project_id":"p2"}`, &page); rec.Code != http.StatusCreated || page.Page.Path != "/skills/go/SKILL.md" {
 		t.Errorf("import: %d %+v", rec.Code, page)
 	}
+	if rec := do(t, handler, http.MethodPost, "/api/v1/library/update", `{"user_id":"u1","folder":"/home/me/.claude/skills/go"}`, &page); rec.Code != http.StatusOK || page.Page.Path != "/skills/go/SKILL.md" {
+		t.Errorf("update: %d %+v", rec.Code, page)
+	}
+	if rec := do(t, handler, http.MethodPost, "/api/v1/library/retire", `{"user_id":"u1","name":"go","retired":true}`, &page); rec.Code != http.StatusOK || page.Page.Path != "/skills/go/SKILL.md" {
+		t.Errorf("retire: %d %+v", rec.Code, page)
+	}
+	if rec := do(t, handler, http.MethodPost, "/api/v1/library/delete", `{"user_id":"u1","name":"go"}`, nil); rec.Code != http.StatusNoContent {
+		t.Errorf("delete: %d", rec.Code)
+	}
 	if rec := do(t, handler, http.MethodPost, "/api/v1/library/rollback", `{"user_id":"u1","name":"go","reason":"longer notes"}`, &page); rec.Code != http.StatusOK || page.Page.Path != "/skills/go/SKILL.md" {
 		t.Errorf("rollback: %d %+v", rec.Code, page)
 	}
@@ -469,7 +499,7 @@ func TestLibrary(t *testing.T) {
 	}
 	want := []string{`uses go 5`, `library search "table" 200`, `library history "/skills/go/SKILL.md" 200`, "library revert abc by u1",
 		"library verify /skills/go/SKILL.md by u1", "transfer go to p2 by u1", `import /skills/go for "p2" by u1`,
-		"rollback go by u1: longer notes", "export go", "install go for ag1: true", "install go for ag1: false"}
+		"update from /home/me/.claude/skills/go by u1", "retire go true by u1", "delete go by u1", "rollback go by u1: longer notes", "export go", "install go for ag1: true", "install go for ag1: false"}
 	if fmt.Sprint(fake.asked) != fmt.Sprint(want) {
 		t.Errorf("asked %q, want %q", fake.asked, want)
 	}
@@ -485,6 +515,11 @@ func TestLibrary(t *testing.T) {
 		{http.MethodPost, "/api/v1/library/revert", `{"user_id":"u1"}`, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/library/import", `{"user_id":"u1"}`, http.StatusBadRequest},
 		{http.MethodPost, "/api/v1/library/import", `{"user_id":"u1","folder":"relative"}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/v1/library/update", `{"user_id":"u1"}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/v1/library/update", `{"user_id":"u1","folder":"/on/trial"}`, http.StatusConflict},
+		{http.MethodPost, "/api/v1/library/retire", `{"user_id":"u1"}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/v1/library/delete", `{"user_id":"u1"}`, http.StatusBadRequest},
+		{http.MethodPost, "/api/v1/library/delete", `{"user_id":"u1","name":"busy"}`, http.StatusConflict},
 		{http.MethodPost, "/api/v1/library/install", `{"name":"go"}`, http.StatusBadRequest},
 		{http.MethodGet, "/api/v1/library/export", "", http.StatusBadRequest},
 		{http.MethodGet, "/api/v1/library/export?name=nope", "", http.StatusNotFound},

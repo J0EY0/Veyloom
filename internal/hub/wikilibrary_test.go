@@ -116,14 +116,16 @@ func TestLoop_SkillSettingsArePeoples(t *testing.T) {
 		patch("disable-model-invocation: true", "disable-model-invocation: false"),
 		patch("allowed-tools: Bash(git log:*)", "allowed-tools: Bash(*)"),
 		patch("disable-model-invocation: true", "disable-model-invocation: true\nhooks:\n  Stop: []"),
+		patch("disable-model-invocation: true", "disable-model-invocation: true\nstatus: deprecated"),
+		patch("disable-model-invocation: true", "disable-model-invocation: true\ntags: [runtime-claude]"),
 		patch("Group the changes by kind.", "Group the changes by kind, newest first."),
 	}})
 	l.install("release-notes", editor)
 	asked := l.say("@Editor improve the release notes skill", "", editor)
 	l.waitTurns(1, store.TurnDone, "Editor's turn")
 	answer := l.root(l.topic(asked)).Body
-	if n := strings.Count(answer, "are set by people"); n != 3 {
-		t.Errorf("the three changes to its settings are refused, %d were:\n%s", n, answer)
+	if n := strings.Count(answer, "are set by people"); n != 5 {
+		t.Errorf("the five changes to its settings are refused, %d were:\n%s", n, answer)
 	}
 	if !strings.Contains(answer, "Changed the skill release-notes") {
 		t.Errorf("the change to its text goes through:\n%s", answer)
@@ -137,8 +139,15 @@ func TestLoop_SkillSettingsArePeoples(t *testing.T) {
 			t.Errorf("SKILL.md lacks %q:\n%s", want, data)
 		}
 	}
-	if strings.Contains(string(data), "hooks") {
-		t.Errorf("no hook came in:\n%s", data)
+	for _, gone := range []string{"hooks", "status:", "tags:"} {
+		if strings.Contains(string(data), gone) {
+			t.Errorf("no %s came in:\n%s", gone, data)
+		}
+	}
+	// It still goes to the agents it is installed for.
+	agent, _ := l.s.GetAgent(l.ctx, editor.AgentID)
+	if skills := l.h.turns.librarySkills(l.ctx, agent); len(skills) != 1 {
+		t.Errorf("the skill still goes to its agents: %d", len(skills))
 	}
 }
 

@@ -43,7 +43,12 @@ const SkillFile = "SKILL.md"
 // CheckFile checks one markdown file of a bundle. root says whether it
 // sits at the bundle root, where index.md may declare the OKF version.
 func CheckFile(p string, data []byte, root bool, profile Profile) []Problem {
-	switch path.Base(p) {
+	base := path.Base(p)
+	if (base == IndexFile || base == LogFile) && SkillFolderFile(p) {
+		// A skill's own file of that name: its author's, no listing.
+		return nil
+	}
+	switch base {
 	case IndexFile:
 		return checkIndex(p, data, root)
 	case LogFile:
@@ -65,7 +70,9 @@ func CheckConcept(p string, d *Document, profile Profile) []Problem {
 	if t, ok := d.String(KeyType); !ok || strings.TrimSpace(t) == "" {
 		c.add("type", "the frontmatter needs a type")
 	}
-	if profile == Strict {
+	// The other files of a skill's folder are its author's, as they wrote
+	// them (docs/design.md 5.13): OKF asks them for a type, and no more.
+	if profile == Strict && !SkillFolderFile(p) {
 		c.strict(d)
 	}
 	return c.problems
@@ -203,22 +210,14 @@ func (c *checker) links(d *Document) {
 		if IsExternal(l.Target) || strings.HasPrefix(l.Target, "/") || strings.HasPrefix(l.Target, "#") {
 			continue
 		}
-		// A skill links to its own files as Agent Skills does, from its
-		// directory: that is where a runtime finds them once it is
-		// loaded, far from the bundle's root.
-		if skill && inDir(c.path, l.Target) {
+		// A skill links as its author wrote it, from its directory: that
+		// is where a runtime reads it once it is loaded, far from the
+		// bundle's root.
+		if skill {
 			continue
 		}
 		c.add("link", "link %q should start with / (a path from the bundle root)", l.Target)
 	}
-}
-
-// inDir reports whether a relative link from the page at p stays within
-// the page's directory.
-func inDir(p, target string) bool {
-	to, ok := Resolve(p, target)
-	dir := path.Dir(p)
-	return ok && strings.HasPrefix(to, dir+"/")
 }
 
 // skillName is the Agent Skills rule for names: lowercase letters, digits

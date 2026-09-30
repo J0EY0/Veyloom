@@ -23,6 +23,7 @@ const (
 	LogRevert         = "Revert"
 	LogVerification   = "Verification"
 	LogRejection      = "Rejection"
+	LogRemoval        = "Removal"
 )
 
 // NewLog starts an empty log.md with a title.

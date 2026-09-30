@@ -88,7 +88,8 @@ var wikiToolSpecs = []roomToolSpec{
 			"What you write is saved at once, whatever its kind, and a person can undo it. " +
 			"Link to other pages by their path from the wiki's root, like [the payload decision](/decisions/approvals-payload-json.md). " +
 			"With scope library, write a Pattern to the skill library every project shares, for what holds beyond this repository: " +
-			"one way tasks go wrong or right, with the symptom, the root cause, the exact commands and the fix. It is saved at once. " +
+			"one way tasks go wrong or right, with the symptom, the root cause, the exact commands and the fix, linking to the skill it is about, if any, by its path (/skills/<name>/SKILL.md). " +
+			"A Pattern's description says the problem, its root cause and the fix in one line, so that the list of patterns tells whether one bears on a task without opening it. It is saved at once. " +
 			"Skills themselves are added by people, who install them for agents.",
 		Params: []roomToolParam{
 			{Name: "type", Type: "string", Required: true, Description: "What kind of page it is: Pattern is the library's.", Enum: append(append([]string(nil), WikiPageTypes...), "Pattern")},
@@ -111,6 +112,7 @@ var wikiToolSpecs = []roomToolSpec{
 			"Copy the text to find from read_wiki exactly; if it no longer matches, the page has changed, so read it again. " +
 			"Changes are saved at once, and a person can undo them. " +
 			"With scope library you may change a skill installed for you, or, as the wiki maintainer, one your team owns: its SKILL.md or a page of its folder. " +
+			"Read the skill with read_wiki first: it names the changes to it that were rolled back, and why; do not make one of them again. " +
 			"The change reaches every agent the skill is installed for from its next turn, on trial until enough turns have used it. " +
 			"Calling it is how a change is made: one only described in your reply reaches no one.",
 		Params: []roomToolParam{

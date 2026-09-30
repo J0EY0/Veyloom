@@ -7,6 +7,7 @@ import (
 
 	"github.com/J0EY0/veyloom/internal/runtime"
 	"github.com/J0EY0/veyloom/internal/store"
+	"github.com/J0EY0/veyloom/internal/wiki"
 )
 
 // A member's standing instructions (design.md 5.23.1): how the chat works,
@@ -96,10 +97,12 @@ func wikiRules(prefs store.MemoryPrefs, trialUses int) string {
 	return "\nThe project keeps a wiki of what the team has learned: decisions, conventions, facts, pitfalls, what modules are for, what finished topics came to. Look things up in it with search_wiki and read_wiki. " +
 		"Write to it only when a person asks you to, now or as a standing rule of this chat: then write_wiki a new page, patch_wiki the page that has it, or deprecate_wiki one that no longer holds; " +
 		"the change takes effect at once, and a person can undo it. When a person says a page is wrong, check it against the code, or ask them, set it right and say what you changed. " +
+		"The wiki's own conventions, what goes into it and how its pages are written, are on " + wiki.ConventionsPath + " when it has them: follow them when you write, and when a person says how the wiki is to be kept, record it there. " +
 		"related_wiki shows how pages bear on each other, and, given a path of the repository, which pages name it: look before you change a file. " +
 		"Every project also shares a skill library, the same tools with scope library: patterns of how tasks went wrong or right, and skills, which people add and install for agents; your runtime loads the ones installed for you when a task calls for them. " +
 		fmt.Sprintf("The skills installed for you, which the brief names, you improve as you use them, without being asked: when one proves wrong or short in your task, or you find a better way, "+
-			"set it right with patch_wiki (scope library), one focused change to its SKILL.md or a page of its folder, and record what happened as a Pattern page. "+
+			"set it right with patch_wiki (scope library), one focused change to its SKILL.md or a page of its folder, and record what happened as a Pattern page that links to the skill. "+
+			"Read the skill with read_wiki before you change it: it names the changes people rolled back, which you do not make again, and the patterns about it. "+
 			"The change reaches every agent the skill is installed for from its next turn, on trial until %d turns have used it and ended well; a person or the skill's team can roll it back.", trialUses) +
 		memoryLine(prefs) + "\n"
 }

@@ -101,10 +101,17 @@ func (r *repo) commit(ctx context.Context, paths []string, author, message strin
 	var present, gone []string
 	for _, p := range paths {
 		rel := strings.TrimPrefix(p, "/")
-		if _, err := os.Lstat(filepath.Join(r.dir, filepath.FromSlash(rel))); err == nil {
+		if existsAsNamed(filepath.Join(r.dir, filepath.FromSlash(rel))) {
 			present = append(present, rel)
 		} else {
 			gone = append(gone, rel)
+		}
+	}
+	// What went goes first: a file renamed only in case, where case does
+	// not count, is then added under its new name, not kept under the old.
+	if len(gone) > 0 {
+		if _, err := r.run(ctx, append([]string{"rm", "--cached", "-q", "--ignore-unmatch", "--"}, gone...)...); err != nil {
+			return "", err
 		}
 	}
 	if len(present) > 0 {
@@ -112,15 +119,30 @@ func (r *repo) commit(ctx context.Context, paths []string, author, message strin
 			return "", err
 		}
 	}
-	if len(gone) > 0 {
-		if _, err := r.run(ctx, append([]string{"rm", "--cached", "-q", "--ignore-unmatch", "--"}, gone...)...); err != nil {
-			return "", err
-		}
-	}
 	if staged, err := r.staged(ctx); err != nil || !staged {
 		return "", err
 	}
 	return r.commitStaged(ctx, author, message)
+}
+
+// existsAsNamed reports whether a file is there under this very name: on
+// a disk where case does not count, FORMS.md answers for forms.md too, but
+// is not there as forms.md.
+func existsAsNamed(fp string) bool {
+	if _, err := os.Lstat(fp); err != nil {
+		return false
+	}
+	entries, err := os.ReadDir(filepath.Dir(fp))
+	if err != nil {
+		return true
+	}
+	name := filepath.Base(fp)
+	for _, e := range entries {
+		if e.Name() == name {
+			return true
+		}
+	}
+	return false
 }
 
 // staged reports whether anything is staged.
@@ -190,13 +212,20 @@ type Change struct {
 // log returns the latest commits touching p (the whole bundle when p is
 // ""), newest first, following a page across renames.
 func (r *repo) log(ctx context.Context, p string, limit int) ([]Commit, error) {
+	var paths []string
+	if p != "" {
+		paths = []string{"--follow", "--", strings.TrimPrefix(p, "/")}
+	}
+	return r.logOf(ctx, limit, paths...)
+}
+
+// logOf lists the commits, newest first, limited by git's own arguments
+// after the format: paths, say.
+func (r *repo) logOf(ctx context.Context, limit int, args ...string) ([]Commit, error) {
 	if !r.hasHead(ctx) {
 		return nil, nil
 	}
-	args := []string{"log", "-n", strconv.Itoa(limit), "--format=%H%x1f%an%x1f%aI%x1f%s%x1f%b%x1e"}
-	if p != "" {
-		args = append(args, "--follow", "--", strings.TrimPrefix(p, "/"))
-	}
+	args = append([]string{"log", "-n", strconv.Itoa(limit), "--format=%H%x1f%an%x1f%aI%x1f%s%x1f%b%x1e"}, args...)
 	out, err := r.run(ctx, args...)
 	if err != nil {
 		return nil, err
