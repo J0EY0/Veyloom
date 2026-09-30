@@ -107,6 +107,13 @@ export interface LocalSkill {
   where: string
   in_library?: boolean
   problem?: string
+  // The params of the import's refusal, for a problem it words with them.
+  problem_params?: Record<string, string>
+  // Set when the library's skill of the name came from this folder:
+  // whether the folder holds something else now, or it cannot be told;
+  // and how often the library's copy was changed since it came in.
+  origin?: 'changed' | 'same' | 'unknown'
+  edits_since?: number
 }
 
 // How one skill of an upload went: its page, or why it did not come in.

@@ -1,7 +1,9 @@
 import { useId, useRef, useState, type DragEvent } from 'react'
 import { ChevronDownIcon, FolderIcon, PackageIcon } from 'lucide-react'
 import { useAgents } from '@/api/agents'
+import { problemText } from '@/api/errorText'
 import type { LocalSkill } from '@/api/types'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -13,11 +15,13 @@ import { useT } from '@/lib/i18n'
 import { runtimeName } from '@/lib/runtimes'
 import { cn } from '@/lib/utils'
 import { droppedFiles, pickedFiles, type Picked } from './pickSkills'
+import { UpdateFromHere } from './UpdateFromHere'
 
 // The parts of the import (ImportSkillDialog): the skills on this machine
 // to tick, a zip or folder to upload, the agents to install for.
 
-// Why the library cannot take a skill of this machine, by the import's code.
+// Why the library cannot take a skill of this machine, by the import's code;
+// the codes worded here briefly, the others as the import words them.
 const problems: Record<string, MessageKey> = {
   skillBadName: 'library.import.problem.skillBadName',
   skillNoDescription: 'library.import.problem.skillNoDescription',
@@ -26,7 +30,8 @@ const problems: Record<string, MessageKey> = {
 }
 
 // LocalList lists the skills on this machine to tick, those the library
-// cannot take greyed with why.
+// cannot take greyed with why. One the library's copy came from can be
+// taken in again when it changed since, or when that cannot be told.
 export function LocalList({
   skills,
   loading,
@@ -59,14 +64,17 @@ export function LocalList({
     <ul aria-label={t('library.import.tab.local')} className="max-h-64 divide-y overflow-y-auto rounded-md border">
       {skills.map((skill) => {
         const box = `${id}-${skill.folder}`
+        const updatable = skill.in_library && (skill.origin === 'changed' || skill.origin === 'unknown')
         const why = skill.in_library
           ? t('library.import.inLibrary')
           : skill.problem
-            ? t(problems[skill.problem] ?? 'library.import.problem.skillUnreadable')
+            ? skill.problem in problems
+              ? t(problems[skill.problem])
+              : problemText(skill.problem, skill.problem_params, t('library.import.problem.skillUnreadable'))
             : undefined
         return (
           <li key={skill.folder}>
-            <Field orientation="horizontal" className="px-3 py-2" data-disabled={why ? true : undefined}>
+            <Field orientation="horizontal" className="px-3 py-2" data-disabled={why && !updatable ? true : undefined}>
               <Checkbox
                 id={box}
                 disabled={why !== undefined}
@@ -79,6 +87,7 @@ export function LocalList({
                     {skill.name}
                   </span>
                   <span className="text-xs text-subtle">{skill.where}</span>
+                  {skill.origin === 'changed' ? <Badge variant="secondary">{t('library.import.changed')}</Badge> : null}
                 </FieldLabel>
                 {why ? (
                   <FieldDescription className="text-xs">{why}</FieldDescription>
@@ -86,6 +95,7 @@ export function LocalList({
                   <FieldDescription className="line-clamp-1 text-xs">{skill.description}</FieldDescription>
                 ) : null}
               </FieldContent>
+              {updatable ? <UpdateFromHere skill={skill} /> : null}
             </Field>
           </li>
         )

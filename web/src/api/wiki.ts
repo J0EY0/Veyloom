@@ -186,6 +186,34 @@ export function useRollbackSkill() {
   })
 }
 
+// A person taking a skill out of use, or putting it back (docs/design.md
+// 5.15).
+export function useRetireSkill() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ name, retired }: { name: string; retired: boolean }) => (await api.post<WikiPageResponse>('/library/retire', { name, retired })).page,
+    onSuccess: (page) => {
+      client.setQueryData<WikiPage>(wikiKeys.page(librarySpace, page.path), page)
+      invalidateSpace(client, librarySpace)
+    },
+  })
+}
+
+// A person removing a skill from the library, which takes it off the agents
+// it was installed for.
+export function useDeleteSkill() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: async (name: string) => {
+      await api.post('/library/delete', { name })
+    },
+    onSuccess: () => {
+      invalidateSpace(client, librarySpace)
+      void client.invalidateQueries({ queryKey: agentKeys.all })
+    },
+  })
+}
+
 // Adding a skill to the library from a folder on the machine Veyloom runs
 // on, looked after by a project's team or by none ('').
 export function useImportSkill() {
@@ -196,6 +224,20 @@ export function useImportSkill() {
     onSuccess: (page) => {
       client.setQueryData<WikiPage>(wikiKeys.page(librarySpace, page.path), page)
       invalidateSpace(client, librarySpace)
+    },
+  })
+}
+
+// Taking a skill of this machine into the library again, over the
+// library's copy of it (docs/design.md 5.15).
+export function useUpdateSkill() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: async (folder: string) => (await api.post<WikiPageResponse>('/library/update', { folder })).page,
+    onSuccess: (page) => {
+      client.setQueryData<WikiPage>(wikiKeys.page(librarySpace, page.path), page)
+      invalidateSpace(client, librarySpace)
+      void client.invalidateQueries({ queryKey: ['library', 'local'] })
     },
   })
 }

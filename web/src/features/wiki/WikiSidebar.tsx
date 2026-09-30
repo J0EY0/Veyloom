@@ -1,5 +1,5 @@
 import { useDeferredValue, useMemo, useState } from 'react'
-import { BrainIcon, ChevronRightIcon, HistoryIcon, LayoutGridIcon, NetworkIcon, PinIcon, SearchXIcon } from 'lucide-react'
+import { BrainIcon, ChevronRightIcon, HistoryIcon, LayoutGridIcon, NetworkIcon, PinIcon, ScrollTextIcon, SearchXIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import type { WikiCatalog, WikiHit, WikiPageInfo } from '@/api/types'
 import { useWikiSearch, type WikiSpace } from '@/api/wiki'
@@ -20,7 +20,7 @@ import {
 import { Skeleton } from '@/components/ui/skeleton'
 import { useT } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
-import { changesHref, graphHref, memoryHref, memoryPage, overviewHref, pageHref, type WikiRoute } from './links'
+import { changesHref, conventionsPage, graphHref, memoryHref, memoryPage, overviewHref, pageHref, type WikiRoute } from './links'
 import { typeGroup, typeName } from './names'
 import { problemText } from '@/api/errorText'
 
@@ -33,8 +33,9 @@ export interface WikiSidebarProps {
 }
 
 // A project wiki's list column, the way the inbox lists its entries: a
-// search box, the overview and the changes, then every page under its
-// type, in the order the wiki keeps types in. Deprecated pages fold away
+// search box, the overview, the memory, the wiki's own conventions when it
+// has them, and the changes, then every page under its type, in the order
+// the wiki keeps types in. Deprecated pages fold away
 // at the end, and after them
 // each bundle the project mounts, read-only (5.9). Typing searches the
 // pages' text instead, the mounts' too (5.4).
@@ -78,6 +79,16 @@ export function WikiSidebar({ space, catalog, loading, route, className }: WikiS
                       <Link to={memoryHref(space)}>
                         <BrainIcon />
                         <span>{t('wiki.memory')}</span>
+                      </Link>
+                    </SidebarMenuButton>
+                  </SidebarMenuItem>
+                ) : null}
+                {groups.conventions ? (
+                  <SidebarMenuItem>
+                    <SidebarMenuButton asChild isActive={current === conventionsPage}>
+                      <Link to={pageHref(space, conventionsPage)}>
+                        <ScrollTextIcon />
+                        <span>{t('wiki.conventions')}</span>
                       </Link>
                     </SidebarMenuButton>
                   </SidebarMenuItem>
@@ -249,12 +260,18 @@ export interface PageGroup {
 
 // groupPages files the pages under their types, in the wiki's order and
 // then any other type by name; each type's pages by title. The project
-// memory has a place of its own above.
-export function groupPages(catalog?: WikiCatalog): { live: PageGroup[]; deprecated: WikiPageInfo[] } {
-  if (!catalog) return { live: [], deprecated: [] }
+// memory has a place of its own above, and so have the wiki's conventions,
+// when it has them.
+export function groupPages(catalog?: WikiCatalog): { live: PageGroup[]; deprecated: WikiPageInfo[]; conventions: boolean } {
+  if (!catalog) return { live: [], deprecated: [], conventions: false }
   const byTitle = (a: WikiPageInfo, b: WikiPageInfo) => a.title.localeCompare(b.title)
   const byType = new Map<string, WikiPageInfo[]>()
+  let conventions = false
   for (const page of catalog.pages) {
+    if (page.path === conventionsPage && page.status !== 'deprecated' && !page.mount) {
+      conventions = true
+      continue
+    }
     if (page.status === 'deprecated' || page.path === memoryPage) continue
     byType.set(page.type, [...(byType.get(page.type) ?? []), page])
   }
@@ -263,5 +280,6 @@ export function groupPages(catalog?: WikiCatalog): { live: PageGroup[]; deprecat
   return {
     live: types.map((type) => ({ key: type, type, pages: (byType.get(type) ?? []).sort(byTitle) })),
     deprecated: catalog.pages.filter((page) => page.status === 'deprecated').sort(byTitle),
+    conventions,
   }
 }

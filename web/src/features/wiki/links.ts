@@ -40,6 +40,11 @@ export function changesHref(space: WikiSpace): string {
 // project's is in its wiki, which lists it apart from the other pages.
 export const memoryPage = '/memory.md'
 
+// conventionsPage is where a project's wiki keeps its own conventions,
+// what goes into it and how its pages are written (docs/design.md 5.12):
+// the page people and its maintainer keep, listed apart like the memory.
+export const conventionsPage = '/conventions/wiki.md'
+
 // memoryHref is the project memory, kept in the Wiki tab (docs/design.md
 // 5.16).
 export function memoryHref(space: WikiSpace): string {

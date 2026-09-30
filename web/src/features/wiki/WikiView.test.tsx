@@ -27,6 +27,20 @@ describe('WikiView', () => {
     expect(await screen.findByText('Writer')).toBeInTheDocument()
   })
 
+  it('lists the conventions of the wiki in a place of their own, when it has them', async () => {
+    const withConventions: WikiCatalog = { ...catalog, pages: [...catalog.pages, info('/conventions/wiki.md', 'Convention', 'Wiki 约定')] }
+    stubApi(routes({ '/projects/p1/wiki': { wiki: withConventions } }))
+    renderWiki('')
+    const list = await screen.findByLabelText('页面')
+    await within(list).findByText('命名规范')
+    const link = within(list).getByRole('link', { name: 'Wiki 约定' })
+    expect(link).toHaveAttribute('href', '/rooms/r1/wiki/conventions/wiki.md')
+    // Not again among the conventions: the group counts one page still.
+    const labels = [...list.querySelectorAll('[data-slot="sidebar-group-label"]')].map((node) => node.textContent)
+    expect(labels).toContain('约定1')
+    expect(within(list).getAllByText('Wiki 约定')).toHaveLength(1)
+  })
+
   it('searches the pages by their text', async () => {
     const calls = stubApi(routes({ '/projects/p1/wiki/search': { hits: [{ ...pages[0], snippet: '…listens on 7788…' }] } }))
     renderWiki('')

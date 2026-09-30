@@ -195,6 +195,14 @@ describe('LibraryPage', () => {
             { name: 'notes', description: 'Use for notes.', folder: '/home/me/.claude/skills/notes', where: '~/.claude/skills' },
             { name: 'go-table-tests', description: 'd', folder: '/repo/.agents/skills/go-table-tests', where: 'Veyloom · .agents/skills', in_library: true },
             { name: 'Bad_Name', description: 'd', folder: '/home/me/.codex/skills/Bad_Name', where: '~/.codex/skills', problem: 'skillBadName' },
+            {
+              name: 'heavy',
+              description: 'd',
+              folder: '/home/me/.agents/skills/heavy',
+              where: '~/.agents/skills',
+              problem: 'skillFileTooBig',
+              problem_params: { path: 'data.bin', mb: '12.0', max: '10.0' },
+            },
           ],
         },
         '/library/import': async (req: Request) => {
@@ -217,6 +225,8 @@ describe('LibraryPage', () => {
     expect(within(list).getByRole('checkbox', { name: /Bad_Name/ })).toBeDisabled()
     expect(list).toHaveTextContent('已在技能库')
     expect(list).toHaveTextContent('名字不合规')
+    expect(within(list).getByRole('checkbox', { name: /heavy/ })).toBeDisabled()
+    expect(list).toHaveTextContent('data.bin 有 12.0 MB，技能里的单个文件不能超过 10.0 MB。')
     expect(list).toHaveTextContent('Veyloom · .agents/skills')
     expect(within(dialog).getByRole('button', { name: '导入' })).toBeDisabled()
 

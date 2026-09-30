@@ -24,6 +24,7 @@ import { PageDetails, PageHistory, PageSources } from './PageParts'
 import { PageRelations } from './PageRelations'
 import { QuestionButton } from './QuestionButton'
 import { reviewText } from './review'
+import { useSkillManage } from './SkillManage'
 import { SkillFacts } from './SkillParts'
 import { SkillTrialHead } from './SkillTrial'
 import { keptFor } from './skills'
@@ -130,6 +131,7 @@ function PageHead({
   // Tags keeping a skill for some runtimes read as whom it is for.
   const kept = keptFor(page)
   const exported = space.kind === 'library' && page.type === 'Skill' ? skillName(page.path) : ''
+  const manage = useSkillManage(page)
 
   const title = <h1 className="min-w-0 text-xl font-semibold tracking-[-0.01em] break-words">{page.title}</h1>
 
@@ -156,7 +158,7 @@ function PageHead({
             <span className="flex-none">{typeName(t, page.type)}</span>
           </>
         )}
-        {page.status === 'deprecated' ? <StatusPill tone="fail">{t('wiki.status.deprecated')}</StatusPill> : null}
+        {page.status === 'deprecated' ? <StatusPill tone="fail">{exported ? t('skill.retired') : t('wiki.status.deprecated')}</StatusPill> : null}
         {page.status === 'draft' ? <StatusPill tone="idle">{t('wiki.status.draft')}</StatusPill> : null}
         {page.resident ? (
           <StatusPill tone="idle" dot={false}>
@@ -213,6 +215,7 @@ function PageHead({
                 </a>
               </DropdownMenuItem>
             ) : null}
+            {exported ? manage.items : null}
             {residentOption ? (
               <DropdownMenuItem disabled={change.isPending} onSelect={() => change.mutate({ path: page.path, resident: !page.resident }, { onError: failed })}>
                 <PinIcon />
@@ -221,8 +224,10 @@ function PageHead({
             ) : null}
             <DropdownMenuItem onSelect={() => void copy(page.file, t('wiki.pathCopied'))}>{t('wiki.page.copyFile')}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void copy(location.href, t('common.linkCopied'))}>{t('common.copyLink')}</DropdownMenuItem>
+            {exported ? manage.removal : null}
           </DropdownMenuContent>
         </DropdownMenu>
+        {exported ? manage.dialog : null}
       </div>
       {beside ? (
         <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
