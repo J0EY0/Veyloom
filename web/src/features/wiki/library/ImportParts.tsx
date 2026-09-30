@@ -65,13 +65,18 @@ export function LocalList({
       {skills.map((skill) => {
         const box = `${id}-${skill.folder}`
         const updatable = skill.in_library && (skill.origin === 'changed' || skill.origin === 'unknown')
+        // Skills of one name in two folders: the library takes one of them.
+        const twins = skills.filter((other) => other.name === skill.name && other.folder !== skill.folder)
+        const twinTicked = twins.find((other) => ticked.includes(other.folder))
         const why = skill.in_library
           ? t('library.import.inLibrary')
           : skill.problem
             ? skill.problem in problems
               ? t(problems[skill.problem])
               : problemText(skill.problem, skill.problem_params, t('library.import.problem.skillUnreadable'))
-            : undefined
+            : twinTicked
+              ? t('library.import.twinTicked', { where: twinTicked.where })
+              : undefined
         return (
           <li key={skill.folder}>
             <Field orientation="horizontal" className="px-3 py-2" data-disabled={why && !updatable ? true : undefined}>
@@ -92,7 +97,14 @@ export function LocalList({
                 {why ? (
                   <FieldDescription className="text-xs">{why}</FieldDescription>
                 ) : skill.description ? (
-                  <FieldDescription className="line-clamp-1 text-xs">{skill.description}</FieldDescription>
+                  // Followed by the line naming its twins, it keeps its place
+                  // (FieldDescription lifts one that is next to last).
+                  <FieldDescription className="line-clamp-1 text-xs nth-last-2:mt-0">{skill.description}</FieldDescription>
+                ) : null}
+                {!why && twins.length > 0 ? (
+                  <FieldDescription className="text-xs">
+                    {t('library.import.twins', { where: twins.map((other) => other.where).join(t('common.listSeparator')) })}
+                  </FieldDescription>
                 ) : null}
               </FieldContent>
               {updatable ? <UpdateFromHere skill={skill} /> : null}

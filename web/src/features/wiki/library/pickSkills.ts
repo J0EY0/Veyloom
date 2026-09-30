@@ -25,10 +25,28 @@ export function pickedFiles(files: FileList | File[]): Picked | undefined {
   return folderPicked(list.map((file) => ({ path: file.webkitRelativePath || file.name, file })))
 }
 
-// folderPicked leaves out hidden files, a Mac's .DS_Store among them,
-// which the import leaves behind anyway.
+// leftOut names what the import leaves out of a skill anyway (wiki.
+// SkillLeavesOut): version control's own files, what an operating system
+// leaves behind, the environments and caches tools leave where they ran,
+// and environment files but for an .env.example. A skill's other hidden
+// files come along.
+const leftOutNames = new Set([
+  ...['.git', '.gitignore', '.gitattributes', '.gitmodules', '.hg', '.svn'],
+  ...['.DS_Store', 'Thumbs.db', '__MACOSX'],
+  ...['.venv', '.tox', '.nox', '.cache', '.ipynb_checkpoints', '.eslintcache'],
+  '.env',
+])
+const keptEnv = new Set(['.env.example', '.env.sample', '.env.template'])
+
+export function leftOut(name: string): boolean {
+  if (leftOutNames.has(name)) return true
+  if (name.startsWith('.') && (name.endsWith('_cache') || name.endsWith('-cache'))) return true
+  return name.startsWith('.env.') && !keptEnv.has(name)
+}
+
+// folderPicked leaves out what the import would leave behind anyway.
 function folderPicked(files: { path: string; file: File }[]): Picked | undefined {
-  const kept = files.filter(({ path }) => !path.split('/').some((part) => part.startsWith('.')))
+  const kept = files.filter(({ path }) => !path.split('/').some(leftOut))
   if (kept.length === 0) return undefined
   return {
     name: kept[0].path.split('/')[0],
