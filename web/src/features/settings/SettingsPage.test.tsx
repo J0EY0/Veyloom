@@ -133,11 +133,11 @@ describe('SettingsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: '修改密码' }))
     await userEvent.type(await screen.findByLabelText('当前密码'), 'correct horse')
     await userEvent.type(screen.getByLabelText('新密码'), 'battery staple')
-    await userEvent.type(screen.getByLabelText('再输一遍新密码'), 'battery stapl')
+    await userEvent.type(screen.getByLabelText('确认新密码'), 'battery stapl')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('两次输入的不一样。')
+    expect(await screen.findByRole('alert')).toHaveTextContent('两次输入的密码不一致。')
 
-    await userEvent.type(screen.getByLabelText('再输一遍新密码'), 'e')
+    await userEvent.type(screen.getByLabelText('确认新密码'), 'e')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(posted).toEqual({ current: 'correct horse', new: 'battery staple' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
@@ -149,9 +149,9 @@ describe('SettingsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: '修改密码' }))
     await userEvent.type(await screen.findByLabelText('当前密码'), 'nope')
     await userEvent.type(screen.getByLabelText('新密码'), 'battery staple')
-    await userEvent.type(screen.getByLabelText('再输一遍新密码'), 'battery staple')
+    await userEvent.type(screen.getByLabelText('确认新密码'), 'battery staple')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('当前密码不对。')
+    expect(await screen.findByRole('alert')).toHaveTextContent('当前密码错误。')
   })
 
   it('signs out from the account section', async () => {

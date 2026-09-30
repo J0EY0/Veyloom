@@ -103,7 +103,7 @@ describe('RoomPage approvals', () => {
     stubRoom()
     const { client } = renderWithProviders(<RoomPage />, { route: '/rooms/r1?panel=approvals', path: '/rooms/:roomId' })
     expect(await screen.findByRole('complementary', { name: '待审批' })).toBeInTheDocument()
-    expect(await screen.findByText('没有在等你的。')).toBeInTheDocument()
+    expect(await screen.findByText('没有等你处理的请求。')).toBeInTheDocument()
 
     const ws = FakeWebSocket.last()
     ws.open()
@@ -199,7 +199,7 @@ describe('RoomPage escape', () => {
       // With more, the leader takes it or hands it on.
       [[codex, pi], { member_id: 'a2', reason: 'leader' }, '不带 @ 时交给组长 Pi Tester 分派'],
       // Nobody would take it: the box asks for an @.
-      [[{ ...codex, enabled: false }], { reason: 'none' }, '输入 @ 提到成员'],
+      [[{ ...codex, enabled: false }], { reason: 'none' }, '输入 @ 提及成员'],
     ] as const) {
       stubRoom([...members], [], addressee)
       const view = renderWithProviders(<RoomPage />, { route: '/rooms/r1', path: '/rooms/:roomId' })

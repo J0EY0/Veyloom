@@ -43,7 +43,7 @@ describe('LinkCard', () => {
 
   it('says who dealt with it', () => {
     renderWithProviders(<RequestCard approval={link('https://login.example.com', { status: 'denied', decided_by: 'u1' })} names={names} />)
-    expect(screen.getByText('没有打开')).toBeInTheDocument()
+    expect(screen.getByText('未打开')).toBeInTheDocument()
     expect(screen.getByText(/alice 拒绝了/)).toBeInTheDocument()
   })
 })

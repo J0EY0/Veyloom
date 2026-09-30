@@ -52,7 +52,7 @@ describe('PageRelations', () => {
     expect(within(linksTo).getByRole('link', { name: 'Config' })).toHaveAttribute('href', '/rooms/r1/wiki/modules/config.md')
     expect(within(linksTo).getByText('Set in [the config].')).toBeInTheDocument()
     expect(within(linksTo).getByText(/外部 · acme/)).toBeInTheDocument()
-    const linkedFrom = within(relations).getByRole('region', { name: '被这些页引用' })
+    const linkedFrom = within(relations).getByRole('region', { name: '引用此页的页面' })
     expect(within(linkedFrom).getByText('The port is [the default].')).toBeInTheDocument()
     expect(within(within(relations).getByRole('region', { name: '取代了' })).getByRole('link', { name: 'The hub listened on 8080' })).toHaveClass(
       'line-through',
@@ -61,14 +61,14 @@ describe('PageRelations', () => {
     const restsOn = within(relations).getByRole('region', { name: '依据' })
     expect(within(restsOn).queryByText('The address decision')).not.toBeInTheDocument()
 
-    const files = within(relations).getByRole('region', { name: '提到同样路径的页' })
+    const files = within(relations).getByRole('region', { name: '提及相同路径的页面' })
     expect(within(files).getByText('internal/config/load.go')).toBeInTheDocument()
     expect(
       within(files)
         .getAllByRole('link')
         .map((link) => link.textContent),
     ).toEqual(['Config', 'Viper reads the binary'])
-    const topics = within(relations).getByRole('region', { name: '出自同一话题的页' })
+    const topics = within(relations).getByRole('region', { name: '来自同一话题的页面' })
     expect(within(topics).getByRole('link', { name: 'One flag for the address' })).toBeInTheDocument()
     await userEvent.click(within(topics).getByRole('button', { name: '话题 #3 · Which port' }))
     expect(onOpenThread).toHaveBeenCalledWith('t3')
@@ -84,8 +84,8 @@ describe('PageRelations', () => {
     stubApi(routes({ '/projects/p1/wiki/page': { page: old }, '/projects/p1/wiki/graph': { graph } }))
     renderWiki('facts/old-port.md')
     const relations = await screen.findByRole('region', { name: '关系' })
-    expect(await within(relations).findByRole('region', { name: '被这些页取代' })).toBeInTheDocument()
-    expect(within(relations).queryByRole('region', { name: '被这些页引用' })).not.toBeInTheDocument()
+    expect(await within(relations).findByRole('region', { name: '被以下页面取代' })).toBeInTheDocument()
+    expect(within(relations).queryByRole('region', { name: '引用此页的页面' })).not.toBeInTheDocument()
   })
 
   it('stands in the page’s own backlinks for a page the graph does not hold', async () => {
@@ -93,7 +93,7 @@ describe('PageRelations', () => {
     stubApi(routes({ '/projects/p1/wiki/page': { page: inFolder }, '/projects/p1/wiki/graph': { graph } }))
     renderWiki('facts/elsewhere.md')
     const relations = await screen.findByRole('region', { name: '关系' })
-    expect(within(within(relations).getByRole('region', { name: '被这些页引用' })).getByRole('link', { name: 'Config' })).toBeInTheDocument()
+    expect(within(within(relations).getByRole('region', { name: '引用此页的页面' })).getByRole('link', { name: 'Config' })).toBeInTheDocument()
     expect(within(relations).queryByRole('link', { name: /在关系图中查看/ })).not.toBeInTheDocument()
   })
 
@@ -122,7 +122,7 @@ describe('PageRelations', () => {
     const alone: WikiGraph = { nodes: [node('/facts/port.md', 'Fact', 'The hub listens on 7788')], edges: [] }
     stubApi(routes({ '/projects/p1/wiki/page': { page: { ...port, backlinks: [] } }, '/projects/p1/wiki/graph': { graph: alone } }))
     renderWiki('facts/port.md')
-    expect(await screen.findByText('还没有和别的页连起来。')).toBeInTheDocument()
+    expect(await screen.findByText('还没有与其他页面关联。')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: /在关系图中查看/ })).toBeInTheDocument()
   })
 })

@@ -18,7 +18,7 @@ describe('ApprovalsPanel', () => {
 
     expect(await screen.findByText('make test')).toBeInTheDocument()
     expect(await screen.findByText('Codex Implementer')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '在话题里看' }))
+    await userEvent.click(screen.getByRole('button', { name: '在话题中查看' }))
     expect(onOpenThread).toHaveBeenCalledWith('t9')
   })
 
@@ -29,6 +29,6 @@ describe('ApprovalsPanel', () => {
       '/users': { users: [] },
     })
     renderWithProviders(<ApprovalsPanel roomId="r1" onClose={() => {}} onOpenThread={() => {}} />)
-    expect(await screen.findByText('没有在等你的。')).toBeInTheDocument()
+    expect(await screen.findByText('没有等你处理的请求。')).toBeInTheDocument()
   })
 })

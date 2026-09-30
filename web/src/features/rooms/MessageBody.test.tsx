@@ -1,6 +1,6 @@
 import { render, screen } from '@testing-library/react'
 import { describe, expect, it } from 'vitest'
-import { MessageBody, split } from './MessageBody'
+import { MessageBody } from './MessageBody'
 
 const names = new Map([
   ['a1', 'Codex Implementer'],
@@ -8,34 +8,38 @@ const names = new Map([
   ['u1', 'alice'],
 ])
 
-describe('split', () => {
-  it('turns mentioned names into pills, longest name first', () => {
-    const parts = split(
-      '@Codex Implementer B 和 @Codex Implementer 看看',
-      [
-        { kind: 'agent', id: 'a1' },
-        { kind: 'agent', id: 'a2' },
-      ],
-      names,
-    )
-    expect(parts).toEqual([
-      { text: 'Codex Implementer B', pill: true, id: 'a2' },
-      { text: ' 和 ', pill: false },
-      { text: 'Codex Implementer', pill: true, id: 'a1' },
-      { text: ' 看看', pill: false },
-    ])
-  })
-
-  it('leaves text alone when nothing is mentioned or the name is unknown', () => {
-    expect(split('@alice hi', null, names)).toEqual([{ text: '@alice hi', pill: false }])
-    expect(split('@ghost hi', [{ kind: 'user', id: 'zzz' }], names)).toEqual([{ text: '@ghost hi', pill: false }])
-  })
-})
-
 describe('MessageBody', () => {
-  it('renders a pill per mention', () => {
-    render(<MessageBody body="@alice 够用。" mentions={[{ kind: 'user', id: 'u1' }]} names={names} />)
+  it('renders a pill per mention, longest name first', async () => {
+    render(
+      <MessageBody
+        body="@Codex Implementer B 和 @alice 看看"
+        mentions={[
+          { kind: 'agent', id: 'a2' },
+          { kind: 'user', id: 'u1' },
+        ]}
+        names={names}
+      />,
+    )
+    expect(await screen.findByText('Codex Implementer B')).toBeInTheDocument()
     expect(screen.getByText('alice')).toBeInTheDocument()
-    expect(screen.getByText('够用。')).toBeInTheDocument()
+    expect(screen.queryByText(/@alice/)).not.toBeInTheDocument()
+  })
+
+  it('draws what a person wrote as markdown: code and emphasis', async () => {
+    const { container } = render(<MessageBody body={'`notes tags` should be **fast**'} mentions={null} names={names} />)
+    expect(await screen.findByText('notes tags')).toHaveAttribute('data-streamdown', 'inline-code')
+    expect(container.querySelector('[data-streamdown="strong"]')).toHaveTextContent('fast')
+    expect(container).not.toHaveTextContent('`')
+  })
+
+  it('keeps the lines and the characters as typed', async () => {
+    const { container } = render(<MessageBody body={'use the <Composer> component\nthen ship it'} mentions={null} names={names} />)
+    expect(await screen.findByText(/use the <Composer> component/)).toBeInTheDocument()
+    expect(container.querySelector('br')).not.toBeNull()
+  })
+
+  it('leaves a name it does not mention as text', async () => {
+    render(<MessageBody body="@alice hi" mentions={null} names={names} />)
+    expect(await screen.findByText('@alice hi')).toBeInTheDocument()
   })
 })

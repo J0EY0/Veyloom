@@ -15,12 +15,17 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/u
 import { Skeleton } from '@/components/ui/skeleton'
 import { BranchDialog, type BranchDialogState } from '@/features/branches/BranchDialog'
 import { useMentionTargets } from '@/features/rooms/useMentionTargets'
+import { MessageBody } from '@/features/rooms/MessageBody'
+import { plainText } from '@/lib/plainText'
 import { formatCompactCount, formatDay, formatHour, formatSpan } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import { totalTokens } from '@/lib/tokens'
 import { useNow } from '@/lib/useNow'
 import { Waterfall } from './Waterfall'
 import { time } from './work'
+
+// What was asked names no one: the words are shown as they were typed.
+const noNames = new Map<string, string>()
 
 export interface WorkViewProps {
   roomId: string
@@ -89,10 +94,12 @@ export function WorkView({ roomId, chain, onOpenThread }: WorkViewProps) {
           </Button>
         </div>
         <header className="flex flex-col gap-2.5">
-          <h1 className="text-2xl font-semibold tracking-[-0.02em]">{w.title || t('tasks.untitled', { n: w.thread_number })}</h1>
+          <h1 className="text-2xl font-semibold tracking-[-0.02em]">{plainText(w.title) || t('tasks.untitled', { n: w.thread_number })}</h1>
           <Byline work={w} roomId={roomId} names={names} looks={looks} />
         </header>
-        {w.ask && w.ask !== w.title ? <p className="max-w-[54rem] text-sm leading-[1.75] text-body">{w.ask}</p> : null}
+        {w.ask && w.ask !== w.title ? (
+          <MessageBody body={w.ask} mentions={null} names={noNames} className="max-w-[54rem] text-sm leading-[1.75] text-body" />
+        ) : null}
         <Figures work={w} now={now} />
         <section aria-label={t('work.process')} className="flex flex-col gap-1.5 rounded-xl border px-4.5 pt-3.5 pb-3">
           <div className="overflow-x-auto">

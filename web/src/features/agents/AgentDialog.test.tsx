@@ -112,7 +112,7 @@ describe('AgentDialog', () => {
     // Pi is offered the skills for every runtime, not the retired one;
     // Veyloom's own are named apart, with nothing to install.
     await waitFor(() => expect(skillBoxes()).toEqual(['Go table tests']))
-    expect(screen.getByText('Veyloom 自带、每个 agent 都有，不用装：')).toBeInTheDocument()
+    expect(screen.getByText('Veyloom 内置，所有 agent 默认可用，无需安装：')).toBeInTheDocument()
     expect(screen.getByText('team-practices')).toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: /team-practices/ })).toBeNull()
     await userEvent.click(screen.getByRole('checkbox', { name: /Go table tests/ }))
@@ -144,9 +144,9 @@ describe('AgentDialog', () => {
     })
     renderWithProviders(<AgentDialog agent={{ ...existing, skills: ['claude-only', 'gone-one', 'old-habit'] }} onClose={vi.fn()} />)
     await waitFor(() => expect(skillBoxes()).toEqual(['Claude only ✓', 'Go table tests', 'gone-one ✓', 'Old habit ✓']))
-    expect(screen.getByText('只给 Claude Code 用，取消勾选就会卸下。')).toBeInTheDocument()
-    expect(screen.getByText('技能库里已经没有它了，取消勾选就会卸下。')).toBeInTheDocument()
-    expect(screen.getByText('已停用，不会再给出，取消勾选就会卸下。')).toBeInTheDocument()
+    expect(screen.getByText('仅适用于 Claude Code，取消勾选即可卸载。')).toBeInTheDocument()
+    expect(screen.getByText('技能库中已没有这个技能，取消勾选即可卸载。')).toBeInTheDocument()
+    expect(screen.getByText('已停用，不会再提供给 agent，取消勾选即可卸载。')).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('checkbox', { name: /gone-one/ }))
     await userEvent.click(screen.getByRole('checkbox', { name: /Go table tests/ }))
@@ -174,7 +174,7 @@ describe('AgentDialog', () => {
 
     stubApi({ '/machines': { machines: [] }, '/agents': { agents: [] } })
     renderWithProviders(<AgentDialog onClose={vi.fn()} />)
-    await waitFor(() => expect(screen.getByLabelText('机器')).toHaveTextContent('没有连上的机器'))
+    await waitFor(() => expect(screen.getByLabelText('机器')).toHaveTextContent('没有已连接的机器'))
     expect(screen.getByLabelText('机器')).toBeDisabled()
     expect(screen.getByRole('button', { name: '创建 Agent' })).toBeDisabled()
   })
@@ -221,7 +221,7 @@ describe('AgentDialog', () => {
   it("says a Codex agent's members start a new session once its role card changes", async () => {
     stubApi({ '/machines': machines, '/runtime-traits': runtimeTraits })
     renderWithProviders(<AgentDialog agent={{ ...existing, runtime: 'codex' }} onClose={vi.fn()} />)
-    const hint = '改角色卡后，Codex 成员下一轮会从新会话开始。'
+    const hint = '修改角色卡后，Codex 成员会从下一轮开始使用新会话。'
     const roleCard = await screen.findByLabelText('角色卡')
     expect(screen.queryByText(hint)).not.toBeInTheDocument()
     await userEvent.type(roleCard, ' Always.')
@@ -251,7 +251,7 @@ describe('AgentDialog', () => {
   it('shows the machine an agent is on while that machine is offline', async () => {
     stubApi({ '/machines': machines })
     renderWithProviders(<AgentDialog agent={{ ...existing, machine_id: 'w9', machine_name: 'old-box', runtime: 'claude' }} onClose={vi.fn()} />)
-    await waitFor(() => expect(screen.getByLabelText('机器')).toHaveTextContent('old-box（不在线）'))
+    await waitFor(() => expect(screen.getByLabelText('机器')).toHaveTextContent('old-box（离线）'))
     expect(screen.getByLabelText('运行时')).toHaveTextContent('Claude Code')
   })
 
@@ -309,7 +309,7 @@ describe('AgentDialog', () => {
 
     expect(await screen.findByRole('button', { name: '更换头像' })).toBeInTheDocument()
     await user.upload(screen.getByLabelText('头像'), new File(['gif'], 'me.gif', { type: 'image/gif' }))
-    expect(await screen.findByText('头像要是 PNG、JPG 或 WebP 图片。')).toBeInTheDocument()
+    expect(await screen.findByText('头像需要是 PNG、JPG 或 WebP 图片。')).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '移除头像' }))
     expect(screen.getByRole('button', { name: '上传头像' })).toBeInTheDocument()

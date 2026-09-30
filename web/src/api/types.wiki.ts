@@ -97,6 +97,27 @@ export interface WikiTeam {
 }
 
 // A turn that used a skill of the library.
+// A skill a person keeps for their runtimes on the machine Veyloom runs on
+// (docs/design.md 5.15): in their own folders, or a project's checkout.
+// where says which folder; problem, why the import would refuse it.
+export interface LocalSkill {
+  name: string
+  description: string
+  folder: string
+  where: string
+  in_library?: boolean
+  problem?: string
+}
+
+// How one skill of an upload went: its page, or why it did not come in.
+export interface UploadedSkill {
+  name: string
+  path?: string
+  code?: string
+  params?: Record<string, string>
+  message?: string
+}
+
 export interface SkillUse {
   turn_id: string
   status: string

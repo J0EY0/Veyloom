@@ -71,7 +71,7 @@ test('ask, approve, read the report, find it in the inbox', async ({ page }) => 
   await expect(page.getByText(`不带 @ 时由 ${careful} 回复`)).toBeVisible()
   const box = page.getByLabel('消息')
   await box.fill('@Ca')
-  await expect(page.getByRole('listbox', { name: '提到成员' })).toContainText(careful)
+  await expect(page.getByRole('listbox', { name: '提及成员' })).toContainText(careful)
   await page.keyboard.press('Enter')
   await expect(box).toHaveValue(`@${careful} `)
   await box.fill('')
@@ -111,11 +111,11 @@ test('ask, approve, read the report, find it in the inbox', async ({ page }) => 
 
   // The topic is named by what the person asked and reads as a chat: the
   // agent under its name, the settled request and one line of activity.
-  await page.getByRole('button', { name: /^完成/ }).click()
+  await page.getByRole('button', { name: /^已完成/ }).click()
   const topic = page.getByRole('complementary', { name: '话题' })
   await expect(topic.getByRole('heading', { name: '起个服务做冒烟' })).toBeVisible()
   await expect(topic).toContainText(careful)
-  await expect(topic).toContainText('运行了')
+  await expect(topic).toContainText('已运行')
   await expect(topic).toContainText('make test')
   await expect(topic).toContainText('1 次审批')
   await expect(page).toHaveURL(/thread=/)

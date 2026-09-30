@@ -18,7 +18,7 @@ describe('WikiView marks', () => {
     for (const rest of ['memory', 'memory.md']) {
       const { unmount } = renderWiki(rest)
       expect(await screen.findByRole('heading', { name: '项目记忆' })).toBeInTheDocument()
-      expect(screen.getByText('每一轮都会带给这个项目的成员。')).toBeInTheDocument()
+      expect(screen.getByText('每一轮都会提供给这个项目的成员。')).toBeInTheDocument()
       expect(await screen.findByText('回复用中文。')).toBeInTheDocument()
       unmount()
     }
@@ -32,7 +32,7 @@ describe('WikiView marks', () => {
       }),
     )
     renderWiki('memory')
-    expect(await screen.findByText(/项目记忆已关闭，不会带给成员。/)).toBeInTheDocument()
+    expect(await screen.findByText(/项目记忆已关闭，不会提供给成员。/)).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '去设置' })).toHaveAttribute('href', '/settings/general')
     // What it holds is still kept here.
     expect(await screen.findByText('回复用中文。')).toBeInTheDocument()
@@ -56,13 +56,16 @@ describe('WikiView marks', () => {
     expect(await screen.findByText('· 1 页待复核')).toBeInTheDocument()
     const section = screen.getByRole('region', { name: '待复核' })
     expect(within(section).getByRole('link', { name: 'The hub listens on 7788' })).toHaveAttribute('href', '/rooms/r1/wiki/facts/port.md')
-    expect(within(section).getByText('internal/hub/brief.go 后来改过（9月20日）')).toBeInTheDocument()
+    expect(within(section).getByText('internal/hub/brief.go 在上次确认后有改动（9月20日）')).toBeInTheDocument()
     unmount()
 
     renderWiki('facts/port.md', onOpenThread)
-    expect(await screen.findByText('待复核', { selector: '[data-slot="status-pill"], span' })).toBeInTheDocument()
-    expect(screen.getByText(/待复核：internal\/hub\/brief\.go 后来改过（9月20日）/)).toBeInTheDocument()
-    expect(screen.getByText(/Pi 复核于/)).toBeInTheDocument()
+    // One line says it is due and why, with no badge saying it again.
+    expect(await screen.findByText(/待复核：internal\/hub\/brief\.go 在上次确认后有改动（9月20日）/)).toBeInTheDocument()
+    expect(screen.queryByText('待复核', { selector: '[data-slot="badge"]' })).toBeNull()
+    // Who checked it last is among the page's details.
+    const details = screen.getByRole('region', { name: '页面信息' })
+    expect(within(details).getByText(/^Pi · /)).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '话题 #12' }))
     expect(onOpenThread).toHaveBeenCalledWith('t12')
   })
@@ -98,10 +101,10 @@ describe('WikiView marks', () => {
     stubApi(routes({ '/projects/p1/wiki/page': { page: withFiles } }))
     renderWiki('facts/port.md', onOpenThread)
     // Said in the chat itself: nowhere further to lead.
-    expect(await screen.findByText('diagram.png：Joey 9月23日发在群聊')).toBeInTheDocument()
+    expect(await screen.findByText('diagram.png：Joey 9月23日发在群聊中')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /diagram\.png/ })).not.toBeInTheDocument()
-    expect(screen.getByText('old.pdf：原消息找不到了')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: 'checklist.md：Joey 9月23日发在话题 #4' }))
+    expect(screen.getByText('old.pdf：原消息已不存在')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'checklist.md：Joey 9月23日发在话题 #4 中' }))
     expect(onOpenThread).toHaveBeenCalledWith('t4')
   })
 })

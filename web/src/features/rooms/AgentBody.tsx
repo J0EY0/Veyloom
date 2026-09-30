@@ -2,7 +2,7 @@ import { useCallback } from 'react'
 import { useProject } from '@/api/projects'
 import { useRoom } from '@/api/rooms'
 import type { Mention, Message } from '@/api/types'
-import { AgentMarkdown } from '@/components/shared/agent-markdown'
+import { ChatMarkdown } from '@/components/shared/chat-markdown'
 import { insertIntoComposer, type ComposerTarget } from '@/lib/composer'
 
 export interface AgentBodyProps {
@@ -25,7 +25,7 @@ export function AgentBody({ message, names, target, streaming, className }: Agen
   const handsOff = project?.relay_limit === -1
   const takeOver = useCallback((_mention: Mention, name: string) => insertIntoComposer(target, `@${name} `), [target])
   return (
-    <AgentMarkdown
+    <ChatMarkdown
       text={message.body}
       mentions={message.mentions}
       names={names}

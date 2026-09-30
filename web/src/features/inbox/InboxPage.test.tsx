@@ -60,7 +60,7 @@ describe('InboxPage', () => {
     expect(rows[1]).toHaveTextContent('看完了，没问题')
     expect(rows[1]).not.toHaveTextContent('@alice')
     expect(rows[2]).toHaveAttribute('href', '/inbox?item=m3')
-    expect(screen.getByText('选一条查看。')).toBeInTheDocument()
+    expect(screen.getByText('选择一条查看。')).toBeInTheDocument()
   })
 
   it('says so with nobody signed in, and when nothing arrived', async () => {
@@ -72,9 +72,9 @@ describe('InboxPage', () => {
     setCurrentUser({ id: 'u1', name: 'alice' })
     stubApi({ '/approvals': { approvals: [] }, '/users/u1/inbox': { items: [] } })
     renderWithProviders(<InboxPage />)
-    expect(await screen.findByText('没有等你的。')).toBeInTheDocument()
+    expect(await screen.findByText('暂无待处理的事项。')).toBeInTheDocument()
     // Nothing to pick, search or narrow: the note alone, no list around it.
-    expect(screen.queryByText('选一条查看。')).not.toBeInTheDocument()
+    expect(screen.queryByText('选择一条查看。')).not.toBeInTheDocument()
     expect(screen.queryByRole('searchbox')).not.toBeInTheDocument()
     expect(screen.queryByRole('switch')).not.toBeInTheDocument()
   })
@@ -98,12 +98,12 @@ describe('InboxPage', () => {
     const [match] = within(screen.getByRole('list')).getAllByRole('link')
     expect(match).toHaveAttribute('href', '/inbox?item=m9')
     await userEvent.type(search, ' 构建')
-    expect(await screen.findByText('没有匹配的。')).toBeInTheDocument()
+    expect(await screen.findByText('没有匹配的结果。')).toBeInTheDocument()
 
     await userEvent.clear(search)
     await userEvent.click(only)
     await userEvent.type(search, 'pi tester')
-    expect(await screen.findByText('没有匹配的。')).toBeInTheDocument()
+    expect(await screen.findByText('没有匹配的结果。')).toBeInTheDocument()
   })
 
   it('opens a request in its topic and decides it there, keeping the topic once it leaves the list', async () => {
@@ -141,7 +141,7 @@ describe('InboxPage', () => {
 
     await userEvent.click(await within(topic).findByRole('button', { name: '允许' }))
     await waitFor(() => expect(decided).toMatchObject({ allow: true }))
-    expect(await screen.findByText('没有等你的。')).toBeInTheDocument()
+    expect(await screen.findByText('暂无待处理的事项。')).toBeInTheDocument()
     expect(screen.getByRole('complementary', { name: '话题' })).toBeInTheDocument()
     expect(router.state.location.search).toBe('?item=ap1')
   })
@@ -173,6 +173,6 @@ describe('InboxPage', () => {
 
     await userEvent.keyboard('{Escape}')
     await waitFor(() => expect(router.state.location.search).toBe(''))
-    expect(await screen.findByText('选一条查看。')).toBeInTheDocument()
+    expect(await screen.findByText('选择一条查看。')).toBeInTheDocument()
   })
 })

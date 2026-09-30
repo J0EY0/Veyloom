@@ -16,7 +16,7 @@ export interface AgentAvatarProps {
   className?: string
 }
 
-// A runtime's tint for the square an agent's letter sits in (docs/webui.md
+// A runtime's tint for the disc an agent's letter sits in (docs/webui.md
 // §0): its wash behind, its ink for the letter, a hairline of its colour.
 const tints: Record<string, string> = {
   claude: 'bg-runtime-claude-wash text-runtime-claude-ink ring-runtime-claude/30',
@@ -26,10 +26,10 @@ const tints: Record<string, string> = {
 
 const marked: ReadonlySet<AvatarSize> = new Set(['lg', 'message', 'md'])
 
-// An agent's face wherever it appears, at the sizes a person's initial
-// comes in so the two line up: the picture uploaded for it, or else its
-// first letter on a square tinted by its runtime, so that two agents on
-// one runtime are told apart; the runtime's own mark sits in the corner.
+// An agent's face wherever it appears, round and at the sizes a person's
+// initial comes in so the two line up: the picture uploaded for it, or
+// else its first letter on a disc tinted by its runtime, so that two agents
+// on one runtime are told apart; the runtime's own mark sits in the corner.
 // While the picture loads, or if it is gone, the letter stands in.
 export function AgentAvatar({ look, name, size = 'md', mark, className }: AgentAvatarProps) {
   const box = cn(avatarSizes[size], className)
@@ -38,7 +38,7 @@ export function AgentAvatar({ look, name, size = 'md', mark, className }: AgentA
     <span
       aria-hidden="true"
       className={cn(
-        'inline-flex size-full items-center justify-center rounded-[28%] font-semibold ring-1 ring-inset',
+        'inline-flex size-full items-center justify-center rounded-full font-semibold ring-1 ring-inset',
         tints[look.runtime] ?? 'bg-secondary text-muted-foreground ring-border',
       )}
     >
@@ -46,7 +46,7 @@ export function AgentAvatar({ look, name, size = 'md', mark, className }: AgentA
     </span>
   )
   const face = look.avatar ? (
-    <Avatar aria-hidden="true" data-avatar={look.avatar} className="size-full rounded-[28%] after:hidden">
+    <Avatar aria-hidden="true" data-avatar={look.avatar} className="size-full after:hidden">
       <AvatarImage src={avatarUrl(look.avatar)} alt="" className="object-cover" />
       <AvatarFallback className="bg-transparent" style={{ fontSize: 'inherit' }}>
         {letter}
@@ -55,10 +55,10 @@ export function AgentAvatar({ look, name, size = 'md', mark, className }: AgentA
   ) : (
     letter
   )
-  // Rounded as the face is, so that a ring drawn around the avatar (a
-  // shadow in className) follows its corners.
+  // Round as the face is, so that a ring drawn around the avatar (a shadow
+  // in className) follows it.
   return (
-    <span aria-hidden="true" className={cn('relative inline-flex flex-none rounded-[28%]', box)}>
+    <span aria-hidden="true" className={cn('relative inline-flex flex-none rounded-full', box)}>
       {face}
       {(mark ?? marked.has(size)) ? (
         <RuntimeIcon runtime={look.runtime} className="absolute -right-[0.1875rem] -bottom-[0.1875rem] size-3 ring-2 ring-background" />

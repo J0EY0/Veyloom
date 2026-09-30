@@ -9,6 +9,7 @@ import { BranchDialog, type BranchDialogState } from '@/features/branches/Branch
 import { wikiHref } from '@/features/wiki/links'
 import type { AgentLook } from '@/lib/agentLooks'
 import { formatAgo, formatElapsed } from '@/lib/format'
+import { plainText } from '@/lib/plainText'
 import { useT } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { markOf } from './tasks'
@@ -33,7 +34,7 @@ export interface TaskCardProps {
 // topic; work to merge, the merge itself (docs/design.md 5.21).
 export function TaskCard({ task, roomId, name, look, byMember, now, onOpenThread }: TaskCardProps) {
   const t = useT()
-  const title = task.title || t('tasks.untitled', { n: task.thread_number })
+  const title = plainText(task.title) || t('tasks.untitled', { n: task.thread_number })
   const running = task.state === 'running'
   return (
     <article className="relative flex flex-col gap-2 rounded-[0.625rem] border bg-card px-3 pt-2.75 pb-2.5 shadow-xs transition-colors hover:border-input has-[a[data-card]:focus-visible]:ring-2 has-[a[data-card]:focus-visible]:ring-ring/50">
@@ -63,7 +64,7 @@ export function TaskCard({ task, roomId, name, look, byMember, now, onOpenThread
         <p className="flex min-w-0 items-center gap-1.5 text-xs text-subtle">
           <CornerDownRightIcon aria-hidden="true" className="size-3 flex-none" />
           <span className="sr-only">{t('tasks.partOf')}</span>
-          <span className="min-w-0 truncate">{task.work.title || t('tasks.untitled', { n: task.work.thread_number })}</span>
+          <span className="min-w-0 truncate">{plainText(task.work.title) || t('tasks.untitled', { n: task.work.thread_number })}</span>
         </p>
       ) : null}
       {task.parts ? <Parts done={task.parts.done} total={task.parts.total} /> : null}

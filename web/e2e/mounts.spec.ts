@@ -33,7 +33,7 @@ test('a bundle from elsewhere: mounted in the settings, read in the Wiki tab', a
   const dialog = page.getByRole('dialog', { name: '编辑项目' })
   await dialog.getByLabel('外部 wiki（只读）').fill('relative/folder')
   await dialog.getByRole('button', { name: '保存' }).click()
-  await expect(dialog).toContainText('relative/folder 不是完整路径')
+  await expect(dialog).toContainText('relative/folder 不是绝对路径')
   await expect(dialog).not.toContainText('store:')
   await dialog.getByLabel('外部 wiki（只读）').fill(acmeRetail)
   await dialog.getByRole('button', { name: '保存' }).click()

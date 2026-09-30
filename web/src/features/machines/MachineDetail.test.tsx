@@ -32,7 +32,7 @@ describe('MachineDetail', () => {
     expect(await screen.findByRole('heading', { name: 'laptop' })).toBeInTheDocument()
     // On a phone this pane stands alone, so it links back to the list.
     expect(screen.getByRole('link', { name: '回到机器列表' })).toHaveAttribute('href', '/machines')
-    expect(screen.getByText(whole('上次检测 3 分钟前')).closest('p')).toHaveTextContent(/前连上 · 最后心跳 15 秒前 · 上次检测 3 分钟前$/)
+    expect(screen.getByText(whole('上次检测 3 分钟前')).closest('p')).toHaveTextContent(/前连接 · 最后心跳 15 秒前 · 上次检测 3 分钟前$/)
     // The times stand out from the words around them.
     expect(screen.getByText('15 秒')).toHaveClass('text-foreground')
     expect(screen.getByText('3 分钟')).toHaveClass('text-foreground')

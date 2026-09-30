@@ -27,6 +27,7 @@ import { DeleteProjectDialog } from '@/features/projects/DeleteProjectDialog'
 import { EditProjectDialog } from '@/features/projects/EditProjectDialog'
 import { NewProjectDialog } from '@/features/projects/NewProjectDialog'
 import { useT } from '@/lib/i18n'
+import { plainText } from '@/lib/plainText'
 import { errorText } from '@/api/errorText'
 
 // The projects, one row each. A project is its group chat, so a row opens
@@ -148,7 +149,7 @@ function ProjectItem({ project, active, topics, openThread, onRename, onDelete }
         </DropdownMenuContent>
       </DropdownMenu>
       {topics.length > 0 ? (
-        <SidebarMenuSub className="mr-0 gap-0 border-l-0 pl-4">
+        <SidebarMenuSub className="mx-0 gap-0 border-l-0 px-0">
           {topics.map((topic) => (
             <TopicItem
               key={topic.thread_id}
@@ -164,15 +165,18 @@ function ProjectItem({ project, active, topics, openThread, onRename, onDelete }
 }
 
 // A topic being worked on: a breathing dot and what was asked, opening
-// the topic in its chat. The project's wiki topic goes by its name.
+// the topic in its chat. The dot sits under the project's mark and the
+// words line up with its name. The project's wiki topic goes by its name.
 function TopicItem({ topic, active, named }: { topic: RunningTopic; active: boolean; named?: 'wiki' | 'setup' }) {
   const t = useT()
-  const label = named ? t(`${named}Topic.title`) : topic.ask || topic.root_body.trim() || topic.members.join(t('common.listSeparator'))
+  const label = named ? t(`${named}Topic.title`) : plainText(topic.ask) || plainText(topic.root_body) || topic.members.join(t('common.listSeparator'))
   return (
     <SidebarMenuSubItem>
       <SidebarMenuSubButton asChild isActive={active} size="sm" className="h-6 gap-2 text-[0.78125rem] text-muted-foreground">
         <Link to={`/rooms/${topic.room_id}?thread=${topic.thread_id}`} aria-current={active ? 'page' : undefined}>
-          <StatusDot tone="run" />
+          <span className="flex size-4 flex-none items-center justify-center">
+            <StatusDot tone="run" />
+          </span>
           <span className="truncate">{label}</span>
         </Link>
       </SidebarMenuSubButton>

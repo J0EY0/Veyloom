@@ -44,6 +44,13 @@ export function actorName(actor: string): string {
   return model && model !== 'default' ? `${name} · ${model}` : name
 }
 
+// producerName is who wrote or checked a page as its byline says it: a
+// person or a process as actorName has them, a runtime without its model.
+export function producerName(actor: string): string {
+  if (actor.startsWith('human:') || actor.startsWith('process:')) return actorName(actor)
+  return actorName(actor.split('/')[0])
+}
+
 export function isPerson(actor: string | undefined): boolean {
   return actor?.startsWith('human:') ?? false
 }

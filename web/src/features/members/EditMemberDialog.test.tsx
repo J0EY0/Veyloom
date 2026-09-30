@@ -48,9 +48,9 @@ describe('EditMemberDialog', () => {
     const presets = await screen.findByRole('radiogroup')
     expect(within(presets).getAllByRole('radio')).toHaveLength(5)
     expect(within(presets).getByRole('radio', { name: '跟随 Agent' })).toBeChecked()
-    expect(await within(presets).findByText('现在是需要审批')).toBeInTheDocument()
-    expect(within(presets).getByText('由运行时判断风险，拿不准再问')).toBeInTheDocument()
-    expect(screen.getByText('在审批里选“始终允许”后会列在这里')).toBeInTheDocument()
+    expect(await within(presets).findByText('当前：需要审批')).toBeInTheDocument()
+    expect(within(presets).getByText('由运行时评估风险，不确定时再询问')).toBeInTheDocument()
+    expect(screen.getByText('在审批中选择“始终允许”后，会列在这里')).toBeInTheDocument()
 
     await userEvent.click(within(presets).getByRole('radio', { name: '自动审核' }))
     await userEvent.click(screen.getByRole('button', { name: '保存' }))

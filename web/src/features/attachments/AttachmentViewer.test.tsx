@@ -178,7 +178,7 @@ describe('the attachment viewer', () => {
     stubRoom()
     open({ roomId: 'r1', attachment: sheet })
     const dialog = await showing('排期.xlsx', '3 / 3')
-    expect(within(dialog).getByText('这种文件在这里看不了，下载后打开。')).toBeInTheDocument()
+    expect(within(dialog).getByText('无法预览这种文件，请下载后打开。')).toBeInTheDocument()
     const links = within(dialog).getAllByRole('link', { name: /下载/ })
     expect(links.map((a) => a.getAttribute('href'))).toEqual(['/api/v1/attachments/c', '/api/v1/attachments/c'])
   })

@@ -16,6 +16,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatTime } from '@/lib/format'
+import { plainText } from '@/lib/plainText'
 import { useT } from '@/lib/i18n'
 import { memoryPage, pageHref } from './links'
 import { actorName, changeName, commitNote, reasonOf, subjectText } from './names'
@@ -87,7 +88,7 @@ function ChangeLine({ line, space }: { line: WikiChangeLine; space: WikiSpace })
   // A person's reason for undoing, or for rolling a skill back, which the
   // log keeps after who did it.
   const reason = reasonOf(line.text)
-  const why = reason ? <span className="text-muted-foreground"> · “{reason}”</span> : null
+  const why = reason ? <span className="text-muted-foreground"> · “{plainText(reason)}”</span> : null
   const rolledBack = line.kind === 'Revert' && / rolled back to \S+ by /.test(line.text)
   const label = <span className="mr-1.5 text-subtle">{rolledBack ? t('wiki.change.rolledBack') : changeName(t, line.kind)}</span>
   if (line.path) {

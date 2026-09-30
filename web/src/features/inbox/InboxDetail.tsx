@@ -147,12 +147,7 @@ function MessageAlone({ entry, onClose, actions }: { entry: InboxEntry; onClose:
             {message.sender_kind === 'agent' ? (
               <AgentBody message={message} names={names} target="room" />
             ) : (
-              <MessageBody
-                body={message.body}
-                mentions={message.mentions}
-                names={names}
-                className="text-[0.90625rem] leading-[1.6] break-words whitespace-pre-wrap text-body"
-              />
+              <MessageBody body={message.body} mentions={message.mentions} names={names} className="text-[0.90625rem] leading-[1.6] break-words text-body" />
             )}
             <MessageAttachments attachments={message.attachments} roomId={message.room_id} threadId={message.thread_id} className="mt-2" />
           </div>

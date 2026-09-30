@@ -50,7 +50,7 @@ describe('Composer', () => {
     const box = screen.getByLabelText('消息')
 
     await userEvent.type(box, 'hello{Enter}')
-    expect(await screen.findByRole('alert')).toHaveTextContent('找不到了，可能已经被删除。')
+    expect(await screen.findByRole('alert')).toHaveTextContent('内容不存在，可能已被删除。')
     expect(box).toHaveValue('hello')
   })
 
@@ -69,7 +69,7 @@ describe('Composer', () => {
 
     to = { reason: 'none' }
     const topic = renderWithProviders(<Composer roomId="r1" roomName="main" threadId="t1" />)
-    expect(await screen.findByText('输入 @ 提到成员')).toBeInTheDocument()
+    expect(await screen.findByText('输入 @ 提及成员')).toBeInTheDocument()
     expect(topic.container.querySelector('kbd')).toHaveTextContent('@')
     expect(asked).toEqual(['', '?thread_id=t1'])
   })
@@ -95,10 +95,10 @@ describe('Composer mentions', () => {
     })
     renderWithProviders(<Composer roomId="r1" roomName="main" />)
     const box = screen.getByLabelText('消息')
-    await waitFor(() => expect(screen.getByText('输入 @ 提到成员')).toBeInTheDocument())
+    await waitFor(() => expect(screen.getByText('输入 @ 提及成员')).toBeInTheDocument())
 
     await userEvent.type(box, '@Co')
-    const list = await screen.findByRole('listbox', { name: '提到成员' })
+    const list = await screen.findByRole('listbox', { name: '提及成员' })
     expect(list).toHaveTextContent('Codex Implementer')
     expect(list).not.toHaveTextContent('Pi Tester')
 
@@ -172,7 +172,7 @@ describe('Composer attachments', () => {
     await screen.findByText('note.txt')
     await userEvent.click(screen.getByRole('button', { name: '发送' }))
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('服务端出错了，详情在服务端的日志里。')
+    expect(await screen.findByRole('alert')).toHaveTextContent('服务器出错了，详情请查看服务器日志。')
     expect(screen.getByText('note.txt')).toBeInTheDocument()
   })
 })

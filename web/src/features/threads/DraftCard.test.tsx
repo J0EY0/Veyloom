@@ -65,12 +65,12 @@ describe('a draft in a topic', () => {
     let ran: unknown
     stub(draft(), (body) => (ran = body))
     renderWithProviders(<ThreadNote message={card} />)
-    expect(await screen.findByText((_, el) => el?.tagName === 'SPAN' && el.textContent === 'Lead 起草：把 Coder 的活合进主线')).toBeInTheDocument()
+    expect(await screen.findByText((_, el) => el?.tagName === 'SPAN' && el.textContent === 'Lead 建议：把 Coder 的改动合并到主线')).toBeInTheDocument()
     expect(await screen.findByText((_, el) => el?.tagName === 'PRE' && el.textContent === 'Add the feature\n\nIt does what was asked.')).toBeInTheDocument()
-    expect(await screen.findByText('做完后 Lead 接着：hand the tests to Tester')).toBeInTheDocument()
+    expect(await screen.findByText('完成后 Lead 会接着：hand the tests to Tester')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '合并' }))
     await waitFor(() => expect(ran).toEqual({ message: '', leave: [] }))
-    expect(await screen.findByText('alice 合并了 · abc1234')).toBeInTheDocument()
+    expect(await screen.findByText('alice 已合并 · abc1234')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '合并' })).toBeNull()
   })
 
@@ -78,11 +78,11 @@ describe('a draft in a topic', () => {
     let ran: unknown
     stub(draft(), (body) => (ran = body))
     renderWithProviders(<ThreadNote message={card} />)
-    await userEvent.click(await screen.findByRole('button', { name: '改一下…' }))
+    await userEvent.click(await screen.findByRole('button', { name: '先修改…' }))
     const dialog = await screen.findByRole('dialog')
     const text = within(dialog).getByLabelText('提交说明')
     expect(text).toHaveValue('Add the feature\n\nIt does what was asked.')
-    expect(within(dialog).getByText('取自 Lead 起草的说明，可以改')).toBeInTheDocument()
+    expect(within(dialog).getByText('取自 Lead 的建议，可修改')).toBeInTheDocument()
     await userEvent.clear(text)
     await userEvent.type(text, 'Add the feature, polished')
     await userEvent.click(within(dialog).getByRole('button', { name: '合并到主线' }))
@@ -92,14 +92,14 @@ describe('a draft in a topic', () => {
   it('is turned down', async () => {
     stub(draft())
     renderWithProviders(<ThreadNote message={card} />)
-    await userEvent.click(await screen.findByRole('button', { name: '不用' }))
-    expect(await screen.findByText('alice 没用')).toBeInTheDocument()
+    await userEvent.click(await screen.findByRole('button', { name: '忽略' }))
+    expect(await screen.findByText('alice 已忽略')).toBeInTheDocument()
   })
 
   it('says what came of it once settled: conflicts handed on, or drafted anew', async () => {
     stub(draft({ status: 'conflicted', decided_by: 'u1', result: { conflicts: ['README.md', 'src/api.ts'] } }))
     const { unmount } = renderWithProviders(<ThreadNote message={card} />)
-    expect(await screen.findByText('有冲突，没合进去')).toBeInTheDocument()
+    expect(await screen.findByText('有冲突，未合并')).toBeInTheDocument()
     expect(screen.getByText('README.md')).toBeInTheDocument()
     expect(await screen.findByRole('button', { name: '交给 Coder 解决' })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '合并' })).toBeNull()
@@ -107,7 +107,7 @@ describe('a draft in a topic', () => {
 
     stub(draft({ status: 'superseded' }))
     renderWithProviders(<ThreadNote message={card} />)
-    expect(await screen.findByText('有了新的')).toBeInTheDocument()
+    expect(await screen.findByText('已有新的建议')).toBeInTheDocument()
   })
 
   it('names what the other kinds do', async () => {
@@ -120,8 +120,8 @@ describe('a draft in a topic', () => {
     stub(draft({ id: 'd1', kind: 'set_aside', params: { reason: 'wrong approach' }, then: undefined, message_id: 'n2' }))
     renderWithProviders(<ThreadNote message={aside} />)
     expect(await screen.findByText('wrong approach')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: '放弃这些活' })).toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: '改一下…' })).toBeNull()
+    expect(screen.getByRole('button', { name: '放弃这些改动' })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: '先修改…' })).toBeNull()
   })
 })
 
@@ -149,6 +149,6 @@ describe('setup steps in a topic', () => {
     renderWithProviders(<ThreadNote message={steps} />)
     expect(await screen.findByText('npm ci')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '采用' }))
-    expect(await screen.findByText('alice 采用了')).toBeInTheDocument()
+    expect(await screen.findByText('alice 已采用')).toBeInTheDocument()
   })
 })

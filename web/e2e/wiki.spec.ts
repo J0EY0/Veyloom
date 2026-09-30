@@ -76,11 +76,11 @@ test('what agents write in the wiki, and what a person does with it', async ({ p
   await pages.getByRole('link', { name: fact }).click()
   await expect(page.getByRole('heading', { name: fact })).toBeVisible()
   await expect(page.getByText('未核验')).toBeVisible()
-  await expect(page.getByRole('button', { name: '话题 #1 里的一轮' })).toBeVisible()
+  await expect(page.getByRole('button', { name: '话题 #1 中的一轮' })).toBeVisible()
 
   // A person confirms the fact.
   await page.getByRole('button', { name: '确认' }).click()
-  await expect(page.getByText('人工审过')).toBeVisible()
+  await expect(page.getByText('人工已审核')).toBeVisible()
   await expect(page.getByText(/e2e 确认于/)).toBeVisible()
 
   // And undoes the decision, saying why; the log keeps the reason.
@@ -89,7 +89,7 @@ test('what agents write in the wiki, and what a person does with it', async ({ p
   const row = page.getByRole('listitem').filter({ hasText: decision }).filter({ has: undo })
   await row.getByRole('button', { name: '撤回' }).click()
   const dialog = page.getByRole('alertdialog', { name: '撤回这次改动？' })
-  await dialog.getByLabel(/为什么撤回/).fill('还没定下来')
+  await dialog.getByLabel(/撤回原因/).fill('还没定下来')
   await dialog.getByRole('button', { name: '撤回' }).click()
   await expect(pages.getByRole('link', { name: decision })).toHaveCount(0)
   await expect(page.getByText(/还没定下来/).first()).toBeVisible()

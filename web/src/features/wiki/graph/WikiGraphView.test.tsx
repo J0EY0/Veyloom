@@ -76,15 +76,15 @@ describe('WikiGraphView', () => {
     expect(within(brief).getByText('One section per part.')).toBeInTheDocument()
     expect(within(brief).getByText('常驻')).toBeInTheDocument()
     expect(within(brief).getByRole('link', { name: '打开页面' })).toHaveAttribute('href', '/rooms/r1/wiki/decisions/brief.md')
-    const linked = within(brief).getByRole('region', { name: '被这些页引用' })
+    const linked = within(brief).getByRole('region', { name: '引用此页的页面' })
     expect(within(linked).getByText('An empty room once broke [the brief].')).toBeInTheDocument()
-    expect(within(within(brief).getByRole('region', { name: '提到的路径' })).getByText('internal/hub/brief.go')).toBeInTheDocument()
+    expect(within(within(brief).getByRole('region', { name: '提及的路径' })).getByText('internal/hub/brief.go')).toBeInTheDocument()
     // The deprecated page it took over from is not on screen, so not listed.
     expect(within(brief).queryByRole('region', { name: '取代了' })).not.toBeInTheDocument()
 
     await userEvent.click(within(linked).getByRole('button', { name: /Empty room/ }))
     expect(router.state.location.search).toBe(`?${new URLSearchParams({ focus: '/pitfalls/empty.md' })}`)
-    expect(within(card('Empty room')).getByText('待复核 · internal/hub/brief.go 后来改过（9月20日）')).toBeInTheDocument()
+    expect(within(card('Empty room')).getByText('待复核 · internal/hub/brief.go 在上次确认后有改动（9月20日）')).toBeInTheDocument()
 
     await userEvent.keyboard('{Escape}')
     expect(screen.queryByRole('region', { name: 'Empty room' })).not.toBeInTheDocument()
@@ -97,13 +97,13 @@ describe('WikiGraphView', () => {
     fireEvent.click(await screen.findByText('Empty room'))
     expect(await screen.findByRole('region', { name: 'Empty room' })).toBeInTheDocument()
 
-    await userEvent.click(screen.getByRole('button', { name: '找节点' }))
-    await userEvent.type(screen.getByPlaceholderText('按标题或路径找…'), 'brief.go')
+    await userEvent.click(screen.getByRole('button', { name: '查找节点' }))
+    await userEvent.type(screen.getByPlaceholderText('按标题或路径查找…'), 'brief.go')
     await userEvent.click(screen.getByRole('option', { name: /internal\/hub\/brief\.go/ }))
     const file = card('internal/hub/brief.go')
     expect(within(file).getByText('仓库路径')).toBeInTheDocument()
-    expect(within(file).getByText('2 页提到')).toBeInTheDocument()
-    expect(within(within(file).getByRole('region', { name: '提到它的页' })).getAllByRole('button')).toHaveLength(2)
+    expect(within(file).getByText('2 页提及')).toBeInTheDocument()
+    expect(within(within(file).getByRole('region', { name: '提及它的页面' })).getAllByRole('button')).toHaveLength(2)
     expect(router.state.location.search).toBe(`?${new URLSearchParams({ focus: 'file:internal/hub/brief.go' })}`)
   })
 
@@ -112,7 +112,7 @@ describe('WikiGraphView', () => {
     const { unmount } = renderGraph('?focus=%2Ffacts%2Fold.md', onOpenThread)
     const old = await screen.findByRole('region', { name: 'Old news' })
     expect(within(old).getByText('已废弃')).toBeInTheDocument()
-    expect(within(within(old).getByRole('region', { name: '被这些页取代' })).getByText('Brief shape')).toBeInTheDocument()
+    expect(within(within(old).getByRole('region', { name: '被以下页面取代' })).getByText('Brief shape')).toBeInTheDocument()
     unmount()
 
     renderGraph('?focus=topic%3At3', onOpenThread)

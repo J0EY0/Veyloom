@@ -61,15 +61,15 @@ describe('PlanCard', () => {
 
     renderWithProviders(<RequestCard approval={plan({ status: 'cancelled', message: 'the runtime took the request back' })} names={names} />)
     expect(screen.getByText('计划已撤回')).toBeInTheDocument()
-    expect(screen.getByText(/无人决定/)).toHaveTextContent('“运行时收回了这个请求”')
+    expect(screen.getByText(/无人处理/)).toHaveTextContent('“运行时撤回了这个请求”')
   })
 })
 
 describe('decisionNote', () => {
   it("puts the hub's own reasons in the reader's language and leaves people's notes alone", () => {
-    expect(decisionNote('the turn ended before a decision')).toBe('轮次结束了，没等到决定')
-    expect(decisionNote('the runtime took the request back')).toBe('运行时收回了这个请求')
-    expect(decisionNote('nobody decided within 10m0s')).toBe('10m0s 内没人处理')
+    expect(decisionNote('the turn ended before a decision')).toBe('这一轮已结束，没有等到处理')
+    expect(decisionNote('the runtime took the request back')).toBe('运行时撤回了这个请求')
+    expect(decisionNote('nobody decided within 10m0s')).toBe('10m0s 内无人处理')
     expect(decisionNote('不要 force push')).toBe('不要 force push')
   })
 })

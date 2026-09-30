@@ -27,7 +27,7 @@ describe('LoginPage', () => {
     await userEvent.type(screen.getByLabelText('用户名'), 'jinghao')
     await userEvent.type(screen.getByLabelText('密码'), 'wrong')
     await userEvent.click(screen.getByRole('button', { name: '登录' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('用户名或密码不对。')
+    expect(await screen.findByRole('alert')).toHaveTextContent('用户名或密码错误。')
     expect(getCurrentUser()).toBeNull()
 
     await userEvent.clear(screen.getByLabelText('密码'))

@@ -14,11 +14,11 @@ describe('review', () => {
     expect(reviewText(t, info('/a.md'), now)).toBe('')
     expect(
       reviewText(t, info('/a.md', { review: { why: 'changed', file: 'internal/hub/brief.go', changed_at: '2026-09-20T03:00:00Z', topic_number: 12 } }), now),
-    ).toBe('internal/hub/brief.go 后来改过（9月20日）')
+    ).toBe('internal/hub/brief.go 在上次确认后有改动（9月20日）')
     expect(reviewText(t, info('/a.md', { checked_at: '2026-03-01T08:00:00Z', review: { why: 'period', every: 180 } }), now)).toBe(
-      '206 天没有确认过了，这类页每 180 天复核一次',
+      '已 206 天未确认，这类页面每 180 天复核一次',
     )
-    expect(reviewText(t, info('/a.md', { stale_after: '2026-09-01T00:00:00Z', review: { why: 'stale' } }), now)).toBe('过了页面写明的有效期（9月1日）')
+    expect(reviewText(t, info('/a.md', { stale_after: '2026-09-01T00:00:00Z', review: { why: 'stale' } }), now)).toBe('已超过页面标注的有效期（9月1日）')
   })
 
   it('orders them as the maintainer checks them: a change first, then resident pages, then the longest unchecked', () => {

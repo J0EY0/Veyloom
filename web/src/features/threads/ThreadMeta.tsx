@@ -23,7 +23,7 @@ export function ThreadMeta({ threadId, work, names, ask, onOpenThread }: ThreadM
   if (work.thread_id !== threadId) {
     const label = t('thread.partOf', { n: work.thread_number ?? '' })
     return (
-      <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
+      <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
         {onOpenThread ? (
           <button
             type="button"
@@ -43,8 +43,10 @@ export function ThreadMeta({ threadId, work, names, ask, onOpenThread }: ThreadM
   const members = (work.members ?? []).flatMap((id) => names.get(id) ?? []).join(t('common.listSeparator'))
   const state = workState(work, t)
   return (
-    <p className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
-      <StatusDot tone={state.tone} />
+    // Gaps as wide as a space, so the "·" before the members sits as the
+    // ones within the state do; the dot keeps a little more room.
+    <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+      <StatusDot tone={state.tone} className="mr-0.5" />
       <span className="flex-none">{state.text}</span>
       {members ? <span className="min-w-0 truncate">· {members}</span> : null}
     </p>

@@ -237,7 +237,8 @@ export function systemNote(t: T, body: string): Note {
   if (overlap) {
     const named = overlap[2].split(', ')
     const more = Number(overlap[3] ?? 0)
-    const files = more > 0 ? t('branches.overlapMore', { files: named.join(t('common.listSeparator')), n: named.length + more }) : named.join(t('common.listSeparator'))
+    const files =
+      more > 0 ? t('branches.overlapMore', { files: named.join(t('common.listSeparator')), n: named.length + more }) : named.join(t('common.listSeparator'))
     const names = namesIn(overlap[1]).join(t('common.listSeparator'))
     return { kind: 'overlap', text: t('branches.overlapNote', { names, files }), who: [names] }
   }
@@ -258,7 +259,11 @@ export function systemNote(t: T, body: string): Note {
   if (concluded) return { kind: 'concluded', text: t('branches.concludedNote', { who: concluded[1], commit: concluded[2] }), who: [concluded[1]] }
   const unresolved = unresolvedNote.exec(body)
   if (unresolved) {
-    return { kind: 'unresolved', text: t('branches.unresolvedNote', { who: unresolved[1], files: unresolved[2].split(', ').join(t('common.listSeparator')) }), who: [unresolved[1]] }
+    return {
+      kind: 'unresolved',
+      text: t('branches.unresolvedNote', { who: unresolved[1], files: unresolved[2].split(', ').join(t('common.listSeparator')) }),
+      who: [unresolved[1]],
+    }
   }
   const failed = prepareFailed.exec(body.split('\n')[0])
   if (failed) return { kind: 'failed', text: t('setup.prepareFailed', { leader: failed[1], member: failed[2], error: failed[3] }), who: [] }

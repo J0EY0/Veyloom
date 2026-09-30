@@ -25,13 +25,13 @@ describe('composerHint', () => {
 
   it('asks for an @ where a message without one reaches nobody', () => {
     for (const inTopic of [false, true]) {
-      expect(composerHint({ reason: 'none' }, names, inTopic, t)).toEqual({ text: '输入 @ 提到成员', mention: true })
+      expect(composerHint({ reason: 'none' }, names, inTopic, t)).toEqual({ text: '输入 @ 提及成员', mention: true })
     }
   })
 
   it('keeps to the plain hints until it knows whom, and by what name', () => {
     for (const to of [undefined, { member_id: 'gone', reason: 'last' } as Addressee]) {
-      expect(composerHint(to, names, false, t)).toEqual({ text: '输入 @ 提到成员', mention: true })
+      expect(composerHint(to, names, false, t)).toEqual({ text: '输入 @ 提及成员', mention: true })
       expect(composerHint(to, names, true, t)).toEqual({ text: 'Enter 发送，Shift+Enter 换行' })
     }
   })

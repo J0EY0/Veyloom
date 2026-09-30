@@ -85,11 +85,11 @@ test('a piece of work on the board, on its page and in the usage', async ({ page
   await leads.getByRole('link').click()
   await expect(page.getByRole('heading', { level: 1, name: '给 linkkeeper 加标签功能' })).toBeVisible()
   await expect(page.getByRole('term').filter({ hasText: '轮次' }).locator('xpath=following-sibling::dd[1]')).toHaveText('4')
-  const rows = page.getByRole('table', { name: '每一轮' }).getByRole('rowheader')
+  const rows = page.getByRole('table', { name: '轮次' }).getByRole('rowheader')
   await expect(rows).toHaveCount(4)
   await expect(rows.nth(0)).toContainText('拆分任务')
   await expect(rows.nth(3)).toContainText('汇总答复')
-  await page.getByRole('button', { name: /在话题里看/ }).click()
+  await page.getByRole('button', { name: /^在话题 #\d+ 中查看/ }).click()
   await expect(page.getByRole('complementary', { name: '话题' })).toContainText('标签功能做完了。')
 
   // The usage page, down to the project, counts the turns and opens the
@@ -100,7 +100,7 @@ test('a piece of work on the board, on its page and in the usage', async ({ page
   await expect(page).toHaveURL(/project=/)
   await expect(page.getByRole('group', { name: '总览' }).getByRole('region', { name: '轮次' })).toContainText('4')
   await expect(page.getByRole('region', { name: '成员' }).getByRole('listitem')).toHaveCount(3)
-  const works = page.getByRole('region', { name: '按件' })
+  const works = page.getByRole('region', { name: '按任务' })
   await works.getByRole('link', { name: '给 linkkeeper 加标签功能' }).click()
   await expect(page).toHaveURL(new RegExp(`/rooms/${roomId}/tasks/`))
   await expect(page.getByRole('heading', { level: 1, name: '给 linkkeeper 加标签功能' })).toBeVisible()

@@ -41,7 +41,11 @@ export function draftText(t: T, body: string): Note | undefined {
   const clash = conflicted.exec(body)
   if (clash) {
     const [, person, target, drafter, files, then] = clash
-    return { kind: 'unresolved', text: t('draft.conflictedNote', { person, target, drafter, files: files.split(', ').join(t('common.listSeparator')), then }), who: [person] }
+    return {
+      kind: 'unresolved',
+      text: t('draft.conflictedNote', { person, target, drafter, files: files.split(', ').join(t('common.listSeparator')), then }),
+      who: [person],
+    }
   }
   const aside = setAside.exec(body)
   if (aside) {

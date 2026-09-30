@@ -104,10 +104,10 @@ describe('MemberIsland quiet', () => {
         onOpenMembers={vi.fn()}
       />,
     )
-    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent('Stuck · 12 分钟没有动静')
+    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent('Stuck · 12 分钟没有任何进展')
     expect(screen.getByRole('button', { name: /Stuck · 可能卡住/ })).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '取消' }))
-    await userEvent.click(screen.getByRole('button', { name: '取消并开新会话' }))
+    await userEvent.click(screen.getByRole('button', { name: '取消并开启新会话' }))
     await waitFor(() => expect(bodies).toEqual([{}, { new_session: true }]))
   })
 })

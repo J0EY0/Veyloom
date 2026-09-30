@@ -89,7 +89,7 @@ describe('MemoryEditor', () => {
   it('with nothing kept, says so in one line, not in an empty list', async () => {
     stubApi({ '/memory': { memory: { ...memory, entries: [], chars: 0 } }, '/memory/history': { commits: [] } })
     renderMemory()
-    expect(await screen.findByText('还没有记下什么。')).toBeInTheDocument()
+    expect(await screen.findByText('还没有记录任何内容。')).toBeInTheDocument()
     expect(screen.queryByRole('list', { name: '条目' })).not.toBeInTheDocument()
     expect(screen.getByRole('textbox', { name: '新的一条' })).toBeInTheDocument()
   })

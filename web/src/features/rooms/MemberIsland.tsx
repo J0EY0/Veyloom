@@ -172,13 +172,15 @@ function Face({ state, first, onOpenThread }: { state: MemberState; first: boole
       : state.status === 'waiting' || state.status === 'paused' || quiet
         ? 'shadow-[0_0_0_2px_var(--background),0_0_0_3.5px_var(--status-wait)]'
         : 'shadow-[0_0_0_2px_var(--background)]'
-  const dim = state.status === 'idle' ? 'opacity-45' : state.status === 'working' || state.status === 'waiting' || state.status === 'paused' ? '' : 'opacity-30'
+  const dim = state.status === 'idle' ? 'opacity-75' : state.status === 'working' || state.status === 'waiting' || state.status === 'paused' ? '' : 'opacity-40'
+  // The ring and an opaque disc under the face: a face drawn fainter still
+  // hides the one it overlaps.
   const avatar = (
-    <span className={cn('relative inline-flex', !first && '-ml-1.5')}>
+    <span className={cn('relative inline-flex rounded-full bg-background', ring, !first && '-ml-1.5')}>
       {state.look ? (
-        <AgentAvatar look={state.look} name={state.member.display_name} mark={false} className={cn(ring, dim)} />
+        <AgentAvatar look={state.look} name={state.member.display_name} mark={false} className={dim} />
       ) : (
-        <UserAvatar name={state.member.display_name} className={cn(ring, dim)} />
+        <UserAvatar name={state.member.display_name} className={dim} />
       )}
       {state.status === 'working' && !quiet ? (
         <span aria-hidden="true" className="absolute -inset-1.5 animate-ripple rounded-full border-[1.5px] border-status-run" />

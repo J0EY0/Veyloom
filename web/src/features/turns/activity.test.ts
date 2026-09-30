@@ -19,7 +19,7 @@ describe('activity', () => {
       { kind: 'tool', tool: 'Bash', input: '{"command":"go vet"}', result: 'exit 1: vet failed', status: 'failed' },
       { kind: 'tool', tool: 'read_file', input: 'README.md', status: 'running' },
     ])
-    expect(summarize(items)).toBe('读了 1 个文件、跑了 2 条命令、改了 1 个文件、1 个失败')
+    expect(summarize(items)).toBe('读取了 1 个文件、运行了 2 条命令、修改了 1 个文件、1 次失败')
   })
 
   it('pairs calls made at once by their ids, whichever ends first', () => {
@@ -39,11 +39,11 @@ describe('activity', () => {
 
   it('says what the hub was doing as the turn began as done, once something came after', () => {
     const making = { kind: 'notice' as const, level: 'info', text: "Making Coder's worktree, on the branch veyloom/coder." }
-    expect(activityFromEvents([making])).toEqual([{ kind: 'notice', level: 'info', text: '正在给 Coder 建工作区，分支 veyloom/coder' }])
+    expect(activityFromEvents([making])).toEqual([{ kind: 'notice', level: 'info', text: '正在为 Coder 创建工作区（分支 veyloom/coder）' }])
     expect(activityFromEvents([making, { kind: 'tool_call', tool: 'Bash', input: '{"command":"ls"}' }])[0]).toMatchObject({
-      text: '给 Coder 建了工作区，分支 veyloom/coder',
+      text: '已为 Coder 创建工作区（分支 veyloom/coder）',
     })
-    expect(activityFromEvents([making], true)[0]).toMatchObject({ text: '给 Coder 建了工作区，分支 veyloom/coder' })
+    expect(activityFromEvents([making], true)[0]).toMatchObject({ text: '已为 Coder 创建工作区（分支 veyloom/coder）' })
   })
 
   it('has the call a request holds up wait, the one with its command, and run once allowed', () => {
@@ -72,7 +72,7 @@ describe('activity', () => {
       input: '',
       status: 'done' as const,
     }))
-    expect(summarize(lead)).toBe('查了 wiki、读了 2 个文件、搜了 1 次、派出 1 条消息')
+    expect(summarize(lead)).toBe('查阅了 wiki、读取了 2 个文件、搜索了 1 次、发送了 1 条消息')
     const pi = ['bash', 'read', 'search_wiki', 'related_wiki', 'edit', 'veyloom/read_topic', 'remember', 'mystery'].map((tool) => ({
       kind: 'tool' as const,
       tool,
@@ -80,7 +80,7 @@ describe('activity', () => {
       status: 'done' as const,
     }))
     expect(summarize([...pi, { kind: 'file', path: 'store.go' }])).toBe(
-      '查了 wiki、看了群聊、读了 1 个文件、跑了 1 条命令、改了 1 个文件、记了 1 条记忆、1 个其他工具调用',
+      '查阅了 wiki、查看了群聊、读取了 1 个文件、运行了 1 条命令、修改了 1 个文件、记下了 1 条记忆、另有 1 次工具调用',
     )
   })
 
@@ -96,7 +96,7 @@ describe('activity', () => {
       { kind: 'tool', tool: 'Read', input: '', status: 'running' },
       { kind: 'steer', who: 'alice', text: '@Slow use the new grammar' },
     ])
-    expect(summarize(items)).toBe('读了 1 个文件、收到 1 条插话')
+    expect(summarize(items)).toBe('读取了 1 个文件、收到 1 条插话')
     expect(steered('New in topic #3:\n>> [alice] first\n>> [bob] second\n')).toEqual({ who: 'bob', text: 'second' })
     expect(steered('nothing marked')).toEqual({ who: '', text: '' })
   })
@@ -197,20 +197,20 @@ describe('activity', () => {
       { kind: 'tool_call', tool: 'veyloom/set_reminder', input: '{"note":"b","in":"2h"}' },
       { kind: 'tool_call', tool: 'cancel_reminder', input: '{"id":"rm1"}' },
     ])
-    expect(summarize(items)).toBe('定了 2 个提醒、取消了 1 个提醒')
+    expect(summarize(items)).toBe('设置了 2 个提醒、取消了 1 个提醒')
   })
 
   // What a member drafts for a person (docs/design.md 5.23.5).
   it('says what a draft has a person do, and counts them', () => {
-    expect(describeTool('mcp__veyloom__draft_action', '{"kind":"merge","member":"Coder","message":"Add tags"}')).toBe('起草：把 Coder 的活合进主线')
-    expect(describeTool('veyloom/draft_action', '{"kind":"merge","message":"Add tags"}')).toBe('起草：把自己的活合进主线')
-    expect(describeTool('draft_action', '{"kind":"set_aside","member":"@Coder","reason":"x"}')).toBe('起草：放弃 Coder 分支上的活')
-    expect(describeTool('draft_action', '{"kind":"install_skill","member":"Coder","skill":"go-testing"}')).toBe('起草：给 Coder 装上技能 go-testing')
-    expect(describeTool('draft_action', 'not json')).toBe('起草一张卡')
+    expect(describeTool('mcp__veyloom__draft_action', '{"kind":"merge","member":"Coder","message":"Add tags"}')).toBe('建议：把 Coder 的改动合并到主线')
+    expect(describeTool('veyloom/draft_action', '{"kind":"merge","message":"Add tags"}')).toBe('建议：把自己的改动合并到主线')
+    expect(describeTool('draft_action', '{"kind":"set_aside","member":"@Coder","reason":"x"}')).toBe('建议：放弃 Coder 分支上的改动')
+    expect(describeTool('draft_action', '{"kind":"install_skill","member":"Coder","skill":"go-testing"}')).toBe('建议：给 Coder 安装技能 go-testing')
+    expect(describeTool('draft_action', 'not json')).toBe('提出一项建议')
     const items = activityFromEvents([
       { kind: 'tool_call', tool: 'mcp__veyloom__draft_action', input: '{"kind":"merge"}' },
       { kind: 'tool_call', tool: 'draft_action', input: '{"kind":"set_aside"}' },
     ])
-    expect(summarize(items)).toBe('起草了 2 张卡')
+    expect(summarize(items)).toBe('提出了 2 项建议')
   })
 })

@@ -46,7 +46,12 @@ export function UnfinishedMerge({ roomId, member, branch, onDone }: UnfinishedMe
         variant="outline"
         disabled={pending}
         onClick={() =>
-          handOver(files.length > 0 ? t('branches.handOverUnfinished', { branch, files: files.join(t('common.listSeparator')) }) : t('branches.handOverCommit', { branch }), onDone)
+          handOver(
+            files.length > 0
+              ? t('branches.handOverUnfinished', { branch, files: files.join(t('common.listSeparator')) })
+              : t('branches.handOverCommit', { branch }),
+            onDone,
+          )
         }
       >
         {t('branches.handOverAgain', { name: member.name })}

@@ -58,10 +58,10 @@ test('a member keeps the wiki: offered, turned on, run, written', async ({ page 
 
   // Something to go over: the Wiki tab offers a maintainer.
   await page.goto(`/rooms/${roomId}/wiki`)
-  const offer = page.getByRole('region', { name: '让一个成员来维护这个 wiki？' })
+  const offer = page.getByRole('region', { name: '要指定一个成员维护这个 wiki 吗？' })
   await expect(offer).toBeVisible()
   // Coder joined first, and so leads, and would keep it; Keeper is picked.
-  const who = offer.getByRole('combobox', { name: '谁来整理' })
+  const who = offer.getByRole('combobox', { name: '由谁整理' })
   await expect(who).toHaveText(`组长（Coder ${stamp}）`)
   await who.click()
   await page.getByRole('option', { name: `Keeper ${stamp}`, exact: true }).click()
@@ -69,7 +69,7 @@ test('a member keeps the wiki: offered, turned on, run, written', async ({ page 
 
   // Daily by default, and changed right on the card (docs/design.md 5.16).
   const card = page.getByRole('region', { name: `Keeper ${stamp} 在维护这个 wiki` })
-  await expect(card.getByRole('combobox', { name: '什么时候整理' })).toHaveText('每天一次')
+  await expect(card.getByRole('combobox', { name: '整理时机' })).toHaveText('每天一次')
   await expect(card).toContainText('待整理：本群 1 轮')
   await card.getByRole('button', { name: '现在整理' }).click()
   await expect(card).toContainText('上次整理于')
@@ -80,7 +80,7 @@ test('a member keeps the wiki: offered, turned on, run, written', async ({ page 
   await card.getByRole('button', { name: '打开整理话题' }).click()
   const topic = page.getByRole('complementary', { name: '话题' })
   await expect(topic.getByRole('heading', { name: /Wiki 整理/ })).toBeVisible()
-  await expect(topic).toContainText(`Keeper ${stamp} 开始整理 wiki（有人让整理）：本群 1 轮，其他项目用本团队技能的 0 轮`)
+  await expect(topic).toContainText(`Keeper ${stamp} 开始整理 wiki（应要求整理）：本群 1 轮，其他项目使用本团队技能 0 轮`)
   await expect(topic).toContainText('整理 wiki')
   await expect(topic).toContainText('整理好了。')
 })

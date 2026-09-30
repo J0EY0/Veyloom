@@ -2,7 +2,7 @@ import { Avatar, AvatarFallback } from '@/components/ui/avatar'
 import { cn } from '@/lib/utils'
 
 export const avatarSizes = {
-  lg: 'size-9 text-[0.8125rem] rounded-lg',
+  lg: 'size-9 text-[0.8125rem]',
   // What a message's sender is drawn at, in the chat and its topics.
   message: 'size-7 text-xs',
   md: 'size-6 text-[0.6875rem]',
@@ -18,8 +18,8 @@ export interface UserAvatarProps {
   className?: string
 }
 
-// A neutral disc with the first letter: people and agents look the same,
-// the name next to it tells them apart (docs/webui.md §0).
+// A person's face: a neutral disc with the first letter, where an agent's
+// disc takes its runtime's tint (docs/webui.md §0).
 export function UserAvatar({ name, size = 'md', className }: UserAvatarProps) {
   return (
     <Avatar aria-hidden="true" className={cn('after:hidden', avatarSizes[size], className)}>

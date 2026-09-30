@@ -21,13 +21,13 @@ describe('workState', () => {
   // 5.22): a person stopping it leaves it cancelled, whatever came before.
   it('says how a piece of work stands, and how it ended', () => {
     expect(workState({ ...over, running: true, last_status: 'running', ended_at: undefined }, t)).toEqual({ tone: 'run', text: '进行中 · 3 轮' })
-    expect(workState(over, t)).toEqual({ tone: 'ok', text: '完成 · 3 轮 · 2 分 51 秒' })
+    expect(workState(over, t)).toEqual({ tone: 'ok', text: '已完成 · 3 轮 · 2 分 51 秒' })
     expect(workState({ ...over, last_status: 'failed' }, t)).toEqual({ tone: 'fail', text: '失败 · 3 轮 · 2 分 51 秒' })
     expect(workState({ ...over, last_status: 'cancelled' }, t)).toEqual({ tone: 'idle', text: '已取消 · 3 轮 · 2 分 51 秒' })
     expect(workState({ ...over, turns: 1, last_status: 'cancelled' }, t)).toEqual({ tone: 'idle', text: '已取消 · 2 分 51 秒' })
     expect(workState({ ...over, turns: 1, last_status: 'failed' }, t)).toEqual({ tone: 'fail', text: '失败 · 2 分 51 秒' })
     // A summary from before the hub said how it ended reads as done.
-    expect(workState({ ...over, last_status: undefined }, t)).toEqual({ tone: 'ok', text: '完成 · 3 轮 · 2 分 51 秒' })
+    expect(workState({ ...over, last_status: undefined }, t)).toEqual({ tone: 'ok', text: '已完成 · 3 轮 · 2 分 51 秒' })
   })
 })
 

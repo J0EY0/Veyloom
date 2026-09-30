@@ -69,7 +69,7 @@ describe('the attachments tab', () => {
     const user = userEvent.setup()
     await screen.findByText('shot.png')
 
-    await user.click(screen.getByRole('tab', { name: '图片视频' }))
+    await user.click(screen.getByRole('tab', { name: '图片和视频' }))
     await waitFor(() => expect(asked(calls).at(-1)?.get('kind')).toBe('image,video'))
     expect(router.state.location.search).toBe('?kind=media')
 

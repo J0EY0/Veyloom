@@ -96,7 +96,7 @@ describe('AuthGate', () => {
       },
     })
     renderGate('/')
-    expect(await screen.findByText('服务端出错了，详情在服务端的日志里。')).toBeInTheDocument()
+    expect(await screen.findByText('服务器出错了，详情请查看服务器日志。')).toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '重试' }))
     expect(await screen.findByText('the app')).toBeInTheDocument()
   })
@@ -108,6 +108,6 @@ describe('AuthGate', () => {
       },
     })
     renderGate('/')
-    expect(await screen.findByText('连不上服务端，看看 veyloom serve 是否在运行。')).toBeInTheDocument()
+    expect(await screen.findByText('无法连接服务器，请确认 veyloom serve 正在运行。')).toBeInTheDocument()
   })
 })

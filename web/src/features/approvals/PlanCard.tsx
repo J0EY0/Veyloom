@@ -1,4 +1,4 @@
-import { AgentMarkdown } from '@/components/shared/agent-markdown'
+import { ChatMarkdown } from '@/components/shared/chat-markdown'
 import { useT } from '@/lib/i18n'
 import type { ApprovalCardProps } from './ApprovalCard'
 import { DecisionCard, type DecisionWords } from './DecisionCard'
@@ -26,7 +26,7 @@ export function PlanCard(props: ApprovalCardProps) {
     <DecisionCard {...props} words={words}>
       <div className="max-h-80 overflow-y-auto rounded-md bg-background px-3 py-2">
         {plan.trim() ? (
-          <AgentMarkdown text={plan} mentions={null} names={noNames} className="text-[0.8125rem]" />
+          <ChatMarkdown text={plan} mentions={null} names={noNames} className="text-[0.8125rem]" />
         ) : (
           <p className="text-[0.8125rem] text-subtle">{t('plan.empty')}</p>
         )}

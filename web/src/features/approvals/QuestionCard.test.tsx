@@ -98,7 +98,7 @@ describe('QuestionCard', () => {
   it('says when nobody answered', () => {
     renderWithProviders(<RequestCard approval={asked({ status: 'expired', message: 'nobody decided within 30m0s' })} names={names} />)
     expect(screen.getByText('提问已过期')).toBeInTheDocument()
-    expect(screen.getByText(/无人回答/)).toHaveTextContent('“30m0s 内没人处理”')
+    expect(screen.getByText(/无人回答/)).toHaveTextContent('“30m0s 内无人处理”')
   })
 
   it('takes several lines starting from the text given, and hints at a line', async () => {

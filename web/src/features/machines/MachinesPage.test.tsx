@@ -49,7 +49,7 @@ describe('MachinesPage', () => {
 
     // With nothing in the address, no machine is open until one is picked.
     expect(rows[0]).not.toHaveAttribute('aria-current')
-    expect(screen.getByText('选一台机器查看。')).toBeInTheDocument()
+    expect(screen.getByText('选择一台机器查看。')).toBeInTheDocument()
     expect(screen.queryByRole('heading', { name: 'laptop' })).toBeNull()
     // Checking again belongs to an open machine; the page's bar has none.
     expect(screen.queryByRole('button', { name: '重新检测' })).toBeNull()
@@ -71,14 +71,14 @@ describe('MachinesPage', () => {
   it('says when nobody is connected', async () => {
     stubApi({ '/machines': { machines: [] } })
     open()
-    expect(await screen.findByText('没有连上的机器。')).toBeInTheDocument()
+    expect(await screen.findByText('没有已连接的机器。')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '重新检测' })).toBeNull()
   })
 
   it('says so when the machine in the address is not connected', async () => {
     stubApi(twoMachines())
     open('/machines/w9')
-    expect(await screen.findByText('这台机器不在线。')).toBeInTheDocument()
+    expect(await screen.findByText('这台机器已离线。')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '回到机器列表' })).toHaveAttribute('href', '/machines')
     // The list is still there to pick another.
     expect(rowsOf(screen.getAllByRole('list')[0])).toHaveLength(2)

@@ -80,7 +80,7 @@ describe('ApprovalCard', () => {
     renderWithProviders(<ApprovalCard approval={request} names={names} />)
     await userEvent.click(screen.getByRole('button', { name: '允许的范围' }))
     const menu = await screen.findByRole('menu', { name: '允许的范围' })
-    expect(within(menu).getByRole('menuitem', { name: '本轮允许 改同样的文件' })).toBeInTheDocument()
+    expect(within(menu).getByRole('menuitem', { name: '本轮允许 修改同样的文件' })).toBeInTheDocument()
     expect(within(menu).queryByRole('menuitem', { name: /始终允许/ })).not.toBeInTheDocument()
   })
 
@@ -106,7 +106,7 @@ describe('ApprovalCard', () => {
         names={names}
       />,
     )
-    const allowed = screen.getByRole('button', { name: /运行了/ })
+    const allowed = screen.getByRole('button', { name: /已运行/ })
     expect(allowed).toHaveTextContent('alice 允许')
     await userEvent.click(allowed)
     expect(screen.getByText('本轮内同类不再询问：go test *')).toBeInTheDocument()
@@ -118,7 +118,7 @@ describe('ApprovalCard', () => {
         names={names}
       />,
     )
-    await userEvent.click(screen.getByRole('button', { name: /运行了/ }))
+    await userEvent.click(screen.getByRole('button', { name: /已运行/ }))
     expect(screen.getByText('已加入始终允许：go test *')).toBeInTheDocument()
     kept.unmount()
 
@@ -126,14 +126,14 @@ describe('ApprovalCard', () => {
     const trusted = renderWithProviders(
       <ApprovalCard approval={approval('ap6', { status: 'allowed', decided_by: 'u1', reviewer: 'turn', decided_at: '2026-09-14T02:12:00Z' })} names={names} />,
     )
-    const shielded = screen.getByRole('button', { name: /运行了/ })
+    const shielded = screen.getByRole('button', { name: /已运行/ })
     expect(shielded).toHaveTextContent('本轮自动批准')
     expect(shielded).not.toHaveTextContent('alice')
     trusted.unmount()
 
     renderWithProviders(<ApprovalCard approval={approval('ap2', { status: 'expired' })} names={names} />)
     expect(screen.getByText('请求已过期')).toBeInTheDocument()
-    expect(screen.getByText('无人决定')).toBeInTheDocument()
+    expect(screen.getByText('无人处理')).toBeInTheDocument()
   })
 
   it("names the runtime's own reviewer and the risk it saw", () => {
@@ -158,7 +158,7 @@ describe('ApprovalCard', () => {
     stubApi({ '/approvals/ap1/decide': Response.json({ error: 'approval ap1: already decided' }, { status: 409 }) })
     renderWithProviders(<ApprovalCard approval={approval('ap1')} names={names} />)
     await userEvent.click(screen.getByRole('button', { name: '拒绝' }))
-    expect(await screen.findByText('已经有人决定了。')).toBeInTheDocument()
+    expect(await screen.findByText('已经有人处理了。')).toBeInTheDocument()
   })
 
   it('waits for a user to be chosen', () => {

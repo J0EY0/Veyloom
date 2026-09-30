@@ -373,6 +373,12 @@
   margin-block: 0.4em;
   font-size: 0.78125rem;
 }
+/* A block that names no language has nothing for its header to say (its
+   buttons are off everywhere): the header goes, and with it the empty
+   band above the code. */
+.prose-agent [data-streamdown="code-block-header"][data-language=""] {
+  display: none;
+}
 .prose-agent [data-streamdown="inline-code"] {
   font-size: 0.78125rem;
 }

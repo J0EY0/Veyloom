@@ -55,8 +55,8 @@ describe('MemorySettings', () => {
     general()
     const group = await screen.findByRole('region', { name: '记忆' })
     await within(group).findByRole('switch', { name: '全局记忆' })
-    expect(within(group).getByText('所有项目都用 · 2 条')).toBeInTheDocument()
-    expect(within(group).getByText('在各项目的 Wiki 里看和改')).toBeInTheDocument()
+    expect(within(group).getByText('所有项目通用 · 2 条')).toBeInTheDocument()
+    expect(within(group).getByText('在各项目的 Wiki 中查看和修改')).toBeInTheDocument()
 
     await userEvent.click(within(group).getByRole('switch', { name: '项目记忆' }))
     await waitFor(() => expect(saved).toEqual([{ enabled: true, personal: true, project: false }]))

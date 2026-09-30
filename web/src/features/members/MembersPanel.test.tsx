@@ -250,7 +250,7 @@ describe('MembersPanel', () => {
     const calls = stubPanel({ '/members/a1/session': new Response(null, { status: 204 }) })
     renderPanel()
     await userEvent.click(await screen.findByRole('button', { name: '更多' }))
-    await userEvent.click(await screen.findByRole('menuitem', { name: '开新会话' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: '开启新会话' }))
     await waitFor(() => expect(calls).toContain('DELETE /members/a1/session'))
   })
 
@@ -260,7 +260,7 @@ describe('MembersPanel', () => {
     })
     renderPanel()
     await userEvent.click(await screen.findByRole('button', { name: '更多' }))
-    expect(await screen.findByRole('menuitem', { name: '工作中，无法开新会话' })).toHaveAttribute('aria-disabled', 'true')
+    expect(await screen.findByRole('menuitem', { name: '工作中，无法开启新会话' })).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('tells how long a member has been in its session', async () => {
@@ -280,9 +280,9 @@ describe('MembersPanel', () => {
     renderPanel()
     await userEvent.click(await screen.findByText('Codex Implementer'))
     const dialog = await screen.findByRole('dialog')
-    expect(await within(dialog).findByText(/已跑 53 轮，运行时整理过上下文 2 次/)).toBeInTheDocument()
+    expect(await within(dialog).findByText(/已运行 53 轮，上下文压缩过 2 次/)).toBeInTheDocument()
     // A session belongs to the directory it was opened in.
-    expect(within(dialog).getByText('改路径后，下一轮会从新会话开始。')).toBeInTheDocument()
+    expect(within(dialog).getByText('修改路径后，下一轮会开启新会话。')).toBeInTheDocument()
   })
 
   it('says a member has no session before its first turn', async () => {
@@ -290,7 +290,7 @@ describe('MembersPanel', () => {
     renderPanel()
     await userEvent.click(await screen.findByText('Codex Implementer'))
     const dialog = await screen.findByRole('dialog')
-    expect(await within(dialog).findByText('还没有会话，下一轮开始时新开一条。')).toBeInTheDocument()
-    expect(within(dialog).queryByText('改路径后，下一轮会从新会话开始。')).not.toBeInTheDocument()
+    expect(await within(dialog).findByText('还没有会话，下一轮开始时会新建。')).toBeInTheDocument()
+    expect(within(dialog).queryByText('修改路径后，下一轮会开启新会话。')).not.toBeInTheDocument()
   })
 })

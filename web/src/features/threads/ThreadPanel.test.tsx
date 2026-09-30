@@ -244,7 +244,7 @@ describe('ThreadPanel', () => {
     })
     renderWithProviders(<ThreadPanel roomId="r1" roomName="main" threadId="t1" onClose={vi.fn()} />)
     const band = await screen.findByRole('status', { name: '本轮自动批准' })
-    await waitFor(() => expect(band).toHaveTextContent(/已放行 2 次 · 自 /))
+    await waitFor(() => expect(band).toHaveTextContent(/起已放行 2 次/))
     await userEvent.click(within(band).getByRole('button', { name: '撤销' }))
     await waitFor(() => expect(calls).toContain('DELETE /turns/x1/trust'))
     await waitFor(() => expect(screen.queryByRole('status', { name: '本轮自动批准' })).toBeNull())

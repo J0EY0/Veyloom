@@ -60,7 +60,7 @@ test('the rest of a turn let through, and a command allowed always', async ({ pa
   const strip = topic.getByRole('status', { name: '本轮自动批准' })
   await expect(strip).toContainText('已放行 2 次', { timeout: 20_000 })
   await expect(strip).toHaveCount(0, { timeout: 20_000 })
-  await expect(topic.getByRole('button', { name: /运行了.*本轮自动批准/ })).toHaveCount(2)
+  await expect(topic.getByRole('button', { name: /已运行.*本轮自动批准/ })).toHaveCount(2)
   await expect(page.getByRole('listitem').filter({ hasText: 'Allowed 3 of 3' })).toHaveCount(1)
 
   // It asks as Codex does, offering the words its command starts with.
@@ -87,7 +87,7 @@ test('the rest of a turn let through, and a command allowed always', async ({ pa
   await expect(rules).toContainText('make test *')
   await expect(settings.getByRole('radio', { name: '跟随 Agent' })).toBeChecked()
   await rules.getByRole('button', { name: '撤销 make test *' }).click()
-  await expect(settings.getByText('在审批里选“始终允许”后会列在这里')).toBeVisible()
+  await expect(settings.getByText('在审批中选择“始终允许”后，会列在这里')).toBeVisible()
   await settings.getByRole('button', { name: '取消' }).click()
   await page.goto(`/rooms/${room}`)
   await ask('第三次')

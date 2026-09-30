@@ -3,7 +3,7 @@ import { useTranscript, useTranscriptSoFar } from '@/api/transcript'
 import { useCancelTurn } from '@/api/turns'
 import type { Message, Turn } from '@/api/types'
 import { Shimmer } from '@/components/ai-elements/shimmer'
-import { AgentMarkdown } from '@/components/shared/agent-markdown'
+import { ChatMarkdown } from '@/components/shared/chat-markdown'
 import { askKind, waitingKeys } from '@/features/approvals/kinds'
 import { Button } from '@/components/ui/button'
 import type { Sender } from '@/features/rooms/useSenderNames'
@@ -70,7 +70,7 @@ export function TurnPart({ turn, messages, who, first, last, names, onOpenTurn, 
         <div className="mt-0.5 flex items-start gap-2">
           <div className="min-w-0 flex-1 text-[0.875rem] leading-[1.6] break-words">
             {live?.text ? (
-              <AgentMarkdown text={live.text} mentions={null} names={names ?? new Map()} streaming className="text-[0.875rem]" />
+              <ChatMarkdown text={live.text} mentions={null} names={names ?? new Map()} streaming className="text-[0.875rem]" />
             ) : (
               <Shimmer as="span" className="text-[0.875rem]">
                 {waiting

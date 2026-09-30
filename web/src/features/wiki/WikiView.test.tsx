@@ -42,12 +42,12 @@ describe('WikiView', () => {
     expect(await screen.findByRole('heading', { name: 'The hub listens on 7788' })).toBeInTheDocument()
     expect(screen.getByText('未核验')).toBeInTheDocument()
     expect(screen.getByText(/Codex 写于/)).toBeInTheDocument()
-    expect(screen.getByText(/还没有人确认过/)).toBeInTheDocument()
+    expect(screen.getByText(/尚未有人确认/)).toBeInTheDocument()
     // Links between pages stay in the wiki; others open outside.
     expect(screen.getByRole('link', { name: 'the config' })).toHaveAttribute('href', '/rooms/r1/wiki/modules/config.md')
     expect(screen.getByRole('link', { name: 'the docs' })).toHaveAttribute('target', '_blank')
     expect(screen.getByRole('link', { name: 'Config' })).toHaveAttribute('href', '/rooms/r1/wiki/modules/config.md')
-    await userEvent.click(screen.getByRole('button', { name: '话题 #3 里的一轮' }))
+    await userEvent.click(screen.getByRole('button', { name: '话题 #3 中的一轮' }))
     expect(onOpenThread).toHaveBeenCalledWith('t3')
   })
 
@@ -95,7 +95,9 @@ describe('WikiView', () => {
     renderWiki('facts/port.md')
     await userEvent.click(await screen.findByRole('button', { name: '确认' }))
     await waitFor(() => expect(screen.getByText(/alice 确认于/)).toBeInTheDocument())
-    await userEvent.click(screen.getByRole('button', { name: '设为常驻' }))
+    // Making it resident is in the page's menu.
+    await userEvent.click(screen.getByRole('button', { name: '更多' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: '设为常驻' }))
     await waitFor(() =>
       expect(posted).toEqual([
         { path: 'verify', body: { path: '/facts/port.md', verify: true } },
@@ -128,7 +130,7 @@ describe('WikiView', () => {
     await userEvent.click(await within(list).findByText('外部 · acme-retail'))
     expect(within(list).getByRole('link', { name: 'Gross margin' })).toHaveAttribute('href', '/rooms/r1/wiki/@acme-retail/metrics/gross-margin.md')
     await userEvent.click(within(list).getByText('外部 · gone'))
-    expect(within(list).getByText(/打不开：\/data\/gone/)).toBeInTheDocument()
+    expect(within(list).getByText(/无法打开：\/data\/gone/)).toBeInTheDocument()
     // The front page lists them.
     expect(await screen.findByRole('heading', { name: '外部 wiki' })).toBeInTheDocument()
     expect(screen.getByText('1 页')).toBeInTheDocument()
@@ -159,7 +161,7 @@ describe('WikiView', () => {
   it('says so when a page is not there', async () => {
     stubApi(routes({ '/projects/p1/wiki/page': Response.json({ error: 'no page' }, { status: 404 }) }))
     renderWiki('facts/gone.md')
-    expect(await screen.findByText('没有这一页')).toBeInTheDocument()
+    expect(await screen.findByText('页面不存在')).toBeInTheDocument()
   })
 
   it('undoes a change after asking', async () => {
@@ -177,7 +179,7 @@ describe('WikiView', () => {
     await userEvent.click(await screen.findByRole('button', { name: '撤回' }))
     const dialog = await screen.findByRole('alertdialog', { name: '撤回这次改动？' })
     // Why, for the log, so whoever keeps the wiki does not do it again.
-    await userEvent.type(within(dialog).getByLabelText(/为什么撤回/), ' 说反了 ')
+    await userEvent.type(within(dialog).getByLabelText(/撤回原因/), ' 说反了 ')
     await userEvent.click(within(dialog).getByRole('button', { name: '撤回' }))
     await waitFor(() => expect(reverted).toEqual({ sha: 'abc', reason: '说反了' }))
   })

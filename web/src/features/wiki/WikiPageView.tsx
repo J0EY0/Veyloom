@@ -1,14 +1,14 @@
 import type { ReactNode } from 'react'
-import { ChevronLeftIcon, EllipsisIcon, FileQuestionIcon, PinIcon } from 'lucide-react'
+import { ChevronLeftIcon, DownloadIcon, EllipsisIcon, FileQuestionIcon, PinIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { ApiError } from '@/api/client'
 import type { WikiPage, WikiTeam } from '@/api/types'
-import { skillName, useChangeWikiPage, useWikiPage, type WikiSpace } from '@/api/wiki'
+import { skillExportUrl, skillName, useChangeWikiPage, useWikiPage, type WikiSpace } from '@/api/wiki'
 import { StatusPill } from '@/components/shared/status-pill'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { Separator } from '@/components/ui/separator'
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from '@/components/ui/empty'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
@@ -19,13 +19,13 @@ import { runtimeName } from '@/lib/runtimes'
 import type { OpenTopic } from './CommitRow'
 import { withoutTitleHeading } from './body'
 import { pageHref } from './links'
-import { actorName, tierName, typeName, vouched } from './names'
-import { PageHistory, PageSources } from './PageParts'
+import { actorName, producerName, typeName, vouched } from './names'
+import { PageDetails, PageHistory, PageSources } from './PageParts'
 import { PageRelations } from './PageRelations'
 import { QuestionButton } from './QuestionButton'
 import { reviewText } from './review'
-import { SkillInstalls, SkillTeam, SkillUses } from './SkillParts'
-import { SkillTrialPart } from './SkillTrial'
+import { SkillFacts } from './SkillParts'
+import { SkillTrialHead } from './SkillTrial'
 import { keptFor } from './skills'
 import { BackLink, type Back } from './WikiOverview'
 import { WikiMarkdown } from './WikiMarkdown'
@@ -83,44 +83,66 @@ export function WikiPageView({ space, path, history, teams = [], onOpenThread, b
   const mounted = Boolean(data.mount)
   return (
     <article className="mx-auto w-full max-w-[46rem] px-5 pt-5 pb-12 md:px-10">
-      <PageHead page={data} space={space} onOpenThread={onOpenThread} back={back} />
+      <PageHead page={data} space={space} onOpenThread={onOpenThread} back={back} byline={!skill} beside={skill ? <SkillTrialHead page={data} /> : undefined} />
+      {/* A skill says all about it above its text, a line apart from it;
+          under it are only the skill and its files. */}
       {skill ? (
-        <div className="mt-2 flex flex-col gap-1.5">
-          <SkillTeam page={data} teams={teams} />
-          <SkillInstalls page={data} />
-        </div>
+        <>
+          <SkillFacts page={data} teams={teams} canUndo={history} onOpenThread={onOpenThread} />
+          <Separator className="mt-6" />
+        </>
       ) : null}
-      {skill ? <SkillTrialPart page={data} /> : null}
       <WikiMarkdown text={withoutTitleHeading(data.body, data.title)} from={data.path} space={space} className="mt-6 text-[0.9375rem] leading-[1.7]" />
       {afterBody}
       <PageSources page={data} space={space} onOpenThread={onOpenThread} />
       <PageRelations page={data} space={space} onOpenThread={onOpenThread} />
-      {skill ? <SkillUses name={data.path.split('/')[2] ?? ''} /> : null}
-      {mounted ? null : <PageHistory page={data} space={space} canUndo={history} teams={teams} onOpenThread={onOpenThread} />}
+      {skill ? null : <PageDetails page={data} alone={Boolean(back)} />}
+      {mounted || skill ? null : <PageHistory page={data} space={space} canUndo={history} teams={teams} onOpenThread={onOpenThread} />}
     </article>
   )
 }
 
-function PageHead({ page, space, onOpenThread, back }: { page: WikiPage; space: WikiSpace; onOpenThread: OpenTopic; back?: Back }) {
+// byline is false for a skill, whose facts say who wrote it. beside goes
+// on the title's line, as a skill's open trial does.
+function PageHead({
+  page,
+  space,
+  onOpenThread,
+  back,
+  byline = true,
+  beside,
+}: {
+  page: WikiPage
+  space: WikiSpace
+  onOpenThread: OpenTopic
+  back?: Back
+  byline?: boolean
+  beside?: ReactNode
+}) {
   const t = useT()
   const change = useChangeWikiPage(space)
   const confirmed = vouched(page)
   // Resident pages are a project wiki's; the library's go to runtimes as skills.
   const tagged = space.kind === 'project' && page.tags.some((tag) => tag.toLowerCase() === 'resident')
+  const residentOption = space.kind === 'project' && !page.mount && (page.resident || !tagged)
   const lastPerson = [...page.verified].reverse().find((stamp) => stamp.by.startsWith('human:'))
-  // The maintainer's confirmation, when it is the latest (confirm_wiki,
-  // docs/design.md 5.16).
-  const latest = page.verified.at(-1)
-  const lastMachine = latest && !latest.by.startsWith('human:') ? latest : undefined
   const failed = (err: Error) => toast.error(t('wiki.page.changeFailed', { error: errorText(err) }))
   // Tags keeping a skill for some runtimes read as whom it is for.
   const kept = keptFor(page)
+  const exported = space.kind === 'library' && page.type === 'Skill' ? skillName(page.path) : ''
+
+  const title = <h1 className="min-w-0 text-xl font-semibold tracking-[-0.01em] break-words">{page.title}</h1>
 
   async function copy(text: string, done: string) {
     if (await copyText(text)) toast.success(done)
     else toast.error(t('common.copyFailed'))
   }
 
+  // The title and what the page says come first. Above them, its kind and
+  // what sets it apart, when anything does; under them, who wrote it and
+  // whether a person stands behind it, and why it is due to be checked
+  // again. Where it lies, its tags and the rest are at its foot
+  // (PageDetails).
   return (
     <header className="flex flex-col gap-2">
       <div className="flex min-w-0 items-center gap-2 text-xs text-subtle">
@@ -132,11 +154,28 @@ function PageHead({ page, space, onOpenThread, back }: { page: WikiPage; space: 
               <ChevronLeftIcon className="size-4" />
             </Link>
             <span className="flex-none">{typeName(t, page.type)}</span>
-            <span className="truncate font-mono" translate="no">
-              {page.path}
-            </span>
           </>
         )}
+        {page.status === 'deprecated' ? <StatusPill tone="fail">{t('wiki.status.deprecated')}</StatusPill> : null}
+        {page.status === 'draft' ? <StatusPill tone="idle">{t('wiki.status.draft')}</StatusPill> : null}
+        {page.resident ? (
+          <StatusPill tone="idle" dot={false}>
+            <PinIcon className="size-3" aria-hidden="true" />
+            {t('wiki.resident')}
+          </StatusPill>
+        ) : null}
+        {page.mount ? (
+          <StatusPill tone="idle" dot={false} className="min-w-0">
+            <span className="truncate">
+              {t('wiki.mount', { name: page.mount })} · {t('wiki.mountReadOnly')}
+            </span>
+          </StatusPill>
+        ) : null}
+        {kept.length > 0 ? (
+          <StatusPill tone="idle" dot={false}>
+            {t('library.onlyFor', { runtimes: kept.map(runtimeName).join(t('common.listSeparator')) })}
+          </StatusPill>
+        ) : null}
         <span className="grow" />
         {space.kind === 'project' && !page.mount ? <QuestionButton page={page} projectId={space.projectId} onOpenThread={onOpenThread} /> : null}
         {/* A skill on trial is kept by the trial's own button. */}
@@ -157,76 +196,51 @@ function PageHead({ page, space, onOpenThread, back }: { page: WikiPage; space: 
             </TooltipContent>
           </Tooltip>
         ) : null}
-        {space.kind === 'project' && !page.mount && (page.resident || !tagged) ? (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="xs"
-                disabled={change.isPending}
-                onClick={() => change.mutate({ path: page.path, resident: !page.resident }, { onError: failed })}
-                className="text-muted-foreground"
-              >
-                <PinIcon />
-                {page.resident ? t('wiki.page.stopResident') : t('wiki.page.makeResident')}
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent side="bottom" className="max-w-60">
-              {t('wiki.page.residentHint')}
-            </TooltipContent>
-          </Tooltip>
-        ) : null}
         <DropdownMenu>
           <DropdownMenuTrigger asChild>
             <Button variant="ghost" size="icon-xs" aria-label={t('common.more')} className="text-subtle">
               <EllipsisIcon />
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
+          <DropdownMenuContent align="end" className="w-52">
+            {/* A skill of the library goes elsewhere as the folder it is
+                anywhere else, zipped. */}
+            {exported ? (
+              <DropdownMenuItem asChild>
+                <a href={skillExportUrl(exported)} download={`${exported}.zip`}>
+                  <DownloadIcon />
+                  {t('library.export')}
+                </a>
+              </DropdownMenuItem>
+            ) : null}
+            {residentOption ? (
+              <DropdownMenuItem disabled={change.isPending} onSelect={() => change.mutate({ path: page.path, resident: !page.resident }, { onError: failed })}>
+                <PinIcon />
+                {page.resident ? t('wiki.page.stopResident') : t('wiki.page.makeResident')}
+              </DropdownMenuItem>
+            ) : null}
             <DropdownMenuItem onSelect={() => void copy(page.file, t('wiki.pathCopied'))}>{t('wiki.page.copyFile')}</DropdownMenuItem>
             <DropdownMenuItem onSelect={() => void copy(location.href, t('common.linkCopied'))}>{t('common.copyLink')}</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <h1 className="text-xl font-semibold tracking-[-0.01em] break-words">{page.title}</h1>
+      {beside ? (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+          {title}
+          {beside}
+        </div>
+      ) : (
+        title
+      )}
       {page.description ? <p className="text-[0.9375rem] leading-relaxed text-muted-foreground">{page.description}</p> : null}
-      <div className="flex flex-wrap items-center gap-1.5">
-        {page.mount ? (
-          <StatusPill tone="idle" dot={false}>
-            {t('wiki.mount', { name: page.mount })} · {t('wiki.mountReadOnly')}
-          </StatusPill>
-        ) : null}
-        <StatusPill tone={page.tier === 'human-reviewed' ? 'ok' : 'idle'} dot={false}>
-          {tierName(t, page.tier)}
-        </StatusPill>
-        {page.resident ? (
-          <StatusPill tone="idle" dot={false}>
-            <PinIcon className="size-3" aria-hidden="true" />
-            {t('wiki.resident')}
-          </StatusPill>
-        ) : null}
-        {page.status === 'deprecated' ? <StatusPill tone="fail">{t('wiki.status.deprecated')}</StatusPill> : null}
-        {page.status === 'draft' ? <StatusPill tone="idle">{t('wiki.status.draft')}</StatusPill> : null}
-        {page.review ? <StatusPill tone="wait">{t('wiki.review.due')}</StatusPill> : page.stale ? <StatusPill tone="wait">{t('wiki.stale')}</StatusPill> : null}
-        {kept.length > 0 ? (
-          <StatusPill tone="idle" dot={false}>
-            {t('library.onlyFor', { runtimes: kept.map(runtimeName).join(t('common.listSeparator')) })}
-          </StatusPill>
-        ) : null}
-        {page.tags
-          .filter((tag) => tag.toLowerCase() !== 'resident' && !tag.toLowerCase().startsWith('runtime-'))
-          .map((tag) => (
-            <Badge key={tag} variant="outline" className="rounded-md px-1.5 text-[0.6875rem] font-normal text-muted-foreground">
-              {tag}
-            </Badge>
-          ))}
-      </div>
-      <p className="text-xs text-subtle">
-        {page.generated_by && page.generated_at ? t('wiki.page.writtenBy', { who: actorName(page.generated_by), when: formatTime(page.generated_at) }) : null}
-        {page.generated_by && page.generated_at ? ' · ' : null}
-        {lastPerson ? t('wiki.page.confirmedBy', { who: actorName(lastPerson.by), when: formatTime(lastPerson.at) }) : t('wiki.page.notConfirmed')}
-        {lastMachine ? ` · ${t('wiki.page.machineChecked', { who: actorName(lastMachine.by), when: formatTime(lastMachine.at) })}` : null}
-      </p>
+      {byline ? (
+        <p className="text-xs text-subtle">
+          {page.generated_by && page.generated_at
+            ? `${t('wiki.page.writtenBy', { who: producerName(page.generated_by), when: formatTime(page.generated_at) })} · `
+            : null}
+          {lastPerson ? t('wiki.page.confirmedBy', { who: actorName(lastPerson.by), when: formatTime(lastPerson.at) }) : t('wiki.page.notConfirmed')}
+        </p>
+      ) : null}
       {page.review ? (
         <p className="text-xs leading-relaxed text-status-wait">
           {t('wiki.review.due')}
@@ -245,6 +259,8 @@ function PageHead({ page, space, onOpenThread, back }: { page: WikiPage; space: 
             </>
           ) : null}
         </p>
+      ) : page.stale ? (
+        <p className="text-xs text-status-wait">{t('wiki.stale')}</p>
       ) : null}
     </header>
   )

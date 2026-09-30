@@ -105,7 +105,7 @@ describe('WikisPage', () => {
     expect(screen.getByRole('link', { name: '关系图' })).toHaveAttribute('href', '/wiki/p1/graph')
     expect(screen.getByRole('link', { name: '项目记忆' })).toHaveAttribute('href', '/wiki/p1/memory')
     // No chat beside it: a topic opens in its own.
-    await userEvent.click(screen.getByRole('button', { name: '话题 #3 里的一轮' }))
+    await userEvent.click(screen.getByRole('button', { name: '话题 #3 中的一轮' }))
     expect(router.state.location.pathname).toBe('/rooms/r1')
     expect(router.state.location.search).toBe('?thread=t3')
   })
@@ -140,7 +140,7 @@ describe('WikisPage', () => {
   it('says when the project is not there', async () => {
     stub()
     renderWikis('/wiki/gone')
-    expect(await screen.findByText('没有这个项目')).toBeInTheDocument()
+    expect(await screen.findByText('项目不存在')).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '全部项目' })).toHaveAttribute('href', '/wiki')
   })
 })

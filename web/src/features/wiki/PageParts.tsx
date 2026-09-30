@@ -1,17 +1,21 @@
 import { useState } from 'react'
-import { ChevronRightIcon } from 'lucide-react'
+import { CheckCheckIcon, ChevronRightIcon, FolderIcon, PenLineIcon, ShieldCheckIcon, TagIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import type { WikiPage, WikiSource, WikiTeam } from '@/api/types'
 import { useWikiHistory, type WikiSpace } from '@/api/wiki'
+import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Spinner } from '@/components/ui/spinner'
-import { formatDay } from '@/lib/format'
+import { formatDay, formatTime } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import { CommitRow, type OpenTopic } from './CommitRow'
+import { Fact, Facts, TrustPill } from './Facts'
 import { pageHref } from './links'
+import { actorName, producerName } from './names'
 
-// The parts of a page under its text: what it rests on and how it came to
-// be as it is. How it relates to the rest of the wiki is PageRelations'.
+// The parts of a page under its text: what it rests on, what it carries
+// besides its text, and how it came to be as it is. How it relates to the
+// rest of the wiki is PageRelations'.
 
 export interface PagePartProps {
   page: WikiPage
@@ -32,6 +36,57 @@ export function PageSources({ page, space, onOpenThread }: PagePartProps) {
           </li>
         ))}
       </ul>
+    </section>
+  )
+}
+
+// PageDetails is what a page carries besides its text, quiet at its foot
+// where the head leaves it out: where it lies, its tags, how far to trust
+// it, and who wrote it and last checked it, with the model. A page shown
+// alone, as the library's are, goes by its name, not where it lies.
+export function PageDetails({ page, alone = false }: { page: WikiPage; alone?: boolean }) {
+  const t = useT()
+  const tags = page.tags.filter((tag) => tag.toLowerCase() !== 'resident' && !tag.toLowerCase().startsWith('runtime-'))
+  const latest = page.verified.at(-1)
+  // The maintainer's confirmation, when it is the latest (confirm_wiki,
+  // docs/design.md 5.16).
+  const checked = latest && !latest.by.startsWith('human:') ? latest : undefined
+  // The byline names who wrote it; here only what it leaves out, the model.
+  const model = page.generated_by && page.generated_at && actorName(page.generated_by) !== producerName(page.generated_by)
+  return (
+    <section aria-label={t('wiki.details.title')} className="mt-8">
+      <h2 className="mb-2 text-xs font-medium text-subtle">{t('wiki.details.title')}</h2>
+      <Facts>
+        {alone ? null : (
+          <Fact icon={FolderIcon} label={t('wiki.details.path')}>
+            <span className="font-mono text-xs break-all" translate="no">
+              {page.path}
+            </span>
+          </Fact>
+        )}
+        {tags.length > 0 ? (
+          <Fact icon={TagIcon} label={t('wiki.details.tags')}>
+            {tags.map((tag) => (
+              <Badge key={tag} variant="outline" className="h-6 rounded-full px-2 text-xs font-normal text-muted-foreground">
+                {tag}
+              </Badge>
+            ))}
+          </Fact>
+        ) : null}
+        <Fact icon={ShieldCheckIcon} label={t('wiki.details.trust')}>
+          <TrustPill tier={page.tier} />
+        </Fact>
+        {model ? (
+          <Fact icon={PenLineIcon} label={t('wiki.details.written')}>
+            {actorName(page.generated_by as string)} · {formatTime(page.generated_at as string)}
+          </Fact>
+        ) : null}
+        {checked ? (
+          <Fact icon={CheckCheckIcon} label={t('wiki.details.checked')}>
+            {actorName(checked.by)} · {formatTime(checked.at)}
+          </Fact>
+        ) : null}
+      </Facts>
     </section>
   )
 }
@@ -94,15 +149,33 @@ function FileSource({ source, onOpenThread }: { source: WikiSource; onOpenThread
 }
 
 // The page's changes, read when asked for.
-export function PageHistory({ page, space, canUndo, teams, onOpenThread }: PagePartProps & { canUndo: boolean; teams?: WikiTeam[] }) {
+// PageHistory is what changed a page, read when opened. Compact, it is a
+// row among a skill's facts, which names it already.
+export function PageHistory({
+  page,
+  space,
+  canUndo,
+  teams,
+  onOpenThread,
+  compact = false,
+}: PagePartProps & { canUndo: boolean; teams?: WikiTeam[]; compact?: boolean }) {
   const t = useT()
   const [open, setOpen] = useState(false)
   const history = useWikiHistory(space, page.path, 30, open)
+  const toggle = open ? t('skill.facts.hide') : t('skill.facts.show')
   return (
-    <Collapsible open={open} onOpenChange={setOpen} className="group/history mt-8">
-      <CollapsibleTrigger className="flex items-center gap-1 text-xs font-medium text-subtle hover:text-foreground">
+    <Collapsible open={open} onOpenChange={setOpen} className={compact ? 'group/history' : 'group/history mt-8'}>
+      <CollapsibleTrigger
+        // Compact, the row's label says what opens; the button says it too.
+        aria-label={compact ? `${t('wiki.page.history')} · ${toggle}` : undefined}
+        className={
+          compact
+            ? 'flex items-center gap-1 text-xs leading-6 text-subtle hover:text-foreground'
+            : 'flex items-center gap-1 text-xs font-medium text-subtle hover:text-foreground'
+        }
+      >
         <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]/history:rotate-90" />
-        {t('wiki.page.history')}
+        {compact ? toggle : t('wiki.page.history')}
       </CollapsibleTrigger>
       <CollapsibleContent>
         {history.isPending ? (

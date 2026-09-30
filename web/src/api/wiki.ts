@@ -7,8 +7,10 @@ import { patchQuery } from './live'
 import type {
   Agent,
   AgentRef,
+  LocalSkill,
   MemoryView,
   SkillUse,
+  UploadedSkill,
   WikiCatalogResponse,
   WikiGraph,
   WikiHistoryResponse,
@@ -125,10 +127,13 @@ export function useWikiGraph(space: WikiSpace) {
 }
 
 // The turns that used a skill, newest first.
+// The turns that used a skill read at most: a list this long may go on.
+export const skillUsesLimit = 50
+
 export function useSkillUses(name: string) {
   return useQuery({
     queryKey: wikiKeys.uses(name),
-    queryFn: async () => (await api.get<{ uses: SkillUse[] }>(`/library/usage?${query({ name, limit: '50' })}`)).uses,
+    queryFn: async () => (await api.get<{ uses: SkillUse[] }>(`/library/usage?${query({ name, limit: String(skillUsesLimit) })}`)).uses,
     enabled: name !== '',
   })
 }
@@ -136,6 +141,12 @@ export function useSkillUses(name: string) {
 // skillPath is the page of the library's skill name.
 export function skillPath(name: string): string {
   return `/skills/${name}/SKILL.md`
+}
+
+// skillExportUrl downloads a skill of the library as a zip file of its
+// folder in Agent Skills form, to take elsewhere (docs/design.md 5.15).
+export function skillExportUrl(name: string): string {
+  return `${apiBase}/library/export?name=${encodeURIComponent(name)}`
 }
 
 // skillName is the skill a page of the library is the SKILL.md of; '' for
@@ -186,6 +197,41 @@ export function useImportSkill() {
       client.setQueryData<WikiPage>(wikiKeys.page(librarySpace, page.path), page)
       invalidateSpace(client, librarySpace)
     },
+  })
+}
+
+// The skills on this machine a person may bring into the library, read
+// when the import opens.
+export function useLocalSkills() {
+  return useQuery({
+    queryKey: ['library', 'local'],
+    queryFn: async () => (await api.get<{ skills: LocalSkill[] }>('/library/local')).skills,
+    staleTime: 0,
+  })
+}
+
+// What a person sends from the browser: a zip file, or the files of a
+// folder, each with its path in the folder, which starts with its name.
+export type SkillUploadBody = { zip: File } | { files: { path: string; file: File }[] }
+
+// Importing the skills an upload holds; how each went comes back.
+export function useUploadSkills() {
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: async ({ upload, projectId }: { upload: SkillUploadBody; projectId: string }) => {
+      const form = new FormData()
+      if (projectId) form.append('project_id', projectId)
+      if ('zip' in upload) {
+        form.append('file', upload.zip, upload.zip.name)
+      } else {
+        for (const { path, file } of upload.files) {
+          form.append('path', path)
+          form.append('file', file, file.name)
+        }
+      }
+      return (await api.upload<{ skills: UploadedSkill[] }>('/library/upload', form)).skills
+    },
+    onSuccess: () => invalidateSpace(client, librarySpace),
   })
 }
 

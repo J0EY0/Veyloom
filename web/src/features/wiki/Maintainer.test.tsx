@@ -63,19 +63,19 @@ describe('MaintainerCard', () => {
     const who = await screen.findByRole('combobox', { name: 'Wiki 维护员' })
     await waitFor(() => expect(who).toHaveTextContent('Keeper'))
     await user.click(who)
-    expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['不开', '组长（Lead）', 'Keeper', 'Lead'])
+    expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['不开启', '组长（Lead）', 'Keeper', 'Lead'])
     await user.click(screen.getByRole('option', { name: '组长（Lead）' }))
     await waitFor(() => expect(patched).toEqual({ wiki_maintainer_member_id: '' }))
     await user.click(who)
-    await user.click(await screen.findByRole('option', { name: '不开' }))
+    await user.click(await screen.findByRole('option', { name: '不开启' }))
     await waitFor(() => expect(patched).toEqual({ wiki_upkeep: false }))
-    const how = screen.getByRole('combobox', { name: '什么时候整理' })
+    const how = screen.getByRole('combobox', { name: '整理时机' })
     expect(how).toHaveTextContent('话题静置 30 分钟后')
     await user.click(how)
     await user.click(await screen.findByRole('option', { name: '每周一次' }))
     await waitFor(() => expect(patched).toEqual({ wiki_maintainer_trigger: 'weekly' }))
     expect(screen.getByText(/上次整理于/)).toBeInTheDocument()
-    expect(screen.getByText(/待整理：本群 2 轮，其他项目用本团队技能的 1 轮，人的消息 3 条/)).toBeInTheDocument()
+    expect(screen.getByText(/待整理：本群 2 轮，其他项目使用本团队技能 1 轮，人发的消息 3 条/)).toBeInTheDocument()
 
     await user.click(screen.getByRole('button', { name: '打开整理话题' }))
     expect(onOpenThread).toHaveBeenCalledWith('t9', 'r1')
@@ -83,7 +83,7 @@ describe('MaintainerCard', () => {
     await user.click(screen.getByRole('button', { name: '现在整理' }))
     await waitFor(() => expect(started).toBe(true))
     // Queued now, it cannot be asked for twice.
-    expect(await screen.findByText(/等 Keeper 空下来就整理/)).toBeInTheDocument()
+    expect(await screen.findByText(/等 Keeper 空闲后开始整理/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '现在整理' })).toBeDisabled()
   })
 
@@ -117,8 +117,8 @@ describe('MaintainerCard', () => {
     })
     const user = userEvent.setup()
     renderWithProviders(<MaintainerCard projectId="p1" roomId="r1" onOpenThread={() => {}} />)
-    expect(await screen.findByRole('heading', { name: '让一个成员来维护这个 wiki？' })).toBeInTheDocument()
-    const who = screen.getByRole('combobox', { name: '谁来整理' })
+    expect(await screen.findByRole('heading', { name: '要指定一个成员维护这个 wiki 吗？' })).toBeInTheDocument()
+    const who = screen.getByRole('combobox', { name: '由谁整理' })
     await waitFor(() => expect(who).toHaveTextContent('组长（Keeper）'))
     const enable = screen.getByRole('button', { name: '开启（每天一次）' })
     await user.click(enable)
@@ -150,11 +150,11 @@ describe('MaintainerCard', () => {
     const user = userEvent.setup()
     renderWithProviders(<MaintainerCard projectId="p1" roomId="r1" onOpenThread={() => {}} />)
     // The leader, a Claude, writes it.
-    await waitFor(() => expect(screen.getByRole('combobox', { name: '谁来整理' })).toHaveTextContent('组长（Claude）'))
-    expect(screen.queryByText(/只读的 Codex/)).toBeNull()
-    await user.click(screen.getByRole('combobox', { name: '谁来整理' }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '由谁整理' })).toHaveTextContent('组长（Claude）'))
+    expect(screen.queryByText(/只读权限的 Codex/)).toBeNull()
+    await user.click(screen.getByRole('combobox', { name: '由谁整理' }))
     await user.click(await screen.findByRole('option', { name: 'Codex' }))
-    expect(await screen.findByText(/只读的 Codex/)).toBeInTheDocument()
+    expect(await screen.findByText(/只读权限的 Codex/)).toBeInTheDocument()
   })
 
   it('stops offering once declined, and offers nothing when nothing waits', async () => {
@@ -171,35 +171,35 @@ describe('MaintainerCard', () => {
     })
     const user = userEvent.setup()
     renderWithProviders(<MaintainerCard projectId="p1" roomId="r1" onOpenThread={() => {}} />)
-    await user.click(await screen.findByRole('button', { name: '不开' }))
+    await user.click(await screen.findByRole('button', { name: '暂不开启' }))
     // Kept on the project, so the chat's card follows it too.
     await waitFor(() => expect(patched).toEqual({ wiki_offer_declined: true }))
-    await waitFor(() => expect(screen.queryByRole('heading', { name: '让一个成员来维护这个 wiki？' })).toBeNull())
+    await waitFor(() => expect(screen.queryByRole('heading', { name: '要指定一个成员维护这个 wiki 吗？' })).toBeNull())
     renderWithProviders(<MaintainerCard projectId="p2" roomId="r1" onOpenThread={() => {}} />)
     await new Promise((resolve) => setTimeout(resolve, 50))
-    expect(screen.queryByRole('heading', { name: '让一个成员来维护这个 wiki？' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: '要指定一个成员维护这个 wiki 吗？' })).toBeNull()
   })
 })
 
 describe('systemText', () => {
   it('puts an upkeep note in the UI’s words', () => {
     expect(systemText(t, "Wiki upkeep by Keeper (topics went quiet): 3 turns of this chat, 1 turn of other projects using this team's skills.")).toBe(
-      'Keeper 开始整理 wiki（话题静置了）：本群 3 轮，其他项目用本团队技能的 1 轮',
+      'Keeper 开始整理 wiki（话题已静置）：本群 3 轮，其他项目使用本团队技能 1 轮',
     )
     expect(systemText(t, "Wiki upkeep by Keeper (asked by a person): 0 turns of this chat, 0 turns of other projects using this team's skills.")).toBe(
-      'Keeper 开始整理 wiki（有人让整理）：本群 0 轮，其他项目用本团队技能的 0 轮',
+      'Keeper 开始整理 wiki（应要求整理）：本群 0 轮，其他项目使用本团队技能 0 轮',
     )
     // Later ones say what people said, and the reasons that came with the
     // longer gaps (docs/design.md 5.16).
     expect(
       systemText(t, "Wiki upkeep by Keeper (weekly): 2 turns of this chat, 0 turns of other projects using this team's skills, 5 messages from people."),
-    ).toBe('Keeper 开始整理 wiki（每周一次）：本群 2 轮，其他项目用本团队技能的 0 轮，人的消息 5 条')
+    ).toBe('Keeper 开始整理 wiki（每周一次）：本群 2 轮，其他项目使用本团队技能 0 轮，人发的消息 5 条')
     expect(
       systemText(
         t,
         "Wiki upkeep by Keeper (the last upkeep left turns to go over): 20 turns of this chat, 0 turns of other projects using this team's skills, 1 message from people.",
       ),
-    ).toBe('Keeper 开始整理 wiki（上次没看完）：本群 20 轮，其他项目用本团队技能的 0 轮，人的消息 1 条')
+    ).toBe('Keeper 开始整理 wiki（上次未整理完）：本群 20 轮，其他项目使用本团队技能 0 轮，人发的消息 1 条')
     // Notes it has no words of its own for are shown as the hub wrote them.
     expect(systemText(t, 'Keeper could not start a turn: no machine')).toBe('Keeper could not start a turn: no machine')
   })

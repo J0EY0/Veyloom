@@ -1,6 +1,7 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
+import { setLocale } from '@/lib/i18n'
 import { stubApi } from '@/test/fetch'
 import { renderWithProviders } from '@/test/render'
 import { pickOption } from '@/test/select'
@@ -11,6 +12,14 @@ import { agent, agents, catalog, market, routes, skill } from './library/library
 // narrowed and installed from, its patterns, its menu, and importing.
 
 describe('LibraryPage', () => {
+  it('says whom a skill is installed for as the language writes a list', async () => {
+    setLocale('en')
+    stubApi(routes({ '/library': { wiki: market }, '/agents': { agents } }))
+    renderWithProviders(<LibraryPage />, { route: '/library', path: '/library/*' })
+    const list = await screen.findByRole('list', { name: 'Skills' })
+    expect(within(list).getAllByRole('listitem')[0]).toHaveTextContent('Installed for Coder, Writer')
+  })
+
   it('lists the skills the way a market does: whose, how they stand, whom they are installed for', async () => {
     stubApi(routes({ '/library': { wiki: market }, '/agents': { agents } }))
     renderWithProviders(<LibraryPage />, { route: '/library', path: '/library/*' })
@@ -21,9 +30,9 @@ describe('LibraryPage', () => {
     expect(rows[0]).toHaveTextContent('试用中')
     expect(rows[0]).toHaveTextContent('Write the cases as a table.')
     expect(rows[0]).toHaveTextContent('「Veyloom」团队')
-    expect(rows[0]).toHaveTextContent('装给了 Coder、Writer')
-    expect(rows[1]).toHaveTextContent('只给 Codex')
-    expect(rows[1]).toHaveTextContent('装给了 Coder')
+    expect(rows[0]).toHaveTextContent('已安装到 Coder、Writer')
+    expect(rows[1]).toHaveTextContent('仅限 Codex')
+    expect(rows[1]).toHaveTextContent('已安装到 Coder')
     // No pages here: the files a skill came with are on its own page.
     expect(screen.queryByText('Naming cases')).toBeNull()
     expect(screen.queryByText(/页/)).toBeNull()
@@ -125,7 +134,7 @@ describe('LibraryPage', () => {
       }),
     )
     renderWithProviders(<LibraryPage />, { route: '/library', path: '/library/*' })
-    await userEvent.click(await screen.findByRole('button', { name: '把 Release notes 装给…' }))
+    await userEvent.click(await screen.findByRole('button', { name: '将 Release notes 安装到…' }))
     const menu = await screen.findByRole('menu')
     expect(within(menu).getByRole('menuitemcheckbox', { name: /Coder/ })).toHaveAttribute('aria-checked', 'true')
     expect(within(menu).getByRole('menuitemcheckbox', { name: /Thinker/ })).toHaveAttribute('aria-disabled', 'true')
@@ -134,7 +143,7 @@ describe('LibraryPage', () => {
     // The menu stays open for more; the page behind it is hidden meanwhile.
     await userEvent.keyboard('{Escape}')
     const row = (await screen.findByRole('link', { name: 'Release notes' })).closest('[role="listitem"]') as HTMLElement
-    await waitFor(() => expect(row).toHaveTextContent('装给了 Coder、Maker'))
+    await waitFor(() => expect(row).toHaveTextContent('已安装到 Coder、Maker'))
   })
 
   it('imports a skill from a folder and opens it', async () => {
@@ -144,6 +153,7 @@ describe('LibraryPage', () => {
         '/library/page': { page: skill },
         '/library/usage': { uses: [] },
         '/agents': { agents: [] },
+        '/library/local': { skills: [] },
         '/library/import': async (req: Request) => {
           asked = (await req.json()) as typeof asked
           if (asked.folder === '/tmp/empty') {
@@ -155,13 +165,14 @@ describe('LibraryPage', () => {
     )
     renderWithProviders(<LibraryPage />, { route: '/library', path: '/library/*' })
     await userEvent.click(await screen.findByRole('button', { name: '导入技能' }))
-    const dialog = await screen.findByRole('dialog', { name: '从文件夹导入技能' })
+    const dialog = await screen.findByRole('dialog', { name: '导入技能' })
+    await userEvent.click(within(dialog).getByRole('tab', { name: '文件夹路径' }))
     await userEvent.click(within(dialog).getByRole('button', { name: '导入' }))
-    expect(within(dialog).getByText('要填文件夹的路径。')).toBeInTheDocument()
+    expect(within(dialog).getByText('请填写文件夹路径。')).toBeInTheDocument()
 
     await userEvent.type(within(dialog).getByLabelText('文件夹'), '/tmp/empty')
     await userEvent.click(within(dialog).getByRole('button', { name: '导入' }))
-    expect(await within(dialog).findByText('/tmp/empty 里没有 SKILL.md，技能文件夹要以它为主文件。')).toBeInTheDocument()
+    expect(await within(dialog).findByText('/tmp/empty 里没有 SKILL.md，技能文件夹必须包含这个文件。')).toBeInTheDocument()
 
     await userEvent.clear(within(dialog).getByLabelText('文件夹'))
     await userEvent.type(within(dialog).getByLabelText('文件夹'), '/Users/me/.claude/skills/go-table-tests')
@@ -170,5 +181,110 @@ describe('LibraryPage', () => {
     expect(await screen.findByRole('heading', { name: 'Go table tests' })).toBeInTheDocument()
     expect(asked).toEqual({ folder: '/Users/me/.claude/skills/go-table-tests', project_id: 'p1' })
     expect(screen.queryByRole('dialog')).toBeNull()
+  })
+
+  it('imports the skills on this machine that are ticked, installed at once for the agents picked', async () => {
+    const imported: string[] = []
+    const installs: unknown[] = []
+    stubApi(
+      routes({
+        '/agents': { agents },
+        '/library/local': {
+          skills: [
+            { name: 'pdf', description: 'Use when a task reads PDFs.', folder: '/home/me/.agents/skills/pdf', where: '~/.agents/skills' },
+            { name: 'notes', description: 'Use for notes.', folder: '/home/me/.claude/skills/notes', where: '~/.claude/skills' },
+            { name: 'go-table-tests', description: 'd', folder: '/repo/.agents/skills/go-table-tests', where: 'Veyloom · .agents/skills', in_library: true },
+            { name: 'Bad_Name', description: 'd', folder: '/home/me/.codex/skills/Bad_Name', where: '~/.codex/skills', problem: 'skillBadName' },
+          ],
+        },
+        '/library/import': async (req: Request) => {
+          const { folder } = (await req.json()) as { folder: string }
+          imported.push(folder)
+          return Response.json({ page: { ...skill, path: `/skills/${folder.split('/').pop()}/SKILL.md` } }, { status: 201 })
+        },
+        '/library/install': async (req: Request) => {
+          installs.push(await req.json())
+          return { installed: [] }
+        },
+      }),
+    )
+    renderWithProviders(<LibraryPage />, { route: '/library', path: '/library/*' })
+    await userEvent.click(await screen.findByRole('button', { name: '导入技能' }))
+    const dialog = await screen.findByRole('dialog', { name: '导入技能' })
+    const list = await within(dialog).findByRole('list', { name: '本机已有' })
+    // What the library cannot take says why and cannot be ticked.
+    expect(within(list).getByRole('checkbox', { name: /go-table-tests/ })).toBeDisabled()
+    expect(within(list).getByRole('checkbox', { name: /Bad_Name/ })).toBeDisabled()
+    expect(list).toHaveTextContent('已在技能库')
+    expect(list).toHaveTextContent('名字不合规')
+    expect(list).toHaveTextContent('Veyloom · .agents/skills')
+    expect(within(dialog).getByRole('button', { name: '导入' })).toBeDisabled()
+
+    await userEvent.click(within(list).getByRole('checkbox', { name: /pdf/ }))
+    await userEvent.click(within(list).getByRole('checkbox', { name: /notes/ }))
+    await userEvent.click(within(dialog).getByRole('button', { name: '安装到' }))
+    await userEvent.click(await screen.findByRole('menuitemcheckbox', { name: /Coder/ }))
+    await userEvent.keyboard('{Escape}')
+    expect(within(dialog).getByRole('button', { name: '安装到' })).toHaveTextContent('Coder')
+    await userEvent.click(within(dialog).getByRole('button', { name: '导入 2 个技能' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(imported).toEqual(['/home/me/.agents/skills/pdf', '/home/me/.claude/skills/notes'])
+    expect(installs).toEqual([
+      { name: 'pdf', agent_id: 'a1', installed: true },
+      { name: 'notes', agent_id: 'a1', installed: true },
+    ])
+  })
+
+  it('uploads a zip, or a folder with the paths of its files, and says what did not come in', async () => {
+    const sent: FormData[] = []
+    stubApi(
+      routes({
+        '/agents': { agents: [] },
+        '/library/local': { skills: [] },
+        '/library/page': { page: skill },
+        '/library/usage': { uses: [] },
+        '/library/upload': (_req: Request, form?: FormData) => {
+          sent.push(form as FormData)
+          return sent.length === 1
+            ? {
+                skills: [
+                  { name: 'alpha', path: '/skills/alpha/SKILL.md' },
+                  { name: 'notes', code: 'skillExists', params: { name: 'notes' }, message: 'x' },
+                ],
+              }
+            : { skills: [{ name: 'go-table-tests', path: '/skills/go-table-tests/SKILL.md' }] }
+        },
+      }),
+    )
+    renderWithProviders(<LibraryPage />, { route: '/library', path: '/library/*' })
+    await userEvent.click(await screen.findByRole('button', { name: '导入技能' }))
+    const dialog = await screen.findByRole('dialog', { name: '导入技能' })
+    await userEvent.click(within(dialog).getByRole('tab', { name: '上传' }))
+    expect(dialog).toHaveTextContent('把技能的 zip 文件或文件夹拖到这里')
+
+    // A zip of two, one of them in the library already.
+    await userEvent.upload(within(dialog).getByLabelText('选择 zip 文件'), new File(['PK'], 'skills-main.zip', { type: 'application/zip' }))
+    expect(dialog).toHaveTextContent('skills-main.zip')
+    await userEvent.click(within(dialog).getByRole('button', { name: '导入' }))
+    expect(await within(dialog).findByRole('alert')).toHaveTextContent('notes：技能库里已经有 notes 了。')
+    expect((sent[0].get('file') as File).name).toBe('skills-main.zip')
+    expect(sent[0].getAll('path')).toEqual([])
+
+    // A folder: each file with its path, in order; one skill opens.
+    const files = [new File(['---'], 'SKILL.md'), new File(['#!/bin/sh'], 'run.sh'), new File(['x'], '.DS_Store')]
+    for (const [file, path] of [
+      [files[0], 'go-table-tests/SKILL.md'],
+      [files[1], 'go-table-tests/scripts/run.sh'],
+      [files[2], 'go-table-tests/.DS_Store'],
+    ] as const) {
+      Object.defineProperty(file, 'webkitRelativePath', { value: path })
+    }
+    await userEvent.upload(within(dialog).getByLabelText('选择文件夹'), files)
+    expect(dialog).toHaveTextContent('2 个文件')
+    await userEvent.click(within(dialog).getByRole('button', { name: '导入' }))
+    expect(await screen.findByRole('heading', { name: 'Go table tests' })).toBeInTheDocument()
+    expect(sent[1].getAll('path')).toEqual(['go-table-tests/SKILL.md', 'go-table-tests/scripts/run.sh'])
+    expect(sent[1].getAll('file')).toHaveLength(2)
   })
 })

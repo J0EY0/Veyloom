@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { InboxItem, PendingApproval } from '@/api/types'
 import { approval, message } from '@/test/fixtures'
 import { t } from '@/lib/i18n'
-import { excerptOf, filterEntries, plainText, toEntries } from './entries'
+import { excerptOf, filterEntries, toEntries } from './entries'
 
 function mention(id: string, seq: number, overrides: Partial<InboxItem> = {}): InboxItem {
   return {
@@ -49,7 +49,7 @@ describe('toEntries', () => {
       body: '@alice Pong mentioned Ping, but the last 3 turns agents woke in this piece of work only talked; it waits for a person now.',
     })
     const [entry] = toEntries([], [note], 'alice', t)
-    expect([entry.sender, entry.excerpt]).toEqual(['Veyloom', 'Pong 想叫醒 Ping，但最近 3 轮被叫醒的都只说话、没干活，等你决定'])
+    expect([entry.sender, entry.excerpt]).toEqual(['Veyloom', 'Pong 想唤醒 Ping，但最近 3 轮被唤醒的 agent 都只回复、没有实际操作，等你决定是否继续'])
   })
 })
 
@@ -63,12 +63,6 @@ describe('excerptOf', () => {
   it('keeps an @ of someone else and words with underscores', () => {
     expect(excerptOf('@bob 看 use_mobile 和 snake_case_name', 'test')).toBe('@bob 看 use_mobile 和 snake_case_name')
     expect(excerptOf('@testing 在跑', 'test')).toBe('@testing 在跑')
-  })
-})
-
-describe('plainText', () => {
-  it('flattens fences, quotes, tables and rules', () => {
-    expect(plainText('> 引用\n\n```go\nfmt.Println(1)\n```\n\n| a | b |\n|---|---|\n| 1 | 2 |\n\n---\n1. 第一')).toBe('引用 fmt.Println(1) a b 1 2 第一')
   })
 })
 

@@ -36,14 +36,14 @@ describe('errorText', () => {
     const raced = new ApiError(409, 'already expired', { error: 'already expired' })
     expect(errorText(raced, { 409: '已经有人决定了' })).toBe('已经有人决定了')
     const expired = new ApiError(409, 'already expired', { error: 'already expired', code: 'approvalExpired', params: { status: 'expired' } })
-    expect(errorText(expired, { 409: '已经有人决定了' })).toBe('等得太久，这个请求已经过期了。')
+    expect(errorText(expired, { 409: '已经有人决定了' })).toBe('等待时间过长，这个请求已过期。')
   })
 
   it('words what is gone, a failing server and one out of reach', () => {
-    expect(errorText(new ApiError(404, 'project p1: not found', { error: 'project p1: not found' }))).toBe('找不到了，可能已经被删除。')
-    expect(errorText(new ApiError(500, 'internal error', { error: 'internal error' }))).toBe('服务端出错了，详情在服务端的日志里。')
-    expect(errorText(new ApiError(502, '502 Bad Gateway'))).toBe('连不上服务端，看看 veyloom serve 是否在运行。')
-    expect(errorText(new TypeError('Failed to fetch'))).toBe('连不上服务端，看看 veyloom serve 是否在运行。')
+    expect(errorText(new ApiError(404, 'project p1: not found', { error: 'project p1: not found' }))).toBe('内容不存在，可能已被删除。')
+    expect(errorText(new ApiError(500, 'internal error', { error: 'internal error' }))).toBe('服务器出错了，详情请查看服务器日志。')
+    expect(errorText(new ApiError(502, '502 Bad Gateway'))).toBe('无法连接服务器，请确认 veyloom serve 正在运行。')
+    expect(errorText(new TypeError('Failed to fetch'))).toBe('无法连接服务器，请确认 veyloom serve 正在运行。')
     // A 502 the hub itself sends says why.
     expect(errorText(new ApiError(502, 'the machine could not be reached', { error: 'the machine could not be reached' }))).toBe(
       'the machine could not be reached',

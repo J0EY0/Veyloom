@@ -7,7 +7,7 @@ describe('i18n', () => {
   it('fills placeholders and leaves unknown braces alone', () => {
     setLocale('zh-CN')
     expect(t('topic.replies', { n: 3 })).toBe('3 条回复')
-    expect(t('agent.optionsInvalid')).toBe('要是一个 JSON 对象，比如 {"approval": true}。')
+    expect(t('agent.optionsInvalid')).toBe('需要是一个 JSON 对象，比如 {"approval": true}。')
     expect(t('nav.projectsFailed', { error: 'boom' })).toBe('项目列表加载失败：boom')
   })
 

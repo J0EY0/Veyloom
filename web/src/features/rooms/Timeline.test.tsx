@@ -138,7 +138,7 @@ describe('Timeline', () => {
     // its topic's status naming the member it woke.
     const second = (await screen.findByText(/请加优先级/)).closest('li') as HTMLElement
     expect(within(second).queryByText('Lead')).toBeNull()
-    expect(within(second).getByRole('button', { name: /Coder 完成 · 46 秒/ })).toBeInTheDocument()
+    expect(within(second).getByRole('button', { name: /Coder 已完成 · 46 秒/ })).toBeInTheDocument()
     expect(second.querySelector('.ring-inset')).toBeNull()
   })
 

@@ -15,7 +15,7 @@ describe('ErrorBoundary', () => {
         <Boom />
       </ErrorBoundary>,
     )
-    expect(screen.getByText('这一页渲染时出了错。')).toBeInTheDocument()
+    expect(screen.getByText('页面渲染出错。')).toBeInTheDocument()
     expect(screen.getByText('render exploded')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: '重新加载' })).toBeInTheDocument()
     spy.mockRestore()

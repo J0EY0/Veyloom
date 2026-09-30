@@ -155,5 +155,5 @@ test('attachments in the chat, the viewer, the tab and the search', async ({ pag
   await page.getByPlaceholder('搜索项目、页面…').fill('release')
   await expect(page.getByText(`附件 · files ${stamp}`)).toBeVisible()
   await page.keyboard.press('Enter')
-  await expect(page.getByRole('dialog', { name: 'release.zip' }).getByText('这种文件在这里看不了，下载后打开。')).toBeVisible()
+  await expect(page.getByRole('dialog', { name: 'release.zip' }).getByText('无法预览这种文件，请下载后打开。')).toBeVisible()
 })

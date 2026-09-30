@@ -129,7 +129,7 @@ describe('TasksView', () => {
     expect(onOpenThread).toHaveBeenCalledWith('t-w1')
     await userEvent.click(within(merge).getByRole('button', { name: '合并' }))
     const dialog = await screen.findByRole('dialog', { name: '把 Tester 的改动合并到 main' })
-    expect(within(dialog).getByText('veyloom/tester 上是这 1 件事的改动，合并时压成一个提交')).toBeInTheDocument()
+    expect(within(dialog).getByText('veyloom/tester 包含这 1 项任务的改动，合并时会压缩为一个提交')).toBeInTheDocument()
     expect(within(dialog).getByText('Test the tags', { selector: 'li span' })).toBeInTheDocument()
     await userEvent.keyboard('{Escape}')
 
@@ -146,7 +146,7 @@ describe('TasksView', () => {
     open()
     const done = await screen.findByRole('region', { name: '已完成' })
     expect(cardTitles(done)).toHaveLength(5)
-    await userEvent.click(within(done).getByRole('button', { name: /更早的 2 个/ }))
+    await userEvent.click(within(done).getByRole('button', { name: /更早的 2 项/ }))
     expect(cardTitles(done)).toHaveLength(7)
     await userEvent.click(within(done).getByRole('button', { name: /收起/ }))
     expect(cardTitles(done)).toHaveLength(5)

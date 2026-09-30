@@ -80,10 +80,10 @@ test('agents wake one another, and wait for the person when they only talk', asy
   await page
     .getByRole('listitem')
     .filter({ hasText: '请把登录页做出来' })
-    .getByRole('button', { name: /完成 · 2 轮/ })
+    .getByRole('button', { name: /已完成 · 2 轮/ })
     .click()
   const topic = page.getByRole('complementary', { name: '话题' })
-  await expect(topic.getByText(`由 ${name('Planner')} 叫醒`)).toHaveCount(2)
+  await expect(topic.getByText(`由 ${name('Planner')} 唤醒`)).toHaveCount(2)
   await expect(topic).toContainText('改好了。')
   await expect(topic).toContainText('测试写好了。')
   await page.keyboard.press('Escape')
@@ -92,9 +92,9 @@ test('agents wake one another, and wait for the person when they only talk', asy
   await page
     .getByRole('listitem')
     .filter({ hasText: '已经分派下去了。' })
-    .getByRole('button', { name: /完成 · 4 轮/ })
+    .getByRole('button', { name: /已完成 · 4 轮/ })
     .click()
-  await expect(topic.getByText(new RegExp(`做完了 ${name('Planner')} 交出去的活，交回给 ${name('Planner')}`))).toBeVisible()
+  await expect(topic.getByText(new RegExp(`完成了 ${name('Planner')} 分派的任务，交回给 ${name('Planner')}`))).toBeVisible()
   await expect(topic).toContainText(`${account.name} 登录页和测试都好了。`)
   await page.keyboard.press('Escape')
 
@@ -104,12 +104,12 @@ test('agents wake one another, and wait for the person when they only talk', asy
   await done(8)
   await page.goto('/inbox')
   const forMe = page.getByRole('main')
-  const idle = `${name('Pang')} 想叫醒 ${name('Ping')}，但最近 3 轮被叫醒的都只说话、没干活，等你决定`
+  const idle = `${name('Pang')} 想唤醒 ${name('Ping')}，但最近 3 轮被唤醒的 agent 都只回复、没有实际操作，等你决定是否继续`
   const held = forMe.getByRole('link').filter({ hasText: idle })
   await expect(held).toContainText('Veyloom')
   await held.click()
   const picked = forMe.getByRole('complementary', { name: '话题' })
-  await expect(picked.getByText(`由 ${name('Ping')} 叫醒`).first()).toBeVisible()
+  await expect(picked.getByText(`由 ${name('Ping')} 唤醒`).first()).toBeVisible()
 
   // Let go on, Ping is woken in a piece of work of its own: it hands on to
   // Pong, Pong to Pang, whose answer naming Ping reports back, and Ping
@@ -117,20 +117,20 @@ test('agents wake one another, and wait for the person when they only talk', asy
   await picked.getByRole('button', { name: '继续', exact: true }).click()
   await expect(picked.getByText('已继续')).toBeVisible()
   await done(12)
-  await expect(picked.getByText(`${name('Pong')}、${name('Pang')} 做完了 ${name('Ping')} 交出去的活，交回给 ${name('Ping')}`)).toBeVisible()
+  await expect(picked.getByText(`${name('Pong')}、${name('Pang')} 完成了 ${name('Ping')} 分派的任务，交回给 ${name('Ping')}`)).toBeVisible()
 
   // A limit of one wake, set in the project's settings: Starter wakes Ping,
   // and Ping waking Pong waits for the person.
   await page.goto(`/rooms/${roomId}?panel=members`)
   await page.getByRole('button', { name: `编辑项目 relays ${stamp}` }).click()
   const settings = page.getByRole('dialog', { name: '编辑项目' })
-  await settings.getByLabel('agent 互相叫醒的上限').fill('1')
+  await settings.getByLabel('agent 互相唤醒的上限').fill('1')
   await settings.getByRole('button', { name: '保存' }).click()
   await expect(settings).toHaveCount(0)
   await ask('Starter', '再来一次')
   await done(14)
   const { turns } = await call<{ turns: { thread_id: string }[] }>(request, 'get', `/rooms/${roomId}/turns`)
   await page.goto(`/rooms/${roomId}?thread=${turns[0].thread_id}`)
-  await expect(topic.getByText(`${name('Ping')} 想叫醒 ${name('Pong')}，但这件事自你上次说话以来 agent 已经互相叫醒了 1 轮，等你决定`)).toBeVisible()
+  await expect(topic.getByText(`${name('Ping')} 想唤醒 ${name('Pong')}，但自你上次发言以来，agent 之间已互相唤醒 1 轮，等你决定是否继续`)).toBeVisible()
   await expect(topic.getByRole('button', { name: '继续', exact: true })).toBeVisible()
 })

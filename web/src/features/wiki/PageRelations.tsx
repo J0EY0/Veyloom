@@ -64,6 +64,8 @@ export function PageRelations({ page, space, onOpenThread }: PageRelationsProps)
   const topics = relations?.topics ?? []
   if (!inGraph && groups.length === 0) return null
   const empty = groups.length === 0 && files.length === 0 && topics.length === 0
+  // A skill seldom links to other pages: with none, it goes without the part.
+  if (empty && space.kind === 'library') return null
 
   return (
     <section aria-labelledby="page-relations" className="mt-8">

@@ -61,24 +61,24 @@ describe('EditProjectDialog', () => {
     // Off, as every project starts: nothing to choose.
     const upkeep = screen.getByRole('switch', { name: 'Wiki 维护员' })
     expect(upkeep).not.toBeChecked()
-    expect(screen.queryByRole('combobox', { name: '谁来整理' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: '由谁整理' })).toBeNull()
     await user.click(upkeep)
     // The leader keeps it unless someone else is chosen; members switched
     // off are not offered.
-    const who = await screen.findByRole('combobox', { name: '谁来整理' })
+    const who = await screen.findByRole('combobox', { name: '由谁整理' })
     await waitFor(() => expect(who).toHaveTextContent('组长（Keeper）'))
     await user.click(who)
     expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['组长（Keeper）', 'Keeper', 'Coder'])
     await user.click(screen.getByRole('option', { name: 'Coder' }))
     // Daily is the default, a week the longest (docs/design.md 5.16).
-    expect(screen.getByRole('combobox', { name: '什么时候整理' })).toHaveTextContent('每天一次')
-    await user.click(screen.getByRole('combobox', { name: '什么时候整理' }))
+    expect(screen.getByRole('combobox', { name: '整理时机' })).toHaveTextContent('每天一次')
+    await user.click(screen.getByRole('combobox', { name: '整理时机' }))
     expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual([
       '话题静置 30 分钟后',
       '每天一次',
       '每 3 天一次',
       '每周一次',
-      '只在手动时',
+      '仅手动',
     ])
     await user.click(screen.getByRole('option', { name: '每周一次' }))
     await user.click(screen.getByRole('button', { name: '保存' }))
@@ -111,10 +111,10 @@ describe('EditProjectDialog', () => {
     renderWithProviders(
       <EditProjectDialog project={{ ...veyloom, wiki_upkeep: true, wiki_maintainer_member_id: 'm1', wiki_maintainer_trigger: 'daily' }} onClose={onClose} />,
     )
-    expect(await screen.findByRole('combobox', { name: '什么时候整理' })).toHaveTextContent('每天一次')
-    await waitFor(() => expect(screen.getByRole('combobox', { name: '谁来整理' })).toHaveTextContent('Keeper'))
+    expect(await screen.findByRole('combobox', { name: '整理时机' })).toHaveTextContent('每天一次')
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '由谁整理' })).toHaveTextContent('Keeper'))
     await user.click(screen.getByRole('switch', { name: 'Wiki 维护员' }))
-    expect(screen.queryByRole('combobox', { name: '什么时候整理' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: '整理时机' })).toBeNull()
     await user.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
     expect(patched).toEqual({ name: 'Veyloom', repo_path: '/src/veyloom', description: '', wiki_upkeep: false })
@@ -182,7 +182,7 @@ describe('EditProjectDialog', () => {
 
     await userEvent.type(name, 'Veyloom')
     await userEvent.click(screen.getByRole('button', { name: '保存' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('找不到了，可能已经被删除。')
+    expect(await screen.findByRole('alert')).toHaveTextContent('内容不存在，可能已被删除。')
   })
 
   it('sets how many turns agents may wake one another to, or no limit', async () => {
@@ -197,7 +197,7 @@ describe('EditProjectDialog', () => {
     })
     const user = userEvent.setup()
     const first = renderWithProviders(<EditProjectDialog project={{ ...veyloom, relay_limit: 30 }} onClose={vi.fn()} />)
-    const limit = screen.getByLabelText('agent 互相叫醒的上限')
+    const limit = screen.getByLabelText('agent 互相唤醒的上限')
     expect(limit).toHaveValue(30)
     await user.clear(limit)
     await user.type(limit, '12')
@@ -208,7 +208,7 @@ describe('EditProjectDialog', () => {
 
     renderWithProviders(<EditProjectDialog project={{ ...veyloom, relay_limit: 12 }} onClose={vi.fn()} />)
     await user.click(screen.getByRole('switch', { name: '不限' }))
-    expect(screen.getByLabelText('agent 互相叫醒的上限')).toBeDisabled()
+    expect(screen.getByLabelText('agent 互相唤醒的上限')).toBeDisabled()
     await user.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(bodies).toHaveLength(2))
     expect(bodies[1]).toMatchObject({ relay_limit: 0 })
@@ -226,7 +226,7 @@ describe('EditProjectDialog', () => {
     })
     const user = userEvent.setup()
     const first = renderWithProviders(<EditProjectDialog project={{ ...veyloom, relay_limit: -1 }} onClose={vi.fn()} />)
-    expect(screen.getByLabelText('agent 互相叫醒的上限')).toHaveValue(0)
+    expect(screen.getByLabelText('agent 互相唤醒的上限')).toHaveValue(0)
     await user.type(screen.getByLabelText('项目简介'), '一个小应用')
     await user.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => expect(bodies).toHaveLength(1))
@@ -234,7 +234,7 @@ describe('EditProjectDialog', () => {
     first.unmount()
 
     renderWithProviders(<EditProjectDialog project={{ ...veyloom, relay_limit: 30 }} onClose={vi.fn()} />)
-    const limit = screen.getByLabelText('agent 互相叫醒的上限')
+    const limit = screen.getByLabelText('agent 互相唤醒的上限')
     await user.clear(limit)
     await user.type(limit, '0')
     await user.click(screen.getByRole('button', { name: '保存' }))

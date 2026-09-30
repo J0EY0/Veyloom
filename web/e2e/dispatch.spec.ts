@@ -72,10 +72,10 @@ test('a message that names no member goes to the leader, who hands it on', async
   await page
     .getByRole('listitem')
     .filter({ hasText: '请查一下原因' })
-    .getByRole('button', { name: /完成 · 3 轮/ })
+    .getByRole('button', { name: /已完成 · 3 轮/ })
     .click()
   const topic = page.getByRole('complementary', { name: '话题' })
-  await expect(topic.getByText(`由 ${name('Lead')} 叫醒`)).toBeVisible()
+  await expect(topic.getByText(`由 ${name('Lead')} 唤醒`)).toBeVisible()
   await expect(topic).toContainText('查过了：会话查询慢。')
   await expect(topic).toContainText('Coder 查到是会话查询慢。')
   // The person talks with the leader there: it took their message.

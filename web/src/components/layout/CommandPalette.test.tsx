@@ -74,7 +74,7 @@ describe('CommandPalette', () => {
 
     act(() => setPaletteOpen(true))
     await user.type(await screen.findByPlaceholderText('搜索项目、页面…'), 'spec')
-    await user.click(await screen.findByRole('option', { name: '在附件页里查看全部 7 个结果' }))
+    await user.click(await screen.findByRole('option', { name: '在附件页查看全部 7 个结果' }))
     await waitFor(() => expect(router.state.location.pathname).toBe('/rooms/r1/attachments'))
     expect(router.state.location.search).toBe('?q=spec')
   })

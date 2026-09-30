@@ -69,7 +69,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
         data-message-id={message.id}
         className="mx-auto grid max-w-215 grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3 px-6 py-[0.6875rem] [contain-intrinsic-size:auto_4rem] [content-visibility:auto]"
       >
-        <span className="flex size-7 items-center justify-center rounded-[28%] border text-muted-foreground">
+        <span className="flex size-7 items-center justify-center rounded-full border text-muted-foreground">
           <Icon className="size-3.5" aria-hidden="true" />
         </span>
         <div className="min-w-0">
@@ -88,7 +88,7 @@ export const MessageRow = memo(function MessageRow(props: MessageRowProps) {
   if (message.sender_kind === 'system' && offerProjectId) {
     return (
       <li data-message-id={message.id} className="mx-auto grid max-w-215 grid-cols-[1.75rem_minmax(0,1fr)] gap-x-3 px-6 py-[0.6875rem]">
-        <span className="flex size-7 items-center justify-center rounded-[28%] border text-muted-foreground">
+        <span className="flex size-7 items-center justify-center rounded-full border text-muted-foreground">
           <BookHeartIcon className="size-3.5" aria-hidden="true" />
         </span>
         <MaintainerOfferNote projectId={offerProjectId} roomId={message.room_id} />
@@ -173,7 +173,7 @@ function Body({ message, names, liveText, waiting }: { message: RoomMessage; nam
         </Clamped>
       )
     }
-    return <MessageBody body={message.body} mentions={message.mentions} names={names} className={`${bodyClass} whitespace-pre-wrap`} />
+    return <MessageBody body={message.body} mentions={message.mentions} names={names} className={bodyClass} />
   }
   const running = message.thread?.last_turn?.status === 'running'
   if (running && liveText) {

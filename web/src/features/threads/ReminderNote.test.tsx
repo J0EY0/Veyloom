@@ -53,7 +53,7 @@ describe('a reminder in a topic', () => {
     stub(reminder(), () => (cancelled = true))
     renderWithProviders(<ThreadNote message={set} />)
     expect(
-      await screen.findByText((_, element) => element?.tagName === 'SPAN' && element.textContent === `Slow 定了提醒：${formatTime(due)}，check how CI went`),
+      await screen.findByText((_, element) => element?.tagName === 'SPAN' && element.textContent === `Slow 设了提醒（${formatTime(due)}）：check how CI went`),
     ).toBeInTheDocument()
     await userEvent.click(await screen.findByRole('button', { name: '取消' }))
     await waitFor(() => expect(cancelled).toBe(true))

@@ -93,8 +93,8 @@ describe('UsagePage', () => {
 
   it('charts each turn, with a table a screen reader gets', async () => {
     open()
-    const chart = await screen.findByRole('region', { name: '每一轮' })
-    const rows = within(within(chart).getByRole('table', { name: '每一轮' })).getAllByRole('row')
+    const chart = await screen.findByRole('region', { name: '按轮次' })
+    const rows = within(within(chart).getByRole('table', { name: '按轮次' })).getAllByRole('row')
     expect(rows).toHaveLength(4)
     expect(
       within(rows[2])
@@ -121,7 +121,7 @@ describe('UsagePage', () => {
     // Every project shown: a member says whose it is.
     expect(first).toHaveTextContent('CoderLinkkeeper1.2万67%')
 
-    const works = screen.getByRole('region', { name: '按件' })
+    const works = screen.getByRole('region', { name: '按任务' })
     expect(within(works).getByRole('link', { name: 'Add tags' })).toHaveAttribute('href', '/rooms/r1/tasks/c1')
     // A project's setup is there too, but opens nothing.
     expect(within(works).getByText('项目初始化').closest('a')).toBeNull()

@@ -59,7 +59,7 @@ describe('TurnDrawer', () => {
 
     const first = await screen.findByRole('button', { name: '简报 · 4 行' })
     expect(screen.getByText('开始 · Pi')).toBeInTheDocument()
-    expect(screen.getByText(/会话续不上，换新会话重跑/)).toBeInTheDocument()
+    expect(screen.getByText(/会话无法续接，已换用新会话重新运行/)).toBeInTheDocument()
     expect(screen.queryByText(/This topic, #1, in full/)).not.toBeInTheDocument()
 
     await userEvent.click(first)
@@ -93,12 +93,12 @@ describe('TurnDrawer', () => {
     })
     renderWithProviders(<TurnDrawer roomId="r1" turnId="x5" onClose={() => {}} />)
 
-    expect(await screen.findByText('插话 · 话题里新说的，送进了这一轮')).toBeInTheDocument()
-    expect(screen.getByText('插话没赶上这一轮，留给下一轮')).toBeInTheDocument()
+    expect(await screen.findByText('插话 · 话题中的新消息已发送给这一轮')).toBeInTheDocument()
+    expect(screen.getByText('插话没赶上这一轮，将留到下一轮')).toBeInTheDocument()
     // How the account stood, as the runtime told (docs/design.md 5.23.3).
     expect(screen.getByText('5 小时额度已用 91%')).toBeInTheDocument()
     expect(screen.queryByText(/use the new grammar/)).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '送进去的内容 · 2 行' }))
+    await userEvent.click(screen.getByRole('button', { name: '发送的内容 · 2 行' }))
     expect(screen.getByText(/>> \[alice\] use the new grammar/)).toBeInTheDocument()
   })
 
@@ -118,10 +118,10 @@ describe('TurnDrawer', () => {
     })
     renderWithProviders(<TurnDrawer roomId="r1" turnId="x6" onClose={() => {}} />)
 
-    expect(await screen.findByText('没在话题里留下回话，接着同一会话请它补一句')).toBeInTheDocument()
+    expect(await screen.findByText('没有在话题中留下回复，已在同一会话中请它补充')).toBeInTheDocument()
     expect(screen.getByText('Nothing needed changing.')).toBeInTheDocument()
     expect(screen.queryByText(/Reply now/)).not.toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '追问的话 · 1 行' }))
+    await userEvent.click(screen.getByRole('button', { name: '追问内容 · 1 行' }))
     expect(screen.getByText(/Reply now/)).toBeInTheDocument()
   })
 
@@ -138,8 +138,8 @@ describe('TurnDrawer', () => {
     })
     renderWithProviders(<TurnDrawer roomId="r1" turnId="x7" onClose={() => {}} />)
 
-    expect(await screen.findByText('12 分钟没有动静')).toBeInTheDocument()
-    await userEvent.click(screen.getByRole('button', { name: '取消并开新会话' }))
+    expect(await screen.findByText('12 分钟没有任何进展')).toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: '取消并开启新会话' }))
     await waitFor(() => expect(bodies).toEqual([{ new_session: true }]))
   })
 

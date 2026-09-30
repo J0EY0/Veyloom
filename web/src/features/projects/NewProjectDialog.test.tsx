@@ -47,7 +47,7 @@ describe('NewProjectDialog', () => {
     await userEvent.type(screen.getByLabelText('本地路径'), ' /src/new ')
     // Each agent says where it would run, by machine and runtime.
     const tester = await screen.findByRole('checkbox', { name: /Pi Tester/ })
-    expect(screen.getByRole('checkbox', { name: /Codex Helper/ })).toHaveAccessibleName(/build-box（不在线） · Codex/)
+    expect(screen.getByRole('checkbox', { name: /Codex Helper/ })).toHaveAccessibleName(/build-box（离线） · Codex/)
     expect(tester).toHaveAccessibleName(/laptop · Pi/)
     // They join in the order they were picked, and the first leads
     // (docs/design.md 5.21): its chip says so.
@@ -80,9 +80,9 @@ describe('NewProjectDialog', () => {
     await userEvent.click(screen.getByRole('checkbox', { name: /Claude Architect/ }))
     const upkeep = screen.getByRole('switch', { name: 'Wiki 维护员' })
     expect(upkeep).not.toBeChecked()
-    expect(screen.queryByRole('combobox', { name: '谁来整理' })).toBeNull()
+    expect(screen.queryByRole('combobox', { name: '由谁整理' })).toBeNull()
     await userEvent.click(upkeep)
-    const keeper = screen.getByRole('combobox', { name: '谁来整理' })
+    const keeper = screen.getByRole('combobox', { name: '由谁整理' })
     expect(keeper).toHaveTextContent('组长（Pi Tester）')
     await userEvent.click(keeper)
     expect((await screen.findAllByRole('option')).map((option) => option.textContent)).toEqual(['组长（Pi Tester）', 'Pi Tester', 'Claude Architect'])
@@ -196,6 +196,6 @@ describe('NewProjectDialog', () => {
     await userEvent.type(screen.getByLabelText('名称'), 'x')
     await userEvent.click(await screen.findByRole('checkbox', { name: /Pi Tester/ }))
     await userEvent.click(screen.getByRole('button', { name: '创建项目' }))
-    expect(await screen.findByRole('alert')).toHaveTextContent('找不到了，可能已经被删除。')
+    expect(await screen.findByRole('alert')).toHaveTextContent('内容不存在，可能已被删除。')
   })
 })

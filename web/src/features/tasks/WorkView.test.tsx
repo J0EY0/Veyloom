@@ -103,23 +103,23 @@ describe('WorkView', () => {
 
     expect(await screen.findByRole('heading', { level: 1, name: 'Add tags to links' })).toBeInTheDocument()
     expect(screen.getByRole('link', { name: '任务' })).toHaveAttribute('href', '/rooms/r1/tasks')
-    expect(screen.getByText('完成')).toBeInTheDocument()
+    expect(screen.getByText('已完成')).toBeInTheDocument()
     expect(screen.getByText('alice 发起')).toBeInTheDocument()
     // The member asked, called the leader once the project says so.
     expect(await screen.findByText('组长Lead')).toBeInTheDocument()
     expect(screen.getByText('@Lead add tags to links, and test them')).toBeInTheDocument()
 
     const figures = Object.fromEntries(screen.getAllByRole('term').map((term) => [term.textContent, term.nextElementSibling?.textContent]))
-    expect(figures).toEqual({ 用时: '3 分 30 秒', Token: '1.2万', 轮次: '4', 等你审批: '1 分', 合并: 'abcdef1' })
+    expect(figures).toEqual({ 用时: '3 分 30 秒', Token: '1.2万', 轮次: '4', 等你审批: '1 分', 合并提交: 'abcdef1' })
 
-    await userEvent.click(screen.getByRole('button', { name: '在话题里看 #3' }))
+    await userEvent.click(screen.getByRole('button', { name: '在话题 #3 中查看' }))
     expect(onOpenThread).toHaveBeenCalledWith('t1')
   })
 
   it('draws a row a turn, saying what each did', async () => {
     stub()
     open()
-    const table = await screen.findByRole('table', { name: '每一轮' })
+    const table = await screen.findByRole('table', { name: '轮次' })
     const rows = within(table).getAllByRole('row').slice(1)
     expect(rows.map((row) => within(row).getByRole('rowheader').textContent)).toEqual([
       'L' + 'Lead拆分任务#3',
@@ -138,8 +138,8 @@ describe('WorkView', () => {
   it('lists what became of the branches the work changed', async () => {
     stub()
     open()
-    const merged = (await screen.findByText('合并进主线')).closest('li')!
-    expect(merged).toHaveTextContent('合并进主线abcdef1，带着 Coder 的改动')
+    const merged = (await screen.findByText('合并到主线')).closest('li')!
+    expect(merged).toHaveTextContent('合并到主线abcdef1，包含 Coder 的改动')
     const reset = (await screen.findByText('重置到主线')).closest('li')!
     expect(reset).toHaveTextContent('veyloom/tester重置到主线，原内容归档为refs/veyloom/archive/tester/1')
   })
@@ -186,6 +186,6 @@ describe('WorkView', () => {
   it('says so when the work cannot be read', async () => {
     stub(Response.json({ error: 'no such work' }, { status: 404 }))
     open()
-    expect(await screen.findByText('这件事没能读出来')).toBeInTheDocument()
+    expect(await screen.findByText('任务详情加载失败')).toBeInTheDocument()
   })
 })

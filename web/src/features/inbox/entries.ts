@@ -2,6 +2,7 @@ import type { InboxItem, PendingApproval } from '@/api/types'
 import { approvalCommand } from '@/features/approvals/describe'
 import { systemText } from '@/features/threads/systemNote'
 import type { t as translate } from '@/lib/i18n'
+import { plainText } from '@/lib/plainText'
 
 // One row of the inbox: a request waiting for a decision, or a message that
 // mentioned you. Each leads to a topic.
@@ -53,7 +54,8 @@ export function toEntries(approvals: PendingApproval[], items: InboxItem[], me: 
       sender: item.sender_kind === 'system' ? t('inbox.system') : item.sender_name,
       project: item.project_name,
       excerpt:
-        excerptOf(item.sender_kind === 'system' ? systemText(t, item.body) : item.body, me) || (item.attachments ?? []).map((file) => file.filename).join(t('common.listSeparator')),
+        excerptOf(item.sender_kind === 'system' ? systemText(t, item.body) : item.body, me) ||
+        (item.attachments ?? []).map((file) => file.filename).join(t('common.listSeparator')),
       createdAt: item.created_at,
       unread: !item.read,
       seq: item.seq,
@@ -81,20 +83,4 @@ export function excerptOf(body: string, me: string): string {
   const addressed = me !== '' && body.startsWith(lead) && (body.length === lead.length || /\s/.test(body[lead.length]))
   const text = addressed ? body.slice(lead.length) : body
   return plainText(text)
-}
-
-export function plainText(markdown: string): string {
-  return markdown
-    .replace(/^\s*(```|~~~).*$/gm, ' ')
-    .replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
-    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
-    .replace(/^\s{0,3}#{1,6}\s+/gm, '')
-    .replace(/^\s{0,3}>\s?/gm, '')
-    .replace(/^\s*(?:[-*+]|\d+[.)])\s+/gm, '')
-    .replace(/^\s*[-*_|: ]{3,}\s*$/gm, ' ')
-    .replace(/(\*\*|__|~~|`)/g, '')
-    .replace(/(^|[\s(])[*_](\S(?:.*?\S)?)[*_](?=[\s).,;:!?，。；：！？]|$)/gm, '$1$2')
-    .replace(/\s*\|\s*/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
 }

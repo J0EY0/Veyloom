@@ -45,7 +45,7 @@ describe('a held wake in a topic', () => {
     renderWithProviders(<ThreadNote message={held} />)
     // The waker's name is brought forward in the line.
     expect(
-      await screen.findByText((_, element) => element?.textContent === 'Ping 想叫醒 Pong，但最近 3 轮被叫醒的都只说话、没干活，等你决定'),
+      await screen.findByText((_, element) => element?.textContent === 'Ping 想唤醒 Pong，但最近 3 轮被唤醒的 agent 都只回复、没有实际操作，等你决定是否继续'),
     ).toBeInTheDocument()
     expect(screen.getByText('Ping').tagName).toBe('B')
     await userEvent.click(await screen.findByRole('button', { name: '继续' }))

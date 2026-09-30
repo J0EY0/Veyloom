@@ -34,12 +34,7 @@ export function ThreadMessage({ message, sender, approval, names, target = 'room
     message.sender_kind === 'agent' ? (
       <AgentBody message={message} names={known} target={target} className="text-[0.875rem]" />
     ) : message.body !== '' ? (
-      <MessageBody
-        body={message.body}
-        mentions={message.mentions}
-        names={known}
-        className="text-[0.875rem] leading-[1.6] break-words whitespace-pre-wrap text-body"
-      />
+      <MessageBody body={message.body} mentions={message.mentions} names={known} className="text-[0.875rem] leading-[1.6] break-words text-body" />
     ) : null
   const content = (
     <>

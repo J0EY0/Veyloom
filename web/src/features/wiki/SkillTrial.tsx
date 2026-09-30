@@ -1,6 +1,5 @@
 import { useId, useState } from 'react'
 import { CheckIcon, FlaskConicalIcon, Undo2Icon } from 'lucide-react'
-import { Link } from 'react-router'
 import { toast } from 'sonner'
 import { errorText } from '@/api/errorText'
 import type { SkillTrial, WikiPage } from '@/api/types'
@@ -20,36 +19,56 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { formatTime } from '@/lib/format'
 import { useT } from '@/lib/i18n'
-import { topicHref } from './links'
 import { actorName } from './names'
 
-// A skill's trial (docs/design.md 5.15). While it is open: how the turns
-// that used the skill since an agent changed it went, where the change was
-// made, and the two ways a person ends it, keeping the change or rolling
-// it back. Once over, one line on how it ended.
-export function SkillTrialPart({ page }: { page: WikiPage }) {
-  if (!page.trial) return null
-  return page.trial.status === 'open' ? <TrialOpen page={page} trial={page.trial} /> : <TrialEnded trial={page.trial} />
+// A skill's trial (docs/design.md 5.15). While it is open it sits beside
+// the skill's title (SkillTrialHead): how many of the turns it needs have
+// used the skill since an agent changed it, how many of them failed, and
+// the two ways a person ends it, keeping the change or rolling it back.
+// Once over, how it ended is a row of the skill's facts (SkillTrialEnded).
+export function SkillTrialHead({ page }: { page: WikiPage }) {
+  if (page.trial?.status !== 'open') return null
+  return <TrialOpen page={page} trial={page.trial} />
 }
 
+// The buttons' face is the page's own colour in both schemes, white in
+// light and black in dark: the outline button's dark face is a hair off
+// the tag's tint there.
+const trialButton = 'px-2.5 dark:border-input dark:bg-background dark:hover:bg-accent'
+
+// TrialOpen is one tag beside the title: how far the trial has got and how
+// many of its turns failed, then the two ways to end it, set into the tag
+// as plain buttons alike, not as tabs; rolling back asks first. Where the
+// tag has no room it breaks in two, the buttons at the end of the second
+// line.
 function TrialOpen({ page, trial }: { page: WikiPage; trial: SkillTrial }) {
   const t = useT()
   const keep = useChangeWikiPage(librarySpace)
   const [rollingBack, setRollingBack] = useState(false)
-  const left = Math.max(trial.needed - trial.uses, 0)
 
   return (
-    <section aria-label={t('skill.trial.title')} className="mt-4 rounded-lg border border-status-wait/30 bg-status-wait/5 px-3.5 py-3">
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
-        <p className="flex items-center gap-1.5 text-[0.8125rem] font-medium text-status-wait">
-          <FlaskConicalIcon className="size-3.5" aria-hidden="true" />
+    <div
+      role="group"
+      aria-label={t('skill.trial.title')}
+      className="inline-flex max-w-full flex-wrap items-center gap-x-2 gap-y-1 rounded-lg bg-status-wait/10 p-0.5 pl-2.5 ring-1 ring-status-wait/20 ring-inset"
+    >
+      <span className="flex min-w-0 items-center gap-1.5 text-xs font-medium text-status-wait">
+        <FlaskConicalIcon className="size-3.5 flex-none" aria-hidden="true" />
+        <span>
           {t('skill.trial.open', { uses: trial.uses, needed: trial.needed })}
-        </p>
-        {trial.failed > 0 ? <span className="text-xs text-status-fail">{t('skill.trial.failed', { n: trial.failed })}</span> : null}
-        <span className="grow" />
+          {trial.failed > 0 ? (
+            <>
+              {' · '}
+              <span className="text-status-fail">{t('skill.trial.failed', { n: trial.failed })}</span>
+            </>
+          ) : null}
+        </span>
+      </span>
+      <span className="ml-auto flex items-center gap-1.5">
         <Button
           variant="outline"
           size="xs"
+          className={trialButton}
           disabled={keep.isPending}
           onClick={() =>
             keep.mutate(
@@ -61,34 +80,22 @@ function TrialOpen({ page, trial }: { page: WikiPage; trial: SkillTrial }) {
             )
           }
         >
+          <CheckIcon className="text-status-ok" aria-hidden="true" />
           {t('skill.trial.keep')}
         </Button>
-        <Button variant="ghost" size="xs" onClick={() => setRollingBack(true)}>
+        <Button variant="outline" size="xs" className={trialButton} onClick={() => setRollingBack(true)}>
+          <Undo2Icon aria-hidden="true" />
           {t('skill.trial.rollback')}
         </Button>
-      </div>
-      <p className="mt-1.5 flex flex-wrap items-center gap-x-1.5 text-xs text-muted-foreground">
-        <span>{t('skill.trial.changedBy', { who: trial.changed_by })}</span>
-        <span aria-hidden="true">·</span>
-        {trial.room_id && trial.thread_id ? (
-          <Link to={topicHref(trial.room_id, trial.thread_id)} className="underline-offset-3 hover:underline">
-            {t('skill.use', { project: trial.project_name, n: trial.topic_number ?? 0 })}
-          </Link>
-        ) : (
-          <span>{trial.project_name}</span>
-        )}
-        <span aria-hidden="true">·</span>
-        <time dateTime={trial.changed_at}>{formatTime(trial.changed_at)}</time>
-        {trial.changes > 1 ? <span>{t('skill.trial.changes', { n: trial.changes })}</span> : null}
-      </p>
-      <p className="mt-1 text-xs text-subtle">{t('skill.trial.hint', { n: left })}</p>
+      </span>
       {rollingBack ? <RollbackDialog name={skillName(page.path)} onClose={() => setRollingBack(false)} /> : null}
-    </section>
+    </div>
   )
 }
 
-// TrialEnded says how the skill's last trial ended.
-function TrialEnded({ trial }: { trial: SkillTrial }) {
+// SkillTrialEnded says how the skill's last trial ended, and when, the way
+// the trust row says who wrote it: the words, then the time in grey.
+export function SkillTrialEnded({ trial }: { trial: SkillTrial }) {
   const t = useT()
   const by = trial.ended_by ?? ''
   let text: string
@@ -103,16 +110,17 @@ function TrialEnded({ trial }: { trial: SkillTrial }) {
   }
   const Icon = trial.status === 'rolled_back' ? Undo2Icon : CheckIcon
   return (
-    <p className="mt-3 flex flex-wrap items-center gap-x-1.5 text-xs text-subtle">
-      <Icon className="size-3.5" aria-hidden="true" />
-      <span>{text}</span>
+    <>
+      <span className="flex min-w-0 items-center gap-1.5">
+        <Icon className="size-3.5 flex-none" aria-hidden="true" />
+        <span>{text}</span>
+      </span>
       {trial.ended_at ? (
-        <>
-          <span aria-hidden="true">·</span>
-          <time dateTime={trial.ended_at}>{formatTime(trial.ended_at)}</time>
-        </>
+        <time dateTime={trial.ended_at} className="text-xs text-subtle">
+          {formatTime(trial.ended_at)}
+        </time>
       ) : null}
-    </p>
+    </>
   )
 }
 
