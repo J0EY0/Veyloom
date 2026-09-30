@@ -6,7 +6,6 @@ import (
 	"regexp"
 	"slices"
 	"strings"
-	"unicode/utf8"
 
 	"go.yaml.in/yaml/v3"
 )
@@ -234,11 +233,12 @@ func (c *checker) skill(d *Document) {
 	case name != path.Base(path.Dir(c.path)):
 		c.add("skill", "skill name %q should match its directory %q", name, path.Base(path.Dir(c.path)))
 	}
-	if desc := d.Description(); desc == "" || utf8.RuneCountInString(desc) > 1024 {
-		c.add("skill", "a skill needs a description of at most 1024 characters")
-	}
-	if s, _ := d.String(KeyCompatibility); utf8.RuneCountInString(s) > 500 {
-		c.add("skill", "compatibility should be at most 500 characters")
+	// Agent Skills advises a description of at most 1024 characters and a
+	// compatibility of at most 500; no runtime holds a skill to either
+	// (Claude Code, Codex and Pi load longer ones), so neither does
+	// Veyloom (docs/design.md 5.13).
+	if d.Description() == "" {
+		c.add("skill", "a skill needs a description")
 	}
 	if v := d.value(KeyMetadata); v != nil && !isStringMap(v) {
 		c.add("skill", "metadata should map strings to strings")

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"unicode"
 
 	"github.com/J0EY0/veyloom/internal/store"
 )
@@ -58,12 +59,14 @@ func (s *Scanner) With(name, pattern string) (*Scanner, error) {
 
 // Scan returns what looks like a secret in text, first rule first. A
 // piece of text two rules match is reported once, under the earlier rule.
+// What only stands in for a secret, the way documentation shows one, is
+// not reported (placeholder).
 func (s *Scanner) Scan(text string) []Finding {
 	var found []Finding
 	var taken [][]int
 	for _, r := range s.rules {
 		for _, loc := range r.re.FindAllStringIndex(text, -1) {
-			if overlaps(taken, loc) {
+			if overlaps(taken, loc) || placeholder(text, loc, r.name) {
 				continue
 			}
 			taken = append(taken, loc)
@@ -73,6 +76,38 @@ func (s *Scanner) Scan(text string) []Finding {
 	return found
 }
 
+// placeholder reports whether the match at loc in text only stands in for
+// a secret, as documentation writes one: it says EXAMPLE, as AWS's own
+// example keys do; it is one character over and over (sk-xxxx…,
+// AKIA0000…); or it is a private key's first line with no key after it.
+func placeholder(text string, loc []int, rule string) bool {
+	match := text[loc[0]:loc[1]]
+	if strings.Contains(strings.ToUpper(match), "EXAMPLE") {
+		return true
+	}
+	counts := map[rune]int{}
+	n, most := 0, 0
+	for _, c := range match {
+		if unicode.IsLetter(c) || unicode.IsDigit(c) {
+			n++
+			if counts[c]++; counts[c] > most {
+				most = counts[c]
+			}
+		}
+	}
+	if n >= 8 && most*2 >= n {
+		return true
+	}
+	if rule == "private-key" {
+		after := text[loc[1]:min(len(text), loc[1]+400)]
+		return !keyBody.MatchString(strings.Join(strings.Fields(after), ""))
+	}
+	return false
+}
+
+// keyBody is the start of a private key's body: base64, a line's worth.
+var keyBody = regexp.MustCompile(`[A-Za-z0-9+/=]{40,}`)
+
 func overlaps(spans [][]int, loc []int) bool {
 	for _, s := range spans {
 		if loc[0] < s[1] && s[0] < loc[1] {
@@ -81,6 +116,10 @@ func overlaps(spans [][]int, loc []int) bool {
 	}
 	return false
 }
+
+// SecretsIn looks for secrets in text as the bundle's writes do, its own
+// patterns among the rules.
+func (b *Bundle) SecretsIn(text string) []Finding { return b.opts.Secrets.Scan(text) }
 
 // SecretError refuses a write that looks like it holds a secret.
 type SecretError struct {

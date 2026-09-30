@@ -131,6 +131,12 @@ func TestCheck_Skill(t *testing.T) {
 			t.Errorf("%s: rules %v, want skill", tc.name, got)
 		}
 	}
+	// A description longer than Agent Skills advises is the author's: no
+	// runtime refuses it.
+	long := strings.Replace(skill, "Write detailed commit messages. Use when committing.", strings.Repeat("Write detailed commit messages. ", 40), 1)
+	if p := CheckFile("/skills/commit-message/SKILL.md", []byte(long), false, Strict); len(p) > 0 {
+		t.Errorf("a long description passes: %v", p)
+	}
 	// What runtimes add to Agent Skills stays on a skill as it was written.
 	withSettings := strings.Replace(skill, "metadata:", "disable-model-invocation: true\nallowed-tools: Bash(git:*)\nhooks:\n  PreToolUse: [x]\nmetadata:", 1)
 	if p := CheckFile("/skills/commit-message/SKILL.md", []byte(withSettings), false, Strict); len(p) > 0 {

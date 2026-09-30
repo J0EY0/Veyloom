@@ -3,6 +3,7 @@ package runtime
 import (
 	"bytes"
 	"github.com/pelletier/go-toml/v2"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -50,6 +51,20 @@ func TestWriteSkills(t *testing.T) {
 	}
 	if got, err := os.ReadFile(filepath.Join(blobDir, "skills", "go-table-tests", "assets", "logo.png")); err != nil || !bytes.Equal(got, blob) {
 		t.Errorf("the picture %v %v", got, err)
+	}
+	// A tool built for the machine runs when the skill says it does; the
+	// picture, not.
+	withTool := testSkillSet("0123456789abcded")
+	withTool.Skills[0].Blobs = map[string][]byte{"bin/tool": {0x7f, 'E', 'L', 'F', 2, 1, 1, 0}, "assets/logo.png": blob}
+	withTool.Skills[0].Executable = []string{"bin/tool"}
+	toolDir, err := WriteSkills(t.TempDir(), withTool, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rel, want := range map[string]fs.FileMode{"bin/tool": 0o755, "assets/logo.png": 0o644, "scripts/run.sh": 0o755} {
+		if info, err := os.Stat(filepath.Join(toolDir, "skills", "go-table-tests", filepath.FromSlash(rel))); err != nil || info.Mode().Perm() != want {
+			t.Errorf("%s: %v %v, want %v", rel, info.Mode(), err, want)
+		}
 	}
 	// The same set again is not written again.
 	os.WriteFile(filepath.Join(dir, "marker"), []byte("x"), 0o644)

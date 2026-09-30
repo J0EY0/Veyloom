@@ -74,7 +74,7 @@ func (m *TurnManager) skillsOf(b *wiki.Bundle, runtimeName string, keep func(str
 			m.logger.Warn("project a skill", "skill", name, "err", err)
 			continue
 		}
-		skill := runtime.Skill{Name: name, Files: map[string]string{}}
+		skill := runtime.Skill{Name: name, Files: map[string]string{}, Executable: projected.Executable}
 		for p, data := range projected.Files {
 			if utf8.Valid(data) {
 				skill.Files[p] = string(data)
@@ -91,7 +91,8 @@ func (m *TurnManager) skillsOf(b *wiki.Bundle, runtimeName string, keep func(str
 }
 
 // skillHash names a set by what it gives, which skill as which, each
-// file and what is in it, so a machine that wrote it before need not again.
+// file, what is in it and whether it runs, so a machine that wrote it
+// before need not again.
 func skillHash(skills []runtime.Skill) string {
 	hash := sha256.New()
 	write := func(parts ...string) {
@@ -109,6 +110,9 @@ func skillHash(skills []runtime.Skill) string {
 		}
 		for _, p := range slices.Sorted(maps.Keys(s.Blobs)) {
 			write(scope+" blob", s.Name, p, string(s.Blobs[p]))
+		}
+		for _, p := range slices.Sorted(slices.Values(s.Executable)) {
+			write(scope+" executable", s.Name, p)
 		}
 	}
 	return hex.EncodeToString(hash.Sum(nil))[:16]

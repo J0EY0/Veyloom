@@ -3,6 +3,7 @@ package wiki
 import (
 	"context"
 	"fmt"
+	"io/fs"
 	"os"
 	"path"
 	"slices"
@@ -409,26 +410,32 @@ func (w *Writer) save(p string, d *okf.Document, own bool, note func(*change)) (
 
 // PutFile writes a file of a skill's folder that is not a page: a script,
 // a template, whatever the skill's instructions point at (design.md 5.9:
-// they go in as they are), an index.md or log.md of the skill's own among
-// them. Pages go through PutPage, Create and Put. Hidden files and ones
-// too big for a runtime to read are refused.
-func (w *Writer) PutFile(p string, data []byte) error {
+// they go in as they are), an index.md or log.md of the skill's own and a
+// hidden markdown file among them. Pages go through PutPage, Create and
+// Put. What SkillLeavesOut names, and files too big for a runtime to read,
+// are refused. An executable file, a tool the skill runs, stays one: in the
+// folder, and so in the library's history.
+func (w *Writer) PutFile(p string, data []byte, executable bool) error {
 	p = path.Clean("/" + p)
 	name := SkillOfFile(p)
 	switch {
 	case name == "" || !slug.MatchString(name) || len(name) > 64:
 		return fmt.Errorf("%w: %s is in no skill's folder", store.ErrInvalidInput, p)
-	case path.Ext(p) == ".md" && !isReserved(p):
+	case path.Ext(p) == ".md" && !isReserved(p) && !HiddenPath(p):
 		return fmt.Errorf("%w: %s is a page: write it as one", store.ErrInvalidInput, p)
-	case strings.Contains(p, "/."):
-		return fmt.Errorf("%w: %s has a hidden part", store.ErrInvalidInput, p)
+	case slices.ContainsFunc(strings.Split(p, "/"), SkillLeavesOut):
+		return fmt.Errorf("%w: %s is left out of a skill", store.ErrInvalidInput, p)
 	case len(data) > MaxSkillFile:
 		return fmt.Errorf("%w: %s is %s MB; a skill's file should stay under %s MB", store.ErrInvalidInput, p, MB(int64(len(data))), MB(MaxSkillFile))
 	}
 	w.b.mu.Lock()
 	defer w.b.mu.Unlock()
 	w.touch(p)
-	return writeFile(w.b.file(p), data)
+	mode := fs.FileMode(0o644)
+	if executable {
+		mode = 0o755
+	}
+	return writeFileMode(w.b.file(p), data, mode)
 }
 
 // PutPage writes a page of a skill's folder as the bytes given, a file of

@@ -297,6 +297,22 @@ func TestCodexSmoke_SkillFilesAsWritten(t *testing.T) {
 	r.asWrittenRound(1, "")
 }
 
+// TestPiSmoke_SkillFilesAsWritten is
+// TestClaudeRealSmoke_SkillFilesAsWritten on Pi.
+func TestPiSmoke_SkillFilesAsWritten(t *testing.T) {
+	if os.Getenv("VEYLOOM_PI_SMOKE") != "1" {
+		t.Skip("set VEYLOOM_PI_SMOKE=1 to run against the real pi CLI")
+	}
+	if _, err := exec.LookPath("pi"); err != nil {
+		t.Skipf("pi is not installed: %v", err)
+	}
+	r := newSmokeRoom(t, wikiSmokeRunners(t), store.NewAgent{
+		Name: "Pi skills", Runtime: "pi", PermissionPreset: store.PermissionReadOnly,
+		RoleCard: "Answer in as few words as you can.",
+	}, t.TempDir())
+	r.asWrittenRound(1, "")
+}
+
 // asWrittenRound imports a skill whose word comes from FORMS.md, named in
 // SKILL.md's text, and from the frontmatter of templates/Agent_Form.md,
 // installs it for the member and, as turn n, asks for the word.

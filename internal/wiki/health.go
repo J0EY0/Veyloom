@@ -34,6 +34,17 @@ type Health struct {
 	// while neither links to or otherwise bears on the other (design.md
 	// 5.17): the one may well bear on the other.
 	Unlinked []UnlinkedPair
+	// Uncovered are paths of the repository several current pages name
+	// that no current Module page names, nor a directory they are in: what
+	// the wiki keeps talking of without a page of its own, as the concepts
+	// an LLM Wiki's lint finds lacking one (design.md 5.12).
+	Uncovered []NamedPath
+}
+
+// NamedPath is a path of the repository and how many pages name it.
+type NamedPath struct {
+	Path  string
+	Pages int
 }
 
 // UnlinkedPair is two pages naming the same path, neither leading to the
@@ -50,6 +61,10 @@ const (
 	// unlinkedCommon is how many pages may name a path for its pairs to
 	// count: a path many pages name says little of any two of them.
 	unlinkedCommon = 5
+	// uncoveredPages is how many pages name a path that wants a page.
+	uncoveredPages = 3
+	// uncoveredMax caps the paths listed.
+	uncoveredMax = 10
 )
 
 // BrokenLink is a link from a page to one that is not there.
@@ -60,7 +75,8 @@ type BrokenLink struct {
 // Empty reports whether the check found nothing, with budget the most the
 // resident pages may come to.
 func (h Health) Empty(budget int) bool {
-	return len(h.Orphans) == 0 && len(h.Broken) == 0 && len(h.Stale) == 0 && len(h.Problems) == 0 && len(h.Unlinked) == 0 && h.ResidentChars <= budget
+	return len(h.Orphans) == 0 && len(h.Broken) == 0 && len(h.Stale) == 0 && len(h.Problems) == 0 && len(h.Unlinked) == 0 && len(h.Uncovered) == 0 &&
+		h.ResidentChars <= budget
 }
 
 // Health checks the bundle as it is.
@@ -84,7 +100,9 @@ func (b *Bundle) Health(now time.Time) Health {
 		}
 	}
 	b.mu.RUnlock()
-	h.Unlinked = unlinkedPairs(b.Graph())
+	g := b.Graph()
+	h.Unlinked = unlinkedPairs(g)
+	h.Uncovered = uncoveredPaths(g)
 	for _, p := range b.Resident() {
 		h.ResidentChars += utf8.RuneCountInString(p.ResidentText())
 	}
@@ -144,4 +162,49 @@ func unlinkedPairs(g Graph) []UnlinkedPair {
 		}
 	}
 	return out[:min(len(out), unlinkedMax)]
+}
+
+// uncoveredPaths finds the paths of the repository, written with a
+// directory, that uncoveredPages current pages or more name and no current
+// Module page covers, naming the path or a directory it is in: the most
+// named first, the first uncoveredMax. A file named alone, go.mod say,
+// is the repository's, no module's.
+func uncoveredPaths(g Graph) []NamedPath {
+	typeOf := map[string]string{}
+	for _, p := range g.Pages {
+		if p.Status != okf.Deprecated {
+			typeOf[p.Path] = p.Type
+		}
+	}
+	files := make(map[string]File, len(g.Files))
+	for _, f := range g.Files {
+		files[f.Path] = f
+	}
+	module := func(p string) bool { return typeOf[p] == ModuleType }
+	covered := func(f File) bool {
+		for seen := map[string]bool{}; !seen[f.Path]; f = files[f.In] {
+			seen[f.Path] = true
+			if slices.ContainsFunc(f.Pages, module) {
+				return true
+			}
+			if f.In == "" {
+				return false
+			}
+		}
+		return false
+	}
+	var out []NamedPath
+	for _, f := range g.Files {
+		n := 0
+		for _, p := range f.Pages {
+			if _, ok := typeOf[p]; ok {
+				n++
+			}
+		}
+		if n >= uncoveredPages && strings.Contains(f.Path, "/") && !covered(f) {
+			out = append(out, NamedPath{Path: f.Path, Pages: n})
+		}
+	}
+	slices.SortStableFunc(out, func(x, y NamedPath) int { return y.Pages - x.Pages })
+	return out[:min(len(out), uncoveredMax)]
 }

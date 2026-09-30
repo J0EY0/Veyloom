@@ -24,7 +24,7 @@ const day = 24 * time.Hour
 var reviewEvery = map[string]time.Duration{
 	"Decision":   180 * day,
 	"Convention": 180 * day,
-	"Module":     90 * day,
+	ModuleType:   90 * day,
 	"Fact":       60 * day,
 	"Pitfall":    30 * day,
 }

@@ -101,3 +101,18 @@ func TestUpkeepHealthPart_Unlinked(t *testing.T) {
 		t.Errorf("steps:\n%s", steps.sb.String())
 	}
 }
+
+// It names the paths several pages name that want a Module page, with how
+// many name each, and says when to write one.
+func TestUpkeepHealthPart_Uncovered(t *testing.T) {
+	w := &briefWriter{}
+	upkeepHealthPart(w, wiki.Health{Uncovered: []wiki.NamedPath{{Path: "internal/hub/brief.go", Pages: 4}, {Path: "web/src/api", Pages: 3}}}, 4000)
+	if got := w.sb.String(); !strings.Contains(got, "- Paths of the repository several pages name that no Module page covers: internal/hub/brief.go (4 pages), web/src/api (3 pages)\n") {
+		t.Errorf("health:\n%s", got)
+	}
+	var steps briefWriter
+	upkeepSteps(&steps, &upkeep{}, store.DefaultMemoryPrefs, upkeepFound{unhealthy: true})
+	if !strings.Contains(steps.sb.String(), "Where several pages name a path no Module page covers, write one under /modules/") {
+		t.Errorf("steps:\n%s", steps.sb.String())
+	}
+}

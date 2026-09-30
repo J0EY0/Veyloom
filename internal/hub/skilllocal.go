@@ -218,7 +218,11 @@ func (h *Hub) localSkill(r wikiRef, dirName, folder, where string, data []byte) 
 	default:
 		// Its files, as many and as big as a turn can carry.
 		var p *store.Problem
-		if files, err = importFilesOf(folder); errors.As(err, &p) {
+		if files, err = importFilesOf(folder); err == nil {
+			// And nothing in them that looks like a secret.
+			err = secretIn(r.bundle, folder, files)
+		}
+		if errors.As(err, &p) {
 			s.Problem, s.ProblemParams = p.Code, p.Params
 		} else if err != nil {
 			s.Problem = "skillUnreadable"

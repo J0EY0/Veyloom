@@ -124,8 +124,8 @@ func (l *uploadLayout) tooMuch() error {
 }
 
 // write lays out one file at rel under root, counting its bytes as they
-// come, not as a header claims.
-func (l *uploadLayout) write(root, rel string, r io.Reader) error {
+// come, not as a header claims; executable, it runs there too.
+func (l *uploadLayout) write(root, rel string, r io.Reader, executable bool) error {
 	if l.files++; l.files > MaxUploadFiles {
 		return l.tooMuch()
 	}
@@ -133,7 +133,11 @@ func (l *uploadLayout) write(root, rel string, r io.Reader) error {
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
 		return err
 	}
-	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o644)
+	mode := fs.FileMode(0o644)
+	if executable {
+		mode = 0o755
+	}
+	f, err := os.OpenFile(p, os.O_CREATE|os.O_EXCL|os.O_WRONLY, mode)
 	if err != nil {
 		return store.Invalid("uploadBadPath", store.Params{"path": rel}, "%s comes twice in the upload", rel)
 	}
@@ -150,9 +154,9 @@ func (l *uploadLayout) write(root, rel string, r io.Reader) error {
 	return nil
 }
 
-// unzip lays out a zip file under root: its files, not its links; a path
-// leaving the folder refuses it all. The folders a Mac adds to a zip it
-// makes are left out.
+// unzip lays out a zip file under root: its files, those made to run as
+// such, not its links; a path leaving the folder refuses it all. The
+// folders a Mac adds to a zip it makes are left out.
 func (l *uploadLayout) unzip(root string, r io.ReaderAt, size int64) error {
 	archive, err := zip.NewReader(r, size)
 	if err != nil {
@@ -173,7 +177,7 @@ func (l *uploadLayout) unzip(root string, r io.ReaderAt, size int64) error {
 		if err != nil {
 			return store.Invalid("uploadNotZip", nil, "%s does not read: %v", f.Name, err)
 		}
-		err = l.write(root, name, rc)
+		err = l.write(root, name, rc, f.Mode()&0o111 != 0)
 		rc.Close()
 		if err != nil {
 			return err
@@ -182,7 +186,9 @@ func (l *uploadLayout) unzip(root string, r io.ReaderAt, size int64) error {
 	return nil
 }
 
-// folder lays out the files of a folder under root, by their paths.
+// folder lays out the files of a folder under root, by their paths. A
+// browser tells nothing of which of them run: scripts opening with #! do
+// anyway (wiki.Bundle.ProjectSkill), a built tool needs a zip.
 func (l *uploadLayout) folder(root string, files []UploadFile) error {
 	if len(files) == 0 {
 		return store.Invalid("uploadNoSkill", nil, "the upload holds no files")
@@ -195,7 +201,7 @@ func (l *uploadLayout) folder(root string, files []UploadFile) error {
 		if err != nil {
 			return err
 		}
-		err = l.write(root, f.Path, rc)
+		err = l.write(root, f.Path, rc, false)
 		rc.Close()
 		if err != nil {
 			return err

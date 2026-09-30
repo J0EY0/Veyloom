@@ -249,7 +249,10 @@ func (b *Bundle) Problems() []okf.Problem {
 }
 
 // writeFile replaces a file in one step, so a reader never sees half of it.
-func writeFile(fp string, data []byte) error {
+func writeFile(fp string, data []byte) error { return writeFileMode(fp, data, 0o644) }
+
+// writeFileMode is writeFile giving the file mode.
+func writeFileMode(fp string, data []byte, mode fs.FileMode) error {
 	if err := os.MkdirAll(filepath.Dir(fp), 0o755); err != nil {
 		return err
 	}
@@ -266,7 +269,7 @@ func writeFile(fp string, data []byte) error {
 		os.Remove(tmp.Name())
 		return err
 	}
-	if err := os.Chmod(tmp.Name(), 0o644); err != nil {
+	if err := os.Chmod(tmp.Name(), mode); err != nil {
 		os.Remove(tmp.Name())
 		return err
 	}

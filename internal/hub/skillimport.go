@@ -1,11 +1,13 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path"
 	"path/filepath"
@@ -13,6 +15,7 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/J0EY0/veyloom/internal/store"
 	"github.com/J0EY0/veyloom/internal/wiki"
@@ -127,6 +130,9 @@ func (h *Hub) importSkill(ctx context.Context, folder, from, team, userID string
 	if _, err := r.bundle.Page(target); err == nil {
 		return WikiPageView{}, store.Conflicting("skillExists", store.Params{"name": src.name}, "the skill library has a skill %s already", src.name)
 	}
+	if err := secretIn(r.bundle, src.root, src.files); err != nil {
+		return WikiPageView{}, err
+	}
 	if team != "" {
 		project, err := h.store.GetProject(ctx, team)
 		if err != nil {
@@ -195,6 +201,9 @@ func (h *Hub) UpdateSkill(ctx context.Context, folder, userID string) (WikiPageV
 	if r.bundle.SkillBusy(src.name) {
 		return WikiPageView{}, store.Conflicting("skillBusy", store.Params{"name": src.name}, "a turn is changing the skill %s right now; update it when the turn ends", src.name)
 	}
+	if err := secretIn(r.bundle, src.root, src.files); err != nil {
+		return WikiPageView{}, err
+	}
 	if team := page.Doc.Metadata()[wiki.TeamKey]; team != "" {
 		src.doc.SetMetadata(wiki.TeamKey, team)
 	} else {
@@ -250,17 +259,74 @@ func (h *Hub) UpdateSkill(ctx context.Context, folder, userID string) (WikiPageV
 	return h.LibraryPage(ctx, target)
 }
 
+// secretIn looks through what a skill's folder holds for what looks like
+// a secret, as the library's writes screen its pages: its SKILL.md and
+// every file of text, scripts among them, for a skill goes to other
+// projects' agents and out as a zip. The first one found refuses the
+// skill, saying which file and line.
+func secretIn(b *wiki.Bundle, root string, files []string) error {
+	for _, rel := range append([]string{okf.SkillFile}, files...) {
+		text, ok := textFile(filepath.Join(root, filepath.FromSlash(rel)))
+		if !ok {
+			continue
+		}
+		if found := b.SecretsIn(text); len(found) > 0 {
+			f := found[0]
+			return store.Invalid("skillSecret", store.Params{"path": rel, "line": strconv.Itoa(f.Line), "rule": f.Rule},
+				"%s looks like it holds a secret on line %d (%s): take it out and import again", rel, f.Line, f.Rule)
+		}
+	}
+	return nil
+}
+
+// textFile reads a file that is text, UTF-8 with no NUL; what starts as
+// anything else, a font or an archive, is not read on.
+func textFile(fp string) (string, bool) {
+	f, err := os.Open(fp)
+	if err != nil {
+		return "", false
+	}
+	defer f.Close()
+	head := make([]byte, 8<<10)
+	n, _ := io.ReadFull(f, head)
+	head = head[:n]
+	if bytes.IndexByte(head, 0) >= 0 || !validPrefix(head) {
+		return "", false
+	}
+	rest, err := io.ReadAll(f)
+	if err != nil {
+		return "", false
+	}
+	data := append(head, rest...)
+	if !utf8.Valid(data) {
+		return "", false
+	}
+	return string(data), true
+}
+
+// validPrefix reports whether b is UTF-8, but for a character cut short
+// at its end where a read of a longer file stopped.
+func validPrefix(b []byte) bool {
+	for cut := 0; cut < utf8.UTFMax && cut <= len(b); cut++ {
+		if utf8.Valid(b[:len(b)-cut]) {
+			return true
+		}
+	}
+	return false
+}
+
 // putSkillFiles writes the files of a skill's folder into the library as
 // they are, markdown with a type put in front where it has none.
 func putSkillFiles(w *wiki.Writer, src skillSource) error {
 	dir := path.Dir(wiki.SkillPath(src.name))
 	for _, f := range src.files {
-		data, err := os.ReadFile(filepath.Join(src.root, filepath.FromSlash(f)))
+		fp := filepath.Join(src.root, filepath.FromSlash(f))
+		data, err := os.ReadFile(fp)
 		if err != nil {
 			return err
 		}
-		if base := path.Base(f); path.Ext(f) != ".md" || base == okf.IndexFile || base == okf.LogFile {
-			if err := w.PutFile(dir+"/"+f, data); err != nil {
+		if base := path.Base(f); path.Ext(f) != ".md" || base == okf.IndexFile || base == okf.LogFile || wiki.HiddenPath(f) {
+			if err := w.PutFile(dir+"/"+f, data, executable(fp)); err != nil {
 				return err
 			}
 			continue
@@ -282,14 +348,19 @@ func (src skillSource) trailers() ([]wiki.Trailer, error) {
 }
 
 // skillFolderHash sums up what a skill's folder holds, its SKILL.md and
-// the files an import takes, by path and content, for telling whether it
-// changed.
+// the files an import takes, by path, content and whether they run, for
+// telling whether it changed. A folder with nothing to run sums up as it
+// did before the library kept that.
 func skillFolderHash(root string, files []string) (string, error) {
 	sum := sha256.New()
 	for _, rel := range append([]string{okf.SkillFile}, files...) {
-		data, err := os.ReadFile(filepath.Join(root, filepath.FromSlash(rel)))
+		fp := filepath.Join(root, filepath.FromSlash(rel))
+		data, err := os.ReadFile(fp)
 		if err != nil {
 			return "", err
+		}
+		if executable(fp) {
+			sum.Write([]byte("x\x00"))
 		}
 		fmt.Fprintf(sum, "%s\x00%d\x00", rel, len(data))
 		sum.Write(data)
@@ -297,11 +368,19 @@ func skillFolderHash(root string, files []string) (string, error) {
 	return hex.EncodeToString(sum.Sum(nil))[:16], nil
 }
 
+// executable reports whether the file at fp, or the one a link there
+// leads to, runs as it is.
+func executable(fp string) bool {
+	info, err := os.Stat(fp)
+	return err == nil && info.Mode()&0o111 != 0
+}
+
 // importFilesOf lists the files of a skill's folder besides its SKILL.md,
 // by their path in it. Links are followed, to files and to folders, as a
-// runtime reading the skill would, but not round in a circle; hidden files
-// stay behind; too many, one too big, or too much in all for a turn to
-// carry (wiki.MaxSkillFile and its likes) refuse the import.
+// runtime reading the skill would, but not round in a circle; what
+// wiki.SkillLeavesOut names stays behind; too many, one too big, or too
+// much in all for a turn to carry (wiki.MaxSkillFile and its likes) refuse
+// the import.
 func importFilesOf(folder string) ([]string, error) {
 	var files []string
 	var total int64
@@ -323,7 +402,7 @@ func importFilesOf(folder string) ([]string, error) {
 			return err
 		}
 		for _, e := range entries {
-			if strings.HasPrefix(e.Name(), ".") {
+			if wiki.SkillLeavesOut(e.Name()) {
 				continue
 			}
 			fp, r := filepath.Join(dir, e.Name()), path.Join(rel, e.Name())

@@ -1,6 +1,7 @@
 package wiki
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -36,6 +37,43 @@ const ReferenceType = "Reference"
 // RuntimeTagPrefix starts a tag that keeps a skill for one runtime:
 // runtime-claude, runtime-codex, runtime-pi. A skill with none is for all.
 const RuntimeTagPrefix = "runtime-"
+
+// SkillLeavesOut reports whether a file or folder of a skill, by its
+// name, stays out of the library and away from the runtimes (docs/
+// design.md 5.11): what version control keeps for itself, .git and the
+// .gitignore, .gitattributes and .gitmodules that would change how the
+// library's own history keeps the skill; what an operating system leaves
+// behind; the environments and caches tools leave in a folder they ran
+// in, .venv or .pytest_cache; and an environment file, which may hold real
+// secrets, though not an .env.example. A skill's other hidden files, its
+// settings and templates, come along.
+func SkillLeavesOut(name string) bool {
+	switch name {
+	case ".git", ".gitignore", ".gitattributes", ".gitmodules", ".hg", ".svn",
+		".DS_Store", "Thumbs.db", "__MACOSX",
+		".venv", ".tox", ".nox", ".cache", ".ipynb_checkpoints", ".eslintcache",
+		".env":
+		return true
+	}
+	if strings.HasPrefix(name, ".") && (strings.HasSuffix(name, "_cache") || strings.HasSuffix(name, "-cache")) {
+		return true
+	}
+	if kind, ok := strings.CutPrefix(name, ".env."); ok {
+		return kind != "example" && kind != "sample" && kind != "template"
+	}
+	return false
+}
+
+// HiddenPath reports whether p, a path in a skill's folder, has a hidden
+// part: such a file is kept as it is, never as a page of the library.
+func HiddenPath(p string) bool {
+	for _, part := range strings.Split(p, "/") {
+		if strings.HasPrefix(part, ".") && part != "." && part != ".." {
+			return true
+		}
+	}
+	return false
+}
 
 // SkillPath is where the page of the skill called name is.
 func SkillPath(name string) string { return "/skills/" + name + "/" + okf.SkillFile }
@@ -108,10 +146,12 @@ const (
 func MB(n int64) string { return strconv.FormatFloat(float64(n)/(1<<20), 'f', 1, 64) }
 
 // ProjectedSkill is a skill as a runtime loads it: files by their path in
-// the skill's directory, SKILL.md among them.
+// the skill's directory, SKILL.md among them, and which of them run as
+// they are.
 type ProjectedSkill struct {
-	Name  string
-	Files map[string][]byte
+	Name       string
+	Files      map[string][]byte
+	Executable []string
 }
 
 // ProjectSkill reads a skill as Agent Skills has it, for a runtime to load
@@ -122,8 +162,10 @@ type ProjectedSkill struct {
 // the stamps of who changed them since (okf.WithoutType). Links into the
 // folder written from the library's root, as an agent improving the skill
 // may write them, lead there from where each file is; the others stay as
-// written. Other files come as they are. Hidden files, and files too big to
-// be meant for reading, stay behind.
+// written. Other files come as they are, those the library keeps
+// executable, and scripts opening with #! that came in without the bit,
+// named executable. What SkillLeavesOut names, and files too big to be
+// meant for reading, stay behind.
 func (b *Bundle) ProjectSkill(name string) (ProjectedSkill, error) {
 	page, err := b.Page(SkillPath(name))
 	if err != nil {
@@ -144,7 +186,7 @@ func (b *Bundle) ProjectSkill(name string) (ProjectedSkill, error) {
 		if err != nil {
 			return err
 		}
-		if fp != dir && strings.HasPrefix(d.Name(), ".") {
+		if fp != dir && SkillLeavesOut(d.Name()) {
 			if d.IsDir() {
 				return filepath.SkipDir
 			}
@@ -172,7 +214,10 @@ func (b *Bundle) ProjectSkill(name string) (ProjectedSkill, error) {
 		if err != nil {
 			return err
 		}
-		if p := path.Dir(page.Path) + "/" + rel; path.Ext(rel) == ".md" && !isReserved(p) {
+		if info.Mode()&0o111 != 0 || bytes.HasPrefix(data, []byte("#!")) {
+			out.Executable = append(out.Executable, rel)
+		}
+		if p := path.Dir(page.Path) + "/" + rel; path.Ext(rel) == ".md" && !isReserved(p) && !HiddenPath(rel) {
 			data = []byte(inSkillLinks(p, string(okf.WithoutType(data, ReferenceType))))
 		}
 		out.Files[rel] = data

@@ -47,6 +47,11 @@ func TestHub_LocalSkills(t *testing.T) {
 		".pi/agent/skills/quiet/SKILL.md":       "---\nname: quiet\n---\nx\n",
 		".pi/agent/skills/notes-only/README.md": "no skill here",
 	})
+	// One holds what looks like a secret.
+	writeTree(t, home, map[string]string{
+		".codex/skills/leaky/SKILL.md":          "---\nname: leaky\ndescription: Use when deploying.\n---\nx\n",
+		".codex/skills/leaky/scripts/deploy.sh": "#!/bin/sh\n\nexport TOKEN=ghp_q7Hc9ZkP2xV8mN4tR6wY1bL3dF5gJ0sA2eU7\n",
+	})
 	// One holds a file too big for a turn to carry.
 	writeTree(t, home, map[string]string{".agents/skills/heavy/SKILL.md": "---\nname: heavy\ndescription: Use for heavy work.\n---\nx\n"})
 	sparseFile(t, filepath.Join(home, ".agents", "skills", "heavy", "data.bin"), wiki.MaxSkillFile+1)
@@ -79,6 +84,7 @@ func TestHub_LocalSkills(t *testing.T) {
 		"pdf|~/.claude/skills|Use when a task reads or fills in PDFs.|false|",
 		"heavy|~/.agents/skills|Use for heavy work.|false|skillFileTooBig",
 		"Bad_Name|~/.codex/skills|Use it.|false|skillBadName",
+		"leaky|~/.codex/skills|Use when deploying.|false|skillSecret",
 		"quiet|~/.pi/agent/skills||false|skillNoDescription",
 		"deploy|Acme · .agents/skills|Use when shipping Acme.|true|",
 	}
@@ -90,6 +96,9 @@ func TestHub_LocalSkills(t *testing.T) {
 	}
 	if p := skills[1].ProblemParams; p["path"] != "data.bin" || p["max"] != wiki.MB(wiki.MaxSkillFile) {
 		t.Errorf("why, with the import's params: %v", p)
+	}
+	if p := skills[3].ProblemParams; p["path"] != "scripts/deploy.sh" || p["line"] != "3" || p["rule"] != "github-token" {
+		t.Errorf("which file and line: %v", p)
 	}
 }
 

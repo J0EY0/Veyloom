@@ -49,8 +49,9 @@ func TestCleanPath(t *testing.T) {
 func TestScanner(t *testing.T) {
 	text := "line one\n" +
 		"aws AKIAABCDEFGHIJKLMNOP\n" +
-		"key sk-ant-api03-" + strings.Repeat("x", 30) + "\n" +
+		"key sk-ant-api03-q7Hc9ZkP2xV8mN4tR6wY1bL3dF5g\n" +
 		"-----BEGIN OPENSSH PRIVATE KEY-----\n" +
+		"b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW\n" +
 		"harmless: sk-dummy, AKIA-not-a-key, the word token\n"
 	found := DefaultScanner().Scan(text)
 	var got []string
@@ -59,6 +60,14 @@ func TestScanner(t *testing.T) {
 	}
 	if strings.Join(got, " ") != "private-key:4 aws-access-key:2 anthropic-key:3" {
 		t.Errorf("found %v", got)
+	}
+	// What only stands in for a secret, the way documentation shows one.
+	examples := "AWS's own: AKIAIOSFODNN7EXAMPLE\n" +
+		"export ANTHROPIC_API_KEY=sk-ant-api03-" + strings.Repeat("x", 30) + "\n" +
+		"token: ghp_" + strings.Repeat("0", 36) + "\n" +
+		"-----BEGIN RSA PRIVATE KEY-----\n...\n-----END RSA PRIVATE KEY-----\n"
+	if f := DefaultScanner().Scan(examples); len(f) != 0 {
+		t.Errorf("examples are no secrets: %v", f)
 	}
 	custom, err := DefaultScanner().With("internal-host", `\bcorp\.internal\b`)
 	if err != nil {

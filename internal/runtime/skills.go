@@ -71,6 +71,9 @@ type Skill struct {
 	// among them; Blobs the rest, fonts, images, archives, as they are.
 	Files map[string]string `json:"files,omitempty"`
 	Blobs map[string][]byte `json:"blobs,omitempty"`
+	// Executable names those of them that run as they are: tools built
+	// for the machine, scripts. One opening with #! runs anyway.
+	Executable []string `json:"executable,omitempty"`
 }
 
 // keptSkillSets is how many sets a machine keeps written: the one a turn
@@ -115,6 +118,7 @@ func WriteSkills(root string, set *SkillSet, taken map[string]bool) (string, err
 		"version":     "1.0.0",
 	}, "", "  ")
 	files := map[string][]byte{".claude-plugin/plugin.json": append(manifest, '\n')}
+	executable := map[string]bool{}
 	for _, s := range set.Skills {
 		if !isSkillName(s.Name) {
 			return "", fmt.Errorf("skills: %q is no skill name", s.Name)
@@ -141,6 +145,9 @@ func WriteSkills(root string, set *SkillSet, taken map[string]bool) (string, err
 			}
 			files["skills/"+name+"/"+rel] = content
 		}
+		for _, rel := range s.Executable {
+			executable["skills/"+name+"/"+rel] = true
+		}
 	}
 	for rel, content := range files {
 		path := filepath.Join(tmp, filepath.FromSlash(rel))
@@ -148,7 +155,7 @@ func WriteSkills(root string, set *SkillSet, taken map[string]bool) (string, err
 			return "", err
 		}
 		mode := fs.FileMode(0o644)
-		if bytes.HasPrefix(content, []byte("#!")) {
+		if executable[rel] || bytes.HasPrefix(content, []byte("#!")) {
 			mode = 0o755
 		}
 		if err := os.WriteFile(path, content, mode); err != nil {

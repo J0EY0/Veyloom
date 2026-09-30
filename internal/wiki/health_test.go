@@ -107,3 +107,29 @@ func TestBundle_HealthUnlinked(t *testing.T) {
 		t.Error("pages to link are something to set right")
 	}
 }
+
+// Paths several pages name that no Module page covers are found, the most
+// named first: not one a module names, or a directory of, nor one named
+// by too few, by a page no longer current, or alone without a directory.
+func TestBundle_HealthUncovered(t *testing.T) {
+	b := openTest(t, Options{Layout: ProjectLayout})
+	w := writer(t, b, "codex/default")
+	graphPage(t, w, "/decisions/brief.md", "Decision", "Brief", "The brief is put together in internal/hub/brief.go, from `go.mod` up.")
+	graphPage(t, w, "/pitfalls/brief.md", "Pitfall", "Brief pitfall", "Mind hub/brief.go when the room is empty; `go.mod` pins the SDK.")
+	graphPage(t, w, "/facts/brief.md", "Fact", "Brief size", "internal/hub/brief.go caps the brief at 4000 characters. See `go.mod`.")
+	graphPage(t, w, "/facts/store.md", "Fact", "Store", "internal/store/turns.go and web/src/api/wiki.ts keep turns; internal/hub/brief.go reads them.")
+	graphPage(t, w, "/decisions/api.md", "Decision", "API", "web/src/api/wiki.ts calls the hub; so does web/src/api/rooms.ts. internal/store/turns.go too.")
+	graphPage(t, w, "/pitfalls/api.md", "Pitfall", "API pitfall", "web/src/api/wiki.ts retries once.")
+	graphPage(t, w, "/modules/web-api.md", "Module", "Web API", "web/src/api/ holds the calls to the hub.")
+	graphPage(t, w, "/decisions/old-store.md", "Decision", "Old store", "internal/store/turns.go was once one file.")
+	if _, err := w.Deprecate("/decisions/old-store.md", "/facts/store.md", "split since"); err != nil {
+		t.Fatal(err)
+	}
+	h := b.Health(time.Now())
+	if want := []NamedPath{{Path: "internal/hub/brief.go", Pages: 4}}; !slices.Equal(h.Uncovered, want) {
+		t.Errorf("uncovered %+v, want %+v", h.Uncovered, want)
+	}
+	if h.Empty(4000) {
+		t.Error("a path wanting a page is something to set right")
+	}
+}

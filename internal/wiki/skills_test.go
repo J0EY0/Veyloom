@@ -93,7 +93,14 @@ func TestProjectSkill(t *testing.T) {
 	dir := filepath.Join(b.Dir(), "skills", "go-table-tests")
 	os.MkdirAll(filepath.Join(dir, "scripts"), 0o755)
 	os.WriteFile(filepath.Join(dir, "scripts", "run.sh"), []byte("#!/bin/sh\ngo test ./...\n"), 0o755)
-	os.WriteFile(filepath.Join(dir, ".secret"), []byte("hidden"), 0o644)
+	// A skill's own hidden files come along; an environment file and what
+	// version control and the operating system keep do not.
+	os.WriteFile(filepath.Join(dir, ".eslintrc.json"), []byte("{}"), 0o644)
+	os.MkdirAll(filepath.Join(dir, ".github"), 0o755)
+	os.WriteFile(filepath.Join(dir, ".github", "TEMPLATE.md"), []byte("# Template\n"), 0o644)
+	for _, name := range []string{".env", ".DS_Store", ".gitignore"} {
+		os.WriteFile(filepath.Join(dir, name), []byte("hidden"), 0o644)
+	}
 	sparse(t, filepath.Join(dir, "huge.bin"), MaxSkillFile+1)
 
 	got, err := b.ProjectSkill("go-table-tests")
@@ -105,8 +112,11 @@ func TestProjectSkill(t *testing.T) {
 		files = append(files, f)
 	}
 	slices.Sort(files)
-	if !slices.Equal(files, []string{"SKILL.md", "scripts/run.sh"}) {
+	if !slices.Equal(files, []string{".eslintrc.json", ".github/TEMPLATE.md", "SKILL.md", "scripts/run.sh"}) {
 		t.Errorf("files %v", files)
+	}
+	if string(got.Files[".github/TEMPLATE.md"]) != "# Template\n" {
+		t.Errorf("a hidden markdown file as it is: %q", got.Files[".github/TEMPLATE.md"])
 	}
 	main := string(got.Files["SKILL.md"])
 	// Only what Agent Skills knows: the runtime's file is to its spec.
@@ -192,7 +202,7 @@ func TestProjectSkill_FilesAsTheyWere(t *testing.T) {
 			t.Fatalf("%s: %v", rel, err)
 		}
 	}
-	if err := w.PutFile("/skills/pdf/references/index.md", []byte("---\ntitle: All\n---\n# All\n")); err != nil {
+	if err := w.PutFile("/skills/pdf/references/index.md", []byte("---\ntitle: All\n---\n# All\n"), false); err != nil {
 		t.Fatal(err)
 	}
 	files["references/index.md"] = "---\ntitle: All\n---\n# All\n"
@@ -279,6 +289,23 @@ func TestSkillDiff(t *testing.T) {
 	}
 	if _, err := b.SkillDiff(ctx, "../x", first, second); !errors.Is(err, store.ErrInvalidInput) {
 		t.Errorf("no skill name: %v", err)
+	}
+}
+
+func TestSkillLeavesOut(t *testing.T) {
+	for name, want := range map[string]bool{
+		".git": true, ".gitignore": true, ".gitattributes": true, ".gitmodules": true, ".DS_Store": true, "__MACOSX": true,
+		".env": true, ".env.local": true, ".env.production": true,
+		".venv": true, ".tox": true, ".cache": true, ".pytest_cache": true, ".mypy_cache": true, ".ruff_cache": true, ".parcel-cache": true,
+		"venv": false, "_cache": false, ".vscode": false,
+		".env.example": false, ".env.sample": false, ".env.template": false, ".eslintrc": false, ".github": false, "SKILL.md": false,
+	} {
+		if got := SkillLeavesOut(name); got != want {
+			t.Errorf("%s: %v, want %v", name, got, want)
+		}
+	}
+	if !HiddenPath(".github/TEMPLATE.md") || !HiddenPath("a/.b/c.md") || HiddenPath("references/x.md") || HiddenPath("../x.md") {
+		t.Error("hidden paths")
 	}
 }
 
@@ -372,11 +399,34 @@ func TestWriter_PutFile(t *testing.T) {
 	if _, err := w.Create(SkillPath("release-notes"), d); err != nil {
 		t.Fatal(err)
 	}
-	if err := w.PutFile("/skills/release-notes/scripts/draft.sh", []byte("#!/bin/sh\necho draft\n")); err != nil {
+	if err := w.PutFile("/skills/release-notes/scripts/draft.sh", []byte("#!/bin/sh\necho draft\n"), false); err != nil {
+		t.Fatal(err)
+	}
+	// A tool built for the machine, which only its mode says runs.
+	tool := []byte{0x7f, 'E', 'L', 'F', 2, 1, 1, 0}
+	if err := w.PutFile("/skills/release-notes/bin/tool", tool, true); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.PutFile("/skills/release-notes/bin/data", tool, false); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := w.Commit(ctx, "Add release-notes"); err != nil {
 		t.Fatal(err)
+	}
+	modes := func() string {
+		out, err := b.git.run(ctx, "ls-files", "-s", "skills/release-notes/bin")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var modes []string
+		for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+			f := strings.Fields(line)
+			modes = append(modes, f[0]+" "+f[3])
+		}
+		return strings.Join(modes, ", ")
+	}
+	if got := modes(); got != "100644 skills/release-notes/bin/data, 100755 skills/release-notes/bin/tool" {
+		t.Errorf("the history keeps which runs: %s", got)
 	}
 	if got := readFile(t, b, "/skills/release-notes/scripts/draft.sh"); got != "#!/bin/sh\necho draft\n" {
 		t.Errorf("the script %q", got)
@@ -388,9 +438,29 @@ func TestWriter_PutFile(t *testing.T) {
 	if err != nil || string(skill.Files["scripts/draft.sh"]) != "#!/bin/sh\necho draft\n" {
 		t.Errorf("projected with the skill: %v %v", skill.Files, err)
 	}
-	for _, bad := range []string{"/patterns/x.sh", "/skills/release-notes/notes.md", "/skills/release-notes/.env", "/skills/Bad Name/x.sh", "/skills/release-notes"} {
-		if err := w.PutFile(bad, []byte("x")); !errors.Is(err, store.ErrInvalidInput) {
+	// The tool runs, and so does the script, which came without the bit.
+	if want := []string{"bin/tool", "scripts/draft.sh"}; !slices.Equal(skill.Executable, want) {
+		t.Errorf("executable %v, want %v", skill.Executable, want)
+	}
+	// Put again without the bit, it loses it, in the history too.
+	if err := w.PutFile("/skills/release-notes/bin/tool", tool, false); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := w.Commit(ctx, "Keep the tool from running"); err != nil {
+		t.Fatal(err)
+	}
+	if got := modes(); got != "100644 skills/release-notes/bin/data, 100644 skills/release-notes/bin/tool" {
+		t.Errorf("after: %s", got)
+	}
+	for _, bad := range []string{"/patterns/x.sh", "/skills/release-notes/notes.md", "/skills/release-notes/.env", "/skills/release-notes/.git/config",
+		"/skills/release-notes/.gitignore", "/skills/Bad Name/x.sh", "/skills/release-notes"} {
+		if err := w.PutFile(bad, []byte("x"), false); !errors.Is(err, store.ErrInvalidInput) {
 			t.Errorf("%s: %v", bad, err)
+		}
+	}
+	for _, good := range []string{"/skills/release-notes/.eslintrc", "/skills/release-notes/.github/TEMPLATE.md", "/skills/release-notes/.env.example"} {
+		if err := w.PutFile(good, []byte("x"), false); err != nil {
+			t.Errorf("%s: %v", good, err)
 		}
 	}
 }
@@ -402,7 +472,7 @@ func TestRestoreSkill(t *testing.T) {
 	if _, err := person.Create(SkillPath("release-notes"), skill("release-notes", "", "Use when writing release notes.", "Group by kind.")); err != nil {
 		t.Fatal(err)
 	}
-	if err := person.PutFile("/skills/release-notes/scripts/draft.sh", []byte("#!/bin/sh\necho v1\n")); err != nil {
+	if err := person.PutFile("/skills/release-notes/scripts/draft.sh", []byte("#!/bin/sh\necho v1\n"), true); err != nil {
 		t.Fatal(err)
 	}
 	base, err := person.Commit(ctx, "Add release-notes")
@@ -425,8 +495,8 @@ func TestRestoreSkill(t *testing.T) {
 	if _, err := agent.Create("/skills/release-notes/references/examples.md", ref); err != nil {
 		t.Fatal(err)
 	}
-	agent.PutFile("/skills/release-notes/scripts/draft.sh", []byte("#!/bin/sh\necho v2\n"))
-	agent.PutFile("/skills/release-notes/scripts/extra.sh", []byte("#!/bin/sh\n"))
+	agent.PutFile("/skills/release-notes/scripts/draft.sh", []byte("#!/bin/sh\necho v2\n"), true)
+	agent.PutFile("/skills/release-notes/scripts/extra.sh", []byte("#!/bin/sh\n"), true)
 	if _, err := agent.Commit(ctx, "Improve release-notes"); err != nil {
 		t.Fatal(err)
 	}
@@ -452,6 +522,9 @@ func TestRestoreSkill(t *testing.T) {
 	}
 	if got := readFile(t, b, "/skills/release-notes/scripts/draft.sh"); got != "#!/bin/sh\necho v1\n" {
 		t.Errorf("the script as it was: %q", got)
+	}
+	if info, err := os.Stat(filepath.Join(b.Dir(), "skills", "release-notes", "scripts", "draft.sh")); err != nil || info.Mode()&0o111 == 0 {
+		t.Errorf("the script still runs: %v %v", info, err)
 	}
 	for _, gone := range []string{"references/examples.md", "scripts/extra.sh"} {
 		if _, err := os.Stat(filepath.Join(b.Dir(), "skills", "release-notes", filepath.FromSlash(gone))); !os.IsNotExist(err) {

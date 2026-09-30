@@ -26,6 +26,10 @@ type Dir struct {
 // Generated scaffolding is written in English, like OKF's own examples;
 // titles and descriptions are the pages' own.
 
+// ModuleType is the type of a page on a module or directory of the
+// repository.
+const ModuleType = "Module"
+
 // ProjectLayout is a project wiki's layout (design.md 5.3).
 var ProjectLayout = Layout{
 	LogTitle: "Project wiki history",
@@ -34,7 +38,7 @@ var ProjectLayout = Layout{
 		{"conventions", "Convention", "Conventions", "Agreed ways of doing things."},
 		{"facts", "Fact", "Facts", "Things checked to be true: versions, behaviour, how interfaces really work."},
 		{"pitfalls", "Pitfall", "Pitfalls", "Traps hit before, and the way around them."},
-		{"modules", "Module", "Modules", "What each module or directory is for, and where its edges are."},
+		{"modules", ModuleType, "Modules", "What each module or directory is for, and where its edges are."},
 		{"topics", "Topic", "Topics", "What finished topics came to: the question, the outcome, the files, the lessons."},
 	},
 }

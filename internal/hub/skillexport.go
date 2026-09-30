@@ -44,7 +44,7 @@ func (h *Hub) ExportSkill(ctx context.Context, name string) ([]byte, error) {
 		data := skill.Files[rel]
 		header := &zip.FileHeader{Name: name + "/" + rel, Method: zip.Deflate, Modified: modified}
 		mode := fs.FileMode(0o644)
-		if bytes.HasPrefix(data, []byte("#!")) {
+		if slices.Contains(skill.Executable, rel) {
 			mode = 0o755
 		}
 		header.SetMode(mode)

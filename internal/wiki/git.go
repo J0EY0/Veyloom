@@ -115,7 +115,9 @@ func (r *repo) commit(ctx context.Context, paths []string, author, message strin
 		}
 	}
 	if len(present) > 0 {
-		if _, err := r.run(ctx, append([]string{"add", "-A", "--"}, present...)...); err != nil {
+		// Forced: a file the writer wrote is kept whatever the person's
+		// own ignore rules say of its name.
+		if _, err := r.run(ctx, append([]string{"add", "-A", "-f", "--"}, present...)...); err != nil {
 			return "", err
 		}
 	}

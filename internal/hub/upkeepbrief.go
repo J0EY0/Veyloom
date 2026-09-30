@@ -261,7 +261,8 @@ func upkeepSteps(w *briefWriter, up *upkeep, prefs store.MemoryPrefs, found upke
 	if found.unhealthy {
 		steps = append(steps, "Set right what the health check below found: link orphan pages from the pages they belong with, mend or drop broken links, "+
 			"bring stale pages up to date or deprecate them, shorten resident pages that no longer fit. "+
-			"Where two pages name the same path and one bears on the other, link it from the other in a sentence that says how (it depends on it, it is the reason for it, it contradicts it); related_wiki shows how pages already connect.")
+			"Where two pages name the same path and one bears on the other, link it from the other in a sentence that says how (it depends on it, it is the reason for it, it contradicts it); related_wiki shows how pages already connect. "+
+			"Where several pages name a path no Module page covers, write one under /modules/ once they say enough of what it is for and where its edges are, linking the pages that name it.")
 	}
 	if len(up.owned) > 0 {
 		steps = append(steps, "For the skills this team owns: where a turn that used one went wrong, or a person corrected it, write a Pattern page in the skill library (write_wiki, scope library) with the symptom, "+
@@ -437,6 +438,13 @@ func upkeepHealthPart(w *briefWriter, h wiki.Health, budget int) {
 			pairs = append(pairs, fmt.Sprintf("%s and %s both name %s", p.A, p.B, p.File))
 		}
 		fmt.Fprintf(&w.sb, "- Pages naming the same path of the repository that do not link each other: %s\n", strings.Join(pairs, "; "))
+	}
+	if len(h.Uncovered) > 0 {
+		named := make([]string, 0, len(h.Uncovered))
+		for _, u := range h.Uncovered {
+			named = append(named, fmt.Sprintf("%s (%s)", u.Path, count(u.Pages, "page")))
+		}
+		fmt.Fprintf(&w.sb, "- Paths of the repository several pages name that no Module page covers: %s\n", strings.Join(named, ", "))
 	}
 }
 

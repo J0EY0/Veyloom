@@ -8,6 +8,7 @@ import (
 	"io"
 	"maps"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -216,7 +217,8 @@ func TestHub_ImportSkill(t *testing.T) {
 
 // A skill as its author keeps it comes in whole: a guide longer than a
 // wiki page may be, a template skill inside it with its own frontmatter,
-// files and folders reached by links, a folder linking back to its own.
+// files and folders reached by links, a folder linking back to its own;
+// not the cache a tool left in it.
 func TestHub_ImportSkill_AsWritten(t *testing.T) {
 	l, _ := wikiLoop(t)
 	shared := skillFolder(t, "shared", map[string]string{"run.py": "print('shared')\n", "assets/logo.txt": "LOGO\n"})
@@ -227,7 +229,7 @@ func TestHub_ImportSkill_AsWritten(t *testing.T) {
 		"python/README.md":             "# Python\n",
 		"templates/SKILL.md":           "---\nname: my-template\ndescription: A template.\n---\n\n# Template\n",
 		"templates/agent.md":           "---\nname: reviewer\ntools: Read, Grep\n---\n\nYou review code.\n",
-		"scripts/.cache/state":         "hidden",
+		"scripts/.cache/state":         "left by a tool",
 		"references/dangling-link.txt": "",
 	})
 	os.Remove(filepath.Join(folder, "references", "dangling-link.txt"))
@@ -266,6 +268,96 @@ func TestHub_ImportSkill_AsWritten(t *testing.T) {
 		if string(skill.Files[rel]) != text {
 			t.Errorf("%s comes as it was: %q", rel, excerpt(string(skill.Files[rel]), 80))
 		}
+	}
+}
+
+// What looks like a secret keeps a skill out of the library, wherever it
+// is: its SKILL.md, a reference or a script, named by file and line. What
+// only stands in for one, as documentation shows a key, does not; nor
+// does a description longer than Agent Skills advises.
+func TestHub_ImportSkill_Secrets(t *testing.T) {
+	l, _ := wikiLoop(t)
+	for name, files := range map[string]map[string]string{
+		"in a script":    {"scripts/deploy.sh": "#!/bin/sh\nexport TOKEN=ghp_q7Hc9ZkP2xV8mN4tR6wY1bL3dF5gJ0sA2eU7\n"},
+		"in a reference": {"references/setup.md": "# Setup\n\nUse AKIAQ7HC9ZKP2XV8MN4T to sign in.\n"},
+	} {
+		files["SKILL.md"] = "---\nname: leaky\ndescription: Use when deploying.\n---\n\nDeploy.\n"
+		_, err := l.h.ImportSkill(l.ctx, skillFolder(t, "leaky", files), "", l.user.ID)
+		var p *store.Problem
+		if !errors.As(err, &p) || p.Code != "skillSecret" || p.Params["line"] == "" || !strings.Contains(p.Params["path"], "/") {
+			t.Errorf("%s: %v %+v", name, err, p)
+		}
+	}
+	docs := skillFolder(t, "aws-docs", map[string]string{
+		"SKILL.md":   "---\nname: aws-docs\ndescription: " + strings.Repeat("Use when working with AWS. ", 60) + "\n---\n\nSee references.\n",
+		"example.md": "# Example\n\nexport AWS_ACCESS_KEY_ID=AKIAIOSFODNN7EXAMPLE\nexport ANTHROPIC_API_KEY=sk-ant-api03-xxxxxxxxxxxxxxxxxxxxxxxxxxxx\n",
+	})
+	if _, err := l.h.ImportSkill(l.ctx, docs, "", l.user.ID); err != nil {
+		t.Errorf("examples and a long description come in: %v", err)
+	}
+}
+
+// A skill's hidden files come in with it, as they are: its settings, a
+// template for pull requests, an example environment file. What the
+// library leaves out does not: version control's own files, what an
+// operating system leaves behind, the environment a tool made there, more
+// files than a skill may have, a real environment file. A file the
+// person's own ignore rules name is kept all the same.
+func TestHub_ImportSkill_HiddenFiles(t *testing.T) {
+	l, dir := wikiLoop(t)
+	if _, err := l.h.openLibrary(l.ctx); err != nil {
+		t.Fatal(err)
+	}
+	lib := filepath.Join(dir, "library")
+	// Ignore rules as a person's global ones would have them.
+	if err := os.MkdirAll(filepath.Join(lib, ".git", "info"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(lib, ".git", "info", "exclude"), []byte("*.log\n.eslintrc.json\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	folder := skillFolder(t, "tools", map[string]string{
+		"SKILL.md":                         "---\nname: tools\ndescription: Use for tools.\n---\n\nSee .github/PULL_REQUEST_TEMPLATE.md.\n",
+		".eslintrc.json":                   "{}\n",
+		".github/PULL_REQUEST_TEMPLATE.md": "# Pull request\n",
+		".env.example":                     "TOKEN=\n",
+		"notes.log":                        "a log the skill ships\n",
+		".env":                             "TOKEN=real\n",
+		".gitignore":                       "*.tmp\n",
+		".DS_Store":                        "junk",
+	})
+	for i := range wiki.MaxSkillFiles + 100 {
+		p := filepath.Join(folder, ".venv", "lib", fmt.Sprintf("m%03d.py", i))
+		os.MkdirAll(filepath.Dir(p), 0o755)
+		if err := os.WriteFile(p, []byte("x = 1\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := l.h.ImportSkill(l.ctx, folder, "", l.user.ID); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{".env.example", ".eslintrc.json", ".github/PULL_REQUEST_TEMPLATE.md", "SKILL.md", "notes.log"}
+	out, _ := exec.Command("git", "-C", lib, "ls-files", "skills/tools").Output()
+	var tracked []string
+	for _, f := range strings.Fields(string(out)) {
+		tracked = append(tracked, strings.TrimPrefix(f, "skills/tools/"))
+	}
+	if !slices.Equal(tracked, want) {
+		t.Errorf("in the history: %v, want %v", tracked, want)
+	}
+	if st, _ := exec.Command("git", "-C", lib, "status", "--porcelain").Output(); len(st) > 0 {
+		t.Errorf("all of it committed:\n%s", st)
+	}
+	r, _ := l.h.openLibrary(l.ctx)
+	skill, err := r.bundle.ProjectSkill("tools")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := slices.Sorted(maps.Keys(skill.Files)); !slices.Equal(got, want) {
+		t.Errorf("to the runtimes: %v", got)
+	}
+	if got := string(skill.Files[".github/PULL_REQUEST_TEMPLATE.md"]); got != "# Pull request\n" {
+		t.Errorf("a hidden markdown file as it is: %q", got)
 	}
 }
 
