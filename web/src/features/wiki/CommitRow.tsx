@@ -41,7 +41,9 @@ export type OpenTopic = (threadId: string, roomId?: string) => void
 export function CommitRow({ commit, space, canUndo, onOpenThread, teams }: CommitRowProps) {
   const t = useT()
   const [asking, setAsking] = useState(false)
-  const note = commitNote(t, commit.subject, teams)
+  // What it did, when its lines do not say: Veyloom's own changes, and one
+  // that touched no page (set up the wiki, say) rather than nothing at all.
+  const note = commitNote(t, commit.subject, teams) || (commit.changes.length === 0 ? t('wiki.note.nothing') : '')
   const outside = commit.changes.some((line) => /(outside Veyloom|while Veyloom was not running)$/.test(line.text))
   return (
     <li className="flex flex-col gap-1 py-3">

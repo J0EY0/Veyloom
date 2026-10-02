@@ -22,6 +22,7 @@ import { useT } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
 import { changesHref, conventionsPage, graphHref, memoryHref, memoryPage, overviewHref, pageHref, type WikiRoute } from './links'
 import { typeGroup, typeName } from './names'
+import { markParts } from './textParts'
 import { problemText } from '@/api/errorText'
 
 export interface WikiSidebarProps {
@@ -47,7 +48,7 @@ export function WikiSidebar({ space, catalog, loading, route, className }: WikiS
   const current = route.kind === 'page' ? route.path : ''
 
   return (
-    <Sidebar collapsible="none" aria-label={t('wiki.pages')} className={cn('w-full md:w-68 md:flex-none md:border-r', className)}>
+    <Sidebar collapsible="none" aria-label={t('wiki.pages')} className={cn('w-full md:w-56 md:flex-none md:border-r xl:w-68', className)}>
       <SidebarHeader className="px-3 pt-3 pb-1">
         <SidebarInput
           type="search"
@@ -179,9 +180,17 @@ function PageMenu({ pages, space, current, dim }: { pages: WikiPageInfo[]; space
           <SidebarMenuButton asChild size="sm" isActive={page.path === current} className={cn(dim && 'text-muted-foreground')}>
             <Link to={pageHref(space, page.path)}>
               <span className="truncate">{page.title}</span>
+              {/* Due to be checked again, the dot the graph gives it; a
+                  resident page, its pin. */}
+              {page.review ? (
+                <>
+                  <span aria-hidden="true" className="ml-auto size-1.5 flex-none rounded-full bg-status-wait" />
+                  <span className="sr-only">{t('wiki.review.due')}</span>
+                </>
+              ) : null}
               {page.resident ? (
                 <>
-                  <PinIcon className="ml-auto text-subtle" aria-hidden="true" />
+                  <PinIcon className={cn('text-subtle', !page.review && 'ml-auto')} aria-hidden="true" />
                   <span className="sr-only">{t('wiki.resident')}</span>
                 </>
               ) : null}
@@ -213,7 +222,7 @@ function SearchResults({ space, query, current }: { space: WikiSpace; query: str
     <ul className="px-2 py-1">
       {hits.data.map((hit) => (
         <li key={hit.path}>
-          <HitLink hit={hit} href={pageHref(space, hit.path)} current={hit.path === current} />
+          <HitLink hit={hit} href={pageHref(space, hit.path)} query={query} current={hit.path === current} />
         </li>
       ))}
     </ul>
@@ -221,8 +230,8 @@ function SearchResults({ space, query, current }: { space: WikiSpace; query: str
 }
 
 // HitLink is a page a search found: its title, what it is and where, and
-// the words around the match.
-export function HitLink({ hit, href, current = false }: { hit: WikiHit; href: string; current?: boolean }) {
+// the words around the match, the words searched for in them marked.
+export function HitLink({ hit, href, query, current = false }: { hit: WikiHit; href: string; query: string; current?: boolean }) {
   const t = useT()
   return (
     <Link
@@ -235,7 +244,19 @@ export function HitLink({ hit, href, current = false }: { hit: WikiHit; href: st
         {hit.mount ? `${t('wiki.mount', { name: hit.mount })} · ` : null}
         {typeName(t, hit.type)} · <span translate="no">{hit.path}</span>
       </span>
-      {hit.snippet ? <span className="line-clamp-2 text-xs leading-normal text-muted-foreground">{hit.snippet}</span> : null}
+      {hit.snippet ? (
+        <span className="line-clamp-2 text-xs leading-normal text-muted-foreground">
+          {markParts(hit.snippet, query).map((part, index) =>
+            part.hit ? (
+              <mark key={index} className="bg-transparent font-medium text-foreground">
+                {part.text}
+              </mark>
+            ) : (
+              part.text
+            ),
+          )}
+        </span>
+      ) : null}
     </Link>
   )
 }

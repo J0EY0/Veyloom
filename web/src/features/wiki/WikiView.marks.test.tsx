@@ -44,16 +44,26 @@ describe('WikiView marks', () => {
       ...port,
       checked_at: '2026-09-01T01:00:00Z',
       review: { why: 'changed', file: 'internal/hub/brief.go', changed_at: '2026-09-20T03:00:00Z', topic_number: 12, thread_id: 't12', room_id: 'r1' },
+      // The maintainer confirmed it after it was written: the change
+      // counts from then.
+      verified_at: '2026-09-21T02:00:00Z',
       verified: [{ by: 'pi/default', at: '2026-09-21T02:00:00Z' }],
     }
     stubApi(
       routes({
-        '/projects/p1/wiki': { wiki: { ...catalog, pages: [{ ...pages[0], review: due.review, checked_at: due.checked_at }, ...pages.slice(1)] } },
+        '/projects/p1/wiki': {
+          wiki: { ...catalog, pages: [{ ...pages[0], review: due.review, checked_at: due.checked_at, verified_at: due.verified_at }, ...pages.slice(1)] },
+        },
         '/projects/p1/wiki/page': { page: due },
       }),
     )
     const { unmount } = renderWiki('')
     expect(await screen.findByText('· 1 页待复核')).toBeInTheDocument()
+    // The list marks it, as the graph does, with a dot a screen reader
+    // reads as 待复核.
+    const row = within(screen.getByLabelText('页面')).getByRole('link', { name: /^The hub listens on 7788/ })
+    expect(row).toHaveAccessibleName('The hub listens on 7788待复核')
+    expect(row.querySelector('.bg-status-wait')).not.toBeNull()
     const section = screen.getByRole('region', { name: '待复核' })
     expect(within(section).getByRole('link', { name: 'The hub listens on 7788' })).toHaveAttribute('href', '/rooms/r1/wiki/facts/port.md')
     expect(within(section).getByText('internal/hub/brief.go 在上次确认后有改动（9月20日）')).toBeInTheDocument()

@@ -12,8 +12,15 @@ export function reviewText(t: T, page: WikiPageInfo, now: Date = new Date()): st
   const review = page.review
   if (!review) return ''
   switch (review.why) {
-    case 'changed':
-      return t('wiki.review.changed', { file: review.file ?? '', when: review.changed_at ? formatDay(review.changed_at) : '' })
+    case 'changed': {
+      // Changed since the page was last checked (internal/wiki/review.go):
+      // confirmed, when that came after it was written; else written.
+      const confirmed = page.verified_at !== undefined && (!page.generated_at || Date.parse(page.verified_at) >= Date.parse(page.generated_at))
+      return t(confirmed ? 'wiki.review.changed' : 'wiki.review.changedSinceWritten', {
+        file: review.file ?? '',
+        when: review.changed_at ? formatDay(review.changed_at) : '',
+      })
+    }
     case 'stale':
       return t('wiki.review.stale', { when: page.stale_after ? formatDay(page.stale_after) : '' })
     default: {

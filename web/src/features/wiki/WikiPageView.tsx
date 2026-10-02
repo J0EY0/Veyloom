@@ -93,12 +93,25 @@ export function WikiPageView({ space, path, history, teams = [], onOpenThread, b
           <Separator className="mt-6" />
         </>
       ) : null}
-      <WikiMarkdown text={withoutTitleHeading(data.body, data.title)} from={data.path} space={space} className="mt-6 text-[0.9375rem] leading-[1.7]" />
+      <WikiMarkdown text={withoutTitleHeading(data.body, data.title)} from={data.path} space={space} className="mt-6" />
       {afterBody}
-      <PageSources page={data} space={space} onOpenThread={onOpenThread} />
-      <PageRelations page={data} space={space} onOpenThread={onOpenThread} />
-      {skill ? null : <PageDetails page={data} alone={Boolean(back)} />}
-      {mounted || skill ? null : <PageHistory page={data} space={space} canUndo={history} teams={teams} onOpenThread={onOpenThread} />}
+      {/* Under a skill, what it rests on and how it relates, as quiet as its
+          files. Under any other page, a line where its text ends, then how
+          it relates to the rest, what it carries besides its text (what it
+          came from among it), and what changed it. */}
+      {skill ? (
+        <>
+          <PageSources page={data} space={space} onOpenThread={onOpenThread} />
+          <PageRelations page={data} space={space} onOpenThread={onOpenThread} quiet />
+        </>
+      ) : (
+        <>
+          <Separator className="mt-10" />
+          <PageRelations page={data} space={space} onOpenThread={onOpenThread} />
+          <PageDetails page={data} space={space} onOpenThread={onOpenThread} alone={Boolean(back)} />
+          {mounted ? null : <PageHistory page={data} space={space} canUndo={history} teams={teams} onOpenThread={onOpenThread} />}
+        </>
+      )}
     </article>
   )
 }

@@ -133,9 +133,11 @@ export function WikiOverview({ space, catalog, onOpenThread }: WikiOverviewProps
               {t('common.loading')}
             </p>
           ) : (
+            // What changed, at a glance: undoing is the changes page's, a
+            // click on 全部变更 away.
             <ul className="divide-y">
               {(recent.data ?? []).map((commit) => (
-                <CommitRow key={commit.sha} commit={commit} space={space} canUndo={catalog.history} teams={catalog.teams} onOpenThread={onOpenThread} />
+                <CommitRow key={commit.sha} commit={commit} space={space} canUndo={false} teams={catalog.teams} onOpenThread={onOpenThread} />
               ))}
             </ul>
           )}

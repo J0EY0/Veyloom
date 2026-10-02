@@ -4,7 +4,7 @@ import { describe, expect, it, vi } from 'vitest'
 import { stubApi } from '@/test/fetch'
 import { registerComposer } from '@/lib/composer'
 import type { WikiCatalog, WikiPage } from '@/api/types'
-import { catalog, info, pages, port, renderWiki, routes } from './wikiTesting'
+import { catalog, commit, info, pages, port, renderWiki, routes } from './wikiTesting'
 
 describe('WikiView', () => {
   it('lists the pages under their types, and the latest changes', async () => {
@@ -25,6 +25,29 @@ describe('WikiView', () => {
     expect(await screen.findByRole('heading', { name: '项目 Wiki' })).toBeInTheDocument()
     expect(screen.getByText('3 页')).toBeInTheDocument()
     expect(await screen.findByText('Writer')).toBeInTheDocument()
+    // What changed, at a glance: undoing is on the changes page.
+    expect(within(screen.getByRole('region', { name: '最近的变更' })).queryByRole('button', { name: '撤回' })).toBeNull()
+  })
+
+  it('says what a change that touched no page did, not nothing', async () => {
+    const setUp = {
+      ...commit,
+      sha: 'a0',
+      author: 'process:veyloom',
+      member: undefined,
+      thread_id: undefined,
+      topic_number: undefined,
+      subject: 'Set up the bundle',
+      changes: [],
+      undoable: false,
+    }
+    const bare = { ...setUp, sha: 'a1', subject: 'Something of its own' }
+    stubApi(routes({ '/projects/p1/wiki/history': { commits: [commit, bare, setUp] } }))
+    renderWiki('changes')
+    expect(await screen.findByText('建立了 wiki')).toBeInTheDocument()
+    expect(screen.getByText('没有改动页面')).toBeInTheDocument()
+    // Undoing is here, on the changes page.
+    expect(screen.getByRole('button', { name: '撤回' })).toBeInTheDocument()
   })
 
   it('lists the conventions of the wiki in a place of their own, when it has them', async () => {
@@ -45,7 +68,9 @@ describe('WikiView', () => {
     const calls = stubApi(routes({ '/projects/p1/wiki/search': { hits: [{ ...pages[0], snippet: '…listens on 7788…' }] } }))
     renderWiki('')
     await userEvent.type(await screen.findByRole('searchbox', { name: '搜索 wiki' }), '7788')
-    expect(await screen.findByText('…listens on 7788…')).toBeInTheDocument()
+    // The words around the match, what was searched for marked in them.
+    const found = await screen.findByText('7788', { selector: 'mark' })
+    expect(found.parentElement).toHaveTextContent(/^…listens on 7788…$/)
     expect(calls.some((call) => call.startsWith('GET /projects/p1/wiki/search?q=7788'))).toBe(true)
   })
 
@@ -63,6 +88,31 @@ describe('WikiView', () => {
     expect(screen.getByRole('link', { name: 'Config' })).toHaveAttribute('href', '/rooms/r1/wiki/modules/config.md')
     await userEvent.click(screen.getByRole('button', { name: '话题 #3 中的一轮' }))
     expect(onOpenThread).toHaveBeenCalledWith('t3')
+  })
+
+  it('ends the text with a line, then how the page relates, its details with where it came from, and its history', async () => {
+    // The topic a turn of it wrote the page is there as well.
+    const sources = [{ id: 'topic', resource: 'veyloom://threads/t3', room_id: 'r1', thread_id: 't3', topic_number: 3 }, ...port.sources]
+    stubApi(routes({ '/projects/p1/wiki/page': { page: { ...port, sources, generated_by: 'claude/sonnet' } } }))
+    renderWiki('facts/port.md')
+    const details = await screen.findByRole('region', { name: '页面信息' })
+    const article = details.closest('article') as HTMLElement
+    // The parts after the line, in order.
+    const separator = within(article).getByRole('none', { hidden: true })
+    expect(separator).toHaveAttribute('data-slot', 'separator')
+    const after = [...article.children].slice([...article.children].indexOf(separator) + 1)
+    expect(after.map((part) => part.getAttribute('aria-label') ?? part.querySelector('h2, button')?.textContent)).toEqual(['关系', '页面信息', '改动记录'])
+    // Where it came from is among its details, each place once: the turn
+    // stands for its topic.
+    expect(within(details).getByRole('button', { name: '话题 #3 中的一轮' })).toBeInTheDocument()
+    expect(within(details).queryByRole('button', { name: '话题 #3' })).not.toBeInTheDocument()
+    expect(within(details).getByRole('link', { name: 'goose' })).toHaveAttribute('href', 'https://pressly.github.io/goose/')
+    expect(screen.queryByRole('region', { name: '来源' })).not.toBeInTheDocument()
+    // The byline names who wrote it and when; the details add the model.
+    expect(screen.getByText(/Claude Code 写于/)).toBeInTheDocument()
+    expect(within(details).getByText('模型')).toBeInTheDocument()
+    expect(within(details).getByText('sonnet')).toBeInTheDocument()
+    expect(within(details).queryByText(/Claude Code/)).toBeNull()
   })
 
   it('puts a question about a page to whoever keeps the wiki, in the wiki topic', async () => {

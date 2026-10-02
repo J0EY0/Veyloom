@@ -12,9 +12,17 @@ describe('review', () => {
 
   it('says why a page is due to be checked again', () => {
     expect(reviewText(t, info('/a.md'), now)).toBe('')
-    expect(
-      reviewText(t, info('/a.md', { review: { why: 'changed', file: 'internal/hub/brief.go', changed_at: '2026-09-20T03:00:00Z', topic_number: 12 } }), now),
-    ).toBe('internal/hub/brief.go 在上次确认后有改动（9月20日）')
+    // A file it names changed since it was checked: since it was
+    // confirmed, or, nobody having confirmed it since, since it was written.
+    const changed = { why: 'changed' as const, file: 'internal/hub/brief.go', changed_at: '2026-09-20T03:00:00Z', topic_number: 12 }
+    const written = { generated_by: 'codex/default', generated_at: '2026-09-18T03:00:00Z' }
+    expect(reviewText(t, info('/a.md', { ...written, verified_at: '2026-09-19T03:00:00Z', review: changed }), now)).toBe(
+      'internal/hub/brief.go 在上次确认后有改动（9月20日）',
+    )
+    expect(reviewText(t, info('/a.md', { ...written, review: changed }), now)).toBe('internal/hub/brief.go 在这一页写成后有改动（9月20日）')
+    expect(reviewText(t, info('/a.md', { ...written, verified_at: '2026-09-01T03:00:00Z', review: changed }), now)).toBe(
+      'internal/hub/brief.go 在这一页写成后有改动（9月20日）',
+    )
     expect(reviewText(t, info('/a.md', { checked_at: '2026-03-01T08:00:00Z', review: { why: 'period', every: 180 } }), now)).toBe(
       '已 206 天未确认，这类页面每 180 天复核一次',
     )

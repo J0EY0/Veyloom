@@ -130,6 +130,7 @@ export function commitNote(t: T, subject: string, teams: WikiTeam[] = []): strin
   if (handed) return t('wiki.note.handedOver', { team: teams.find((team) => team.slug === handed[1])?.name ?? handed[1] })
   const orphaned = /^Left without a team: the project (\S+) is gone$/.exec(subject)
   if (orphaned) return t('wiki.note.orphaned', { team: orphaned[1] })
+  if (subject === 'Set up the bundle') return t('wiki.note.setUp')
   return subject === 'Regenerate the indexes' ? t('wiki.note.indexes') : ''
 }
 

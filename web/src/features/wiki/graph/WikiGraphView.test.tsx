@@ -84,7 +84,7 @@ describe('WikiGraphView', () => {
 
     await userEvent.click(within(linked).getByRole('button', { name: /Empty room/ }))
     expect(router.state.location.search).toBe(`?${new URLSearchParams({ focus: '/pitfalls/empty.md' })}`)
-    expect(within(card('Empty room')).getByText('待复核 · internal/hub/brief.go 在上次确认后有改动（9月20日）')).toBeInTheDocument()
+    expect(within(card('Empty room')).getByText('待复核 · internal/hub/brief.go 在这一页写成后有改动（9月20日）')).toBeInTheDocument()
 
     await userEvent.keyboard('{Escape}')
     expect(screen.queryByRole('region', { name: 'Empty room' })).not.toBeInTheDocument()

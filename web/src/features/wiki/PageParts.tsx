@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CheckCheckIcon, ChevronRightIcon, FolderIcon, PenLineIcon, ShieldCheckIcon, TagIcon } from 'lucide-react'
+import { CheckCheckIcon, ChevronRightIcon, CpuIcon, FolderIcon, MessagesSquareIcon, ShieldCheckIcon, TagIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import type { WikiPage, WikiSource, WikiTeam } from '@/api/types'
 import { useWikiHistory, type WikiSpace } from '@/api/wiki'
@@ -8,10 +8,13 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { Spinner } from '@/components/ui/spinner'
 import { formatDay, formatTime } from '@/lib/format'
 import { useT } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import { CommitRow, type OpenTopic } from './CommitRow'
 import { Fact, Facts, TrustPill } from './Facts'
 import { pageHref } from './links'
-import { actorName, producerName } from './names'
+import { actorName } from './names'
+import { quietHeading, sectionHeading } from './PageRelations'
+import { distinctSources } from './sources'
 
 // The parts of a page under its text: what it rests on, what it carries
 // besides its text, and how it came to be as it is. How it relates to the
@@ -23,14 +26,16 @@ export interface PagePartProps {
   onOpenThread: OpenTopic
 }
 
+// PageSources is what a skill rests on, under its files; a page of a
+// project's wiki says it among its details (PageDetails).
 export function PageSources({ page, space, onOpenThread }: PagePartProps) {
   const t = useT()
   if (page.sources.length === 0) return null
   return (
     <section aria-label={t('wiki.page.sources')} className="mt-8">
-      <h2 className="mb-1.5 text-xs font-medium text-subtle">{t('wiki.page.sources')}</h2>
+      <h2 className={cn('mb-1.5', quietHeading)}>{t('wiki.page.sources')}</h2>
       <ul className="grid gap-1 text-[0.8125rem] sm:grid-cols-2 sm:gap-x-8">
-        {page.sources.map((source, index) => (
+        {distinctSources(page.sources).map((source, index) => (
           <li key={source.id ?? index} className="min-w-0 break-words">
             <SourceLink source={source} space={space} onOpenThread={onOpenThread} />
           </li>
@@ -42,20 +47,25 @@ export function PageSources({ page, space, onOpenThread }: PagePartProps) {
 
 // PageDetails is what a page carries besides its text, quiet at its foot
 // where the head leaves it out: where it lies, its tags, how far to trust
-// it, and who wrote it and last checked it, with the model. A page shown
-// alone, as the library's are, goes by its name, not where it lies.
-export function PageDetails({ page, alone = false }: { page: WikiPage; alone?: boolean }) {
+// it, who wrote it and last checked it, with the model, and what it came
+// from, each place once. A page shown alone, as the library's are, goes by
+// its name, not where it lies.
+export function PageDetails({ page, space, onOpenThread, alone = false }: PagePartProps & { alone?: boolean }) {
   const t = useT()
   const tags = page.tags.filter((tag) => tag.toLowerCase() !== 'resident' && !tag.toLowerCase().startsWith('runtime-'))
   const latest = page.verified.at(-1)
   // The maintainer's confirmation, when it is the latest (confirm_wiki,
   // docs/design.md 5.16).
   const checked = latest && !latest.by.startsWith('human:') ? latest : undefined
-  // The byline names who wrote it; here only what it leaves out, the model.
-  const model = page.generated_by && page.generated_at && actorName(page.generated_by) !== producerName(page.generated_by)
+  // The byline names who wrote it and when; here only what it leaves out,
+  // the model (an agent's actor is runtime/model; "default" names none, as
+  // actorName reads it).
+  const written = page.generated_by && !page.generated_by.includes(':') ? page.generated_by.split('/').slice(1).join('/') : ''
+  const model = written === 'default' ? '' : written
+  const sources = distinctSources(page.sources)
   return (
     <section aria-label={t('wiki.details.title')} className="mt-8">
-      <h2 className="mb-2 text-xs font-medium text-subtle">{t('wiki.details.title')}</h2>
+      <h2 className={cn('mb-3', sectionHeading)}>{t('wiki.details.title')}</h2>
       <Facts>
         {alone ? null : (
           <Fact icon={FolderIcon} label={t('wiki.details.path')}>
@@ -77,13 +87,24 @@ export function PageDetails({ page, alone = false }: { page: WikiPage; alone?: b
           <TrustPill tier={page.tier} />
         </Fact>
         {model ? (
-          <Fact icon={PenLineIcon} label={t('wiki.details.written')}>
-            {actorName(page.generated_by as string)} · {formatTime(page.generated_at as string)}
+          <Fact icon={CpuIcon} label={t('wiki.details.model')}>
+            <span translate="no">{model}</span>
           </Fact>
         ) : null}
         {checked ? (
           <Fact icon={CheckCheckIcon} label={t('wiki.details.checked')}>
             {actorName(checked.by)} · {formatTime(checked.at)}
+          </Fact>
+        ) : null}
+        {sources.length > 0 ? (
+          <Fact icon={MessagesSquareIcon} label={t('wiki.page.sources')}>
+            <span className="flex min-w-0 flex-wrap gap-x-3 gap-y-1">
+              {sources.map((source, index) => (
+                <span key={source.id ?? index} className="min-w-0 break-words">
+                  <SourceLink source={source} space={space} onOpenThread={onOpenThread} />
+                </span>
+              ))}
+            </span>
           </Fact>
         ) : null}
       </Facts>
@@ -171,10 +192,10 @@ export function PageHistory({
         className={
           compact
             ? 'flex items-center gap-1 text-xs leading-6 text-subtle hover:text-foreground'
-            : 'flex items-center gap-1 text-xs font-medium text-subtle hover:text-foreground'
+            : cn('flex items-center gap-1 hover:text-muted-foreground', sectionHeading)
         }
       >
-        <ChevronRightIcon className="size-3.5 transition-transform group-data-[state=open]/history:rotate-90" />
+        <ChevronRightIcon className={cn('transition-transform group-data-[state=open]/history:rotate-90', compact ? 'size-3.5' : '-ml-1 size-4 text-subtle')} />
         {compact ? toggle : t('wiki.page.history')}
       </CollapsibleTrigger>
       <CollapsibleContent>

@@ -1,4 +1,4 @@
-import { useDeferredValue, useMemo, useState } from 'react'
+import { Fragment, useDeferredValue, useMemo, useState } from 'react'
 import { BookOpenIcon, ChevronRightIcon, SearchXIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import type { WikiProjectHit, WikiSummary } from '@/api/types'
@@ -19,6 +19,7 @@ import {
 } from '@/components/ui/sidebar'
 import { formatTime } from '@/lib/format'
 import { useT } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import { wikisHref } from '../links'
 import { HitLink, ListSkeleton } from '../WikiSidebar'
 
@@ -104,17 +105,26 @@ export function AllWikis() {
 // due to be checked again, and when it last changed.
 function WikiLine({ wiki }: { wiki: WikiSummary }) {
   const t = useT()
+  // Pages due to be checked again in the wait colour, as the overview has
+  // them.
   const facts = [
-    t('wiki.pageCount', { n: wiki.pages }),
-    wiki.due > 0 ? t('wiki.reviewCount', { n: wiki.due }) : '',
-    wiki.changed_at ? t('wikis.changedAt', { when: formatTime(wiki.changed_at) }) : '',
-  ].filter(Boolean)
+    { text: t('wiki.pageCount', { n: wiki.pages }) },
+    { text: wiki.due > 0 ? t('wiki.reviewCount', { n: wiki.due }) : '', due: true },
+    { text: wiki.changed_at ? t('wikis.changedAt', { when: formatTime(wiki.changed_at) }) : '' },
+  ].filter((fact) => fact.text !== '')
   return (
     <Item asChild variant="outline" size="sm">
       <Link to={wikisHref(wiki.project_id)}>
         <ItemContent className="min-w-0">
           <ItemTitle className="break-words">{wiki.project_name}</ItemTitle>
-          <ItemDescription className="text-xs">{facts.join(' · ')}</ItemDescription>
+          <ItemDescription className="text-xs">
+            {facts.map((fact, index) => (
+              <Fragment key={index}>
+                {index > 0 ? ' · ' : null}
+                <span className={cn(fact.due && 'text-status-wait')}>{fact.text}</span>
+              </Fragment>
+            ))}
+          </ItemDescription>
         </ItemContent>
         <ItemActions>
           <ChevronRightIcon aria-hidden="true" className="size-4 text-subtle" />
@@ -161,7 +171,7 @@ function Results({ query }: { query: string }) {
         <ul aria-label={group.name} className="px-0">
           {group.hits.map((hit) => (
             <li key={hit.path}>
-              <HitLink hit={hit} href={wikisHref(projectId, hit.path)} />
+              <HitLink hit={hit} href={wikisHref(projectId, hit.path)} query={query} />
             </li>
           ))}
         </ul>

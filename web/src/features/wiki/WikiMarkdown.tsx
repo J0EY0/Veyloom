@@ -24,12 +24,14 @@ function domProps(props: AnchorProps): AnchorHTMLAttributes<HTMLAnchorElement> {
   return out
 }
 
-// A page's markdown, drawn as agents' text is (Streamdown), with its links
-// to other pages of the wiki kept in the Wiki tab. The hub sends those
-// from the wiki's root; a link out of the wiki opens in a new tab, and a
-// footnote stays an anchor on the page. A file the project's wiki keeps
-// beside its pages is read from the hub: a picture shown in place, anything
-// else opened or downloaded as the hub serves it.
+// A page's markdown, drawn as agents' text is (Streamdown) but read as a
+// document (prose-wiki): its tables and code blocks whole, not capped to a
+// height to scroll inside. Its links to other pages of the wiki stay in the
+// Wiki tab. The hub sends those from the wiki's root; a link out of the
+// wiki opens in a new tab, and a footnote stays an anchor on the page. A
+// file the project's wiki keeps beside its pages is read from the hub: a
+// picture shown in place, anything else opened or downloaded as the hub
+// serves it.
 export function WikiMarkdown({ text, from, space, className }: WikiMarkdownProps) {
   const components = useMemo(() => {
     const fileUrl = (href: string) => {
@@ -60,7 +62,15 @@ export function WikiMarkdown({ text, from, space, className }: WikiMarkdownProps
     }
   }, [from, space])
   return (
-    <MessageResponse mode="static" components={components} controls={false} lineNumbers={false} className={cn('prose-agent', className)}>
+    <MessageResponse
+      mode="static"
+      components={components}
+      controls={false}
+      lineNumbers={false}
+      tableMaxHeight={0}
+      codeBlockMaxHeight={0}
+      className={cn('prose-agent prose-wiki', className)}
+    >
       {text}
     </MessageResponse>
   )

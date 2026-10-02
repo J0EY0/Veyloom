@@ -386,6 +386,47 @@
   font-size: 0.8125rem;
 }
 
+/* A wiki page is a document, read rather than skimmed in a chat (docs/
+   webui.md 4.9): its type a little larger, its headings above its text by
+   size and room, not by weight alone, and its tables and code whole, each
+   in one frame. Streamdown puts a grey shell with a header around them for
+   buttons the app has off; here the shell goes, and code keeps its grey on
+   the frame itself. Its caps on their height are lifted in WikiMarkdown. */
+.prose-wiki {
+  font-size: 0.9375rem;
+  line-height: 1.7;
+}
+.prose-wiki h1,
+.prose-wiki h2,
+.prose-wiki h3 {
+  line-height: 1.4;
+}
+.prose-wiki h1 {
+  margin: 1.6em 0 0.5em;
+  font-size: 1.3em;
+}
+.prose-wiki h2 {
+  margin: 1.6em 0 0.5em;
+  font-size: 1.18em;
+}
+.prose-wiki h3 {
+  margin: 1.3em 0 0.4em;
+  font-size: 1.05em;
+}
+.prose-wiki [data-streamdown="code-block"],
+.prose-wiki [data-streamdown="table-wrapper"] {
+  gap: 0;
+  border: 0;
+  background: transparent;
+  padding: 0;
+}
+.prose-wiki [data-streamdown="code-block-header"] {
+  display: none;
+}
+.prose-wiki [data-streamdown="code-block-body"] {
+  background-color: var(--sidebar);
+}
+
 /* A side panel slides in from the right edge it lives on, and out. The
    way out holds its last frame and the transition ends with it: a view
    transition lasts 250ms by default, and without "forwards" the panel,

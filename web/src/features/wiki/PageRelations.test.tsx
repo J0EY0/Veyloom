@@ -11,6 +11,10 @@ import { info, port, renderWiki, routes } from './wikiTesting'
 // What a page lists of its relations (docs/design.md 5.17, step 4), and the
 // way into the graph focused on it.
 
+// sentence finds the line under a page saying where a link to it is,
+// however it is split into parts.
+const sentence = (text: string) => (_: string, element: Element | null) => element?.tagName === 'P' && element.textContent === text
+
 const node = (path: string, type: string, title: string, overrides = {}) => ({ id: path, kind: 'page' as const, page: info(path, type, title, overrides) })
 
 const graph: WikiGraph = {
@@ -26,7 +30,7 @@ const graph: WikiGraph = {
   ],
   edges: [
     { from: '/facts/port.md', to: '/modules/config.md', kind: 'link', context: 'Set in [the config].' },
-    { from: '/decisions/addr.md', to: '/facts/port.md', kind: 'link', context: 'The port is [the default].' },
+    { from: '/decisions/addr.md', to: '/facts/port.md', kind: 'link', context: 'The port is [the default], see [/modules/config.md].' },
     { from: '/facts/port.md', to: '/@acme/ports.md', kind: 'link', context: 'See [the company list].' },
     { from: '/facts/port.md', to: '/facts/old-port.md', kind: 'supersedes' },
     { from: '/facts/port.md', to: '/decisions/addr.md', kind: 'source', context: 'The address decision' },
@@ -50,10 +54,12 @@ describe('PageRelations', () => {
     )
     const linksTo = within(relations).getByRole('region', { name: '链接到' })
     expect(within(linksTo).getByRole('link', { name: 'Config' })).toHaveAttribute('href', '/rooms/r1/wiki/modules/config.md')
-    expect(within(linksTo).getByText('Set in [the config].')).toBeInTheDocument()
+    // The sentence reads without the brackets the graph writes a link with.
+    expect(within(linksTo).getByText(sentence('Set in the config.'))).toBeInTheDocument()
     expect(within(linksTo).getByText(/外部 · acme/)).toBeInTheDocument()
     const linkedFrom = within(relations).getByRole('region', { name: '引用此页的页面' })
-    expect(within(linkedFrom).getByText('The port is [the default].')).toBeInTheDocument()
+    // A link written as a page's path reads as the page's title.
+    expect(within(linkedFrom).getByText(sentence('The port is the default, see Config.'))).toBeInTheDocument()
     expect(within(within(relations).getByRole('region', { name: '取代了' })).getByRole('link', { name: 'The hub listened on 8080' })).toHaveClass(
       'line-through',
     )
@@ -61,16 +67,16 @@ describe('PageRelations', () => {
     const restsOn = within(relations).getByRole('region', { name: '依据' })
     expect(within(restsOn).queryByText('The address decision')).not.toBeInTheDocument()
 
+    // Each page once, with the paths it shares with this one.
     const files = within(relations).getByRole('region', { name: '提及相同路径的页面' })
-    expect(within(files).getByText('internal/config/load.go')).toBeInTheDocument()
     expect(
       within(files)
-        .getAllByRole('link')
-        .map((link) => link.textContent),
-    ).toEqual(['Config', 'Viper reads the binary'])
+        .getAllByRole('listitem')
+        .map((item) => item.textContent),
+    ).toEqual(['Config · internal/config/load.go', 'Viper reads the binary · internal/config/load.go'])
     const topics = within(relations).getByRole('region', { name: '来自同一话题的页面' })
-    expect(within(topics).getByRole('link', { name: 'One flag for the address' })).toBeInTheDocument()
-    await userEvent.click(within(topics).getByRole('button', { name: '话题 #3 · Which port' }))
+    expect(within(topics).getByRole('listitem')).toHaveTextContent(/^One flag for the address · 话题 #3$/)
+    await userEvent.click(within(topics).getByRole('button', { name: '话题 #3' }))
     expect(onOpenThread).toHaveBeenCalledWith('t3')
   })
 
@@ -114,7 +120,7 @@ describe('PageRelations', () => {
     })
     renderWithProviders(<WikiView space={librarySpace} rest="skills/tables/SKILL.md" />, { route: '/library/skills/tables/SKILL.md' })
     const relations = await screen.findByRole('region', { name: '关系' })
-    expect(await within(relations).findByText('Fold them into [a table].')).toBeInTheDocument()
+    expect(await within(relations).findByText(sentence('Fold them into a table.'))).toBeInTheDocument()
     expect(within(relations).queryByRole('link', { name: /在关系图中查看/ })).not.toBeInTheDocument()
   })
 

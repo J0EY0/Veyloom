@@ -78,6 +78,8 @@ describe('WikisPage', () => {
     const { router } = renderWikis('/wiki')
     const line = await screen.findByRole('link', { name: /Veyloom.*3 页 · 1 页待复核 · 最近变更于/ })
     expect(line).toHaveAttribute('href', '/wiki/p1')
+    // Pages due, in the wait colour as the overview has them.
+    expect(within(line).getByText('1 页待复核')).toHaveClass('text-status-wait')
     expect(screen.getByRole('combobox')).toHaveTextContent('全部项目')
     // The left column lists them by name, with their pages.
     const projects = within(screen.getByLabelText('项目', { selector: '[data-slot="sidebar"]' }))
