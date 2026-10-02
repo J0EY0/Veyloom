@@ -1,4 +1,4 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ClipboardEvent, type DragEvent, type KeyboardEvent } from 'react'
 import { useAddressee } from '@/api/addressee'
 import { blobFromUrl, uploadAttachment } from '@/api/attachments'
 import { usePostMessage } from '@/api/messages'
@@ -50,9 +50,10 @@ const maxFileMB = 20
 // with the room's @ picker floating above. Enter sends, Shift+Enter breaks
 // a line, and Enter while an input method is composing does neither. Files
 // come in by the menu, paste or drop; on send they are uploaded first and
-// the message carries their ids. Mentions are recomputed from the text so
-// structure and words never disagree. Under the text, the box says whom a
-// message without an @ goes to, as the hub would route it.
+// the message carries their ids; while one is going out no more come in.
+// Mentions are recomputed from the text so structure and words never
+// disagree. Under the text, the box says whom a message without an @ goes
+// to, as the hub would route it.
 export function Composer({ roomId, roomName, threadId, compact }: ComposerProps) {
   const user = useCurrentUser()
   const post = usePostMessage(roomId)
@@ -137,6 +138,19 @@ export function Composer({ roomId, roomName, threadId, compact }: ComposerProps)
     }
   }
 
+  // While a message is going out, files pasted or dropped are not taken:
+  // the prompt input drops every file it holds once the message is sent,
+  // and these would go with it, unsent. Words still paste. The menu's
+  // button is greyed meanwhile, as the send button is.
+  function holdFiles(event: ClipboardEvent<HTMLDivElement> | DragEvent<HTMLDivElement>) {
+    if (!busy && !sending.current) return
+    const data = 'clipboardData' in event ? event.clipboardData : event.dataTransfer
+    const files = Array.from(data?.items ?? []).some((item) => item.kind === 'file') || (data?.files?.length ?? 0) > 0
+    if (!files) return
+    event.preventDefault()
+    event.stopPropagation()
+  }
+
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (mention.onKeyDown(event)) return
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
@@ -150,8 +164,9 @@ export function Composer({ roomId, roomName, threadId, compact }: ComposerProps)
 
   return (
     <div className={compact ? 'flex-none px-3 pt-1.5 pb-3' : 'flex-none px-5 pt-2 pb-5'}>
-      {/* The picker sits outside the input group, which clips its overflow. */}
-      <div className="relative mx-auto max-w-205">
+      {/* The picker sits outside the input group, which clips its overflow.
+          Files pasted or dropped are looked at here first, on the way in. */}
+      <div className="relative mx-auto max-w-205" onPasteCapture={holdFiles} onDropCapture={holdFiles}>
         {mention.open ? <MentionPicker id={pickerId} items={mention.items} active={mention.active} onSelect={mention.select} /> : null}
         <PromptInput
           onSubmit={onSubmit}

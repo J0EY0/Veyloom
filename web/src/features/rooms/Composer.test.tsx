@@ -1,4 +1,4 @@
-import { screen, waitFor } from '@testing-library/react'
+import { fireEvent, screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { beforeEach, describe, expect, it } from 'vitest'
 import { setCurrentUser } from '@/lib/currentUser'
@@ -218,6 +218,44 @@ describe('Composer attachments', () => {
     await waitFor(() => expect(posted).toEqual({ user_id: 'u1', body: 'see file', mentions: [], attachment_ids: ['at1'] }))
     expect(uploaded).toBe('note.txt hello')
     await waitFor(() => expect(screen.queryByText('note.txt')).not.toBeInTheDocument())
+  })
+
+  it('takes no files pasted or dropped while a message goes out, and takes them once it is sent', async () => {
+    let release = () => {}
+    let posts = 0
+    stubApi({
+      '/users': { users: [] },
+      '/rooms/r1/members': { members: [] },
+      '/rooms/r1/messages': async () => {
+        posts++
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return Response.json({ message: message('m1', 1, { body: 'first' }) }, { status: 201 })
+      },
+    })
+    renderWithProviders(<Composer roomId="r1" roomName="main" />)
+    const box = screen.getByLabelText('消息')
+    await userEvent.type(box, 'first{Enter}')
+    await waitFor(() => expect(posts).toBe(1))
+
+    // Words paste as ever: the paste goes on to the box.
+    const words = { items: [{ kind: 'string', type: 'text/plain' }], files: [], types: ['text/plain'], getData: () => 'hi' }
+    expect(fireEvent.paste(box, { clipboardData: words })).toBe(true)
+
+    // Files are not taken, and nothing is said about it.
+    const shot = new File(['png'], 'shot.png', { type: 'image/png' })
+    const files = { items: [{ kind: 'file', type: 'image/png', getAsFile: () => shot }], files: [shot], types: ['Files'], getData: () => '' }
+    expect(fireEvent.paste(box, { clipboardData: files })).toBe(false)
+    expect(fireEvent.drop(box, { dataTransfer: files })).toBe(false)
+    expect(screen.queryByText('shot.png')).not.toBeInTheDocument()
+    expect(screen.queryByRole('alert')).toBeNull()
+
+    // Sent: the files come in.
+    release()
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled())
+    fireEvent.paste(box, { clipboardData: files })
+    expect(await screen.findByText('shot.png')).toBeInTheDocument()
   })
 
   it('keeps the files when the upload fails', async () => {
