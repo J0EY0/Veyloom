@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"io/fs"
 	"path"
+	"regexp"
 	"slices"
 	"strings"
 	"time"
@@ -148,6 +149,10 @@ type Hit struct {
 	Summary
 	Snippet string // the body around the first match, when the body matched
 	score   int
+	// entry and word are what the snippet is cut from once the hits are
+	// ranked: the page, and the first of the query's words its body holds.
+	entry *entry
+	word  string
 }
 
 // Score is how well the page matched: hits of several bundles for the
@@ -168,7 +173,7 @@ func (b *Bundle) Search(query string, limit int) []Hit {
 	defer b.mu.RUnlock()
 	var hits []Hit
 	for _, e := range b.pages {
-		score, matched, at := 0, 0, -1
+		score, matched, word := 0, 0, ""
 		for _, w := range words {
 			s := 0
 			if strings.Contains(e.text.title, w) {
@@ -183,10 +188,10 @@ func (b *Bundle) Search(query string, limit int) []Hit {
 			if strings.Contains(e.text.path, w) {
 				s += 2
 			}
-			if i := strings.Index(e.text.body, w); i >= 0 {
+			if strings.Contains(e.text.body, w) {
 				s++
-				if at < 0 {
-					at = i
+				if word == "" {
+					word = w
 				}
 			}
 			if s > 0 {
@@ -209,15 +214,7 @@ func (b *Bundle) Search(query string, limit int) []Hit {
 		if e.sum.Status == okf.Deprecated {
 			score = max(score/4, 1)
 		}
-		hit := Hit{Summary: e.sum, score: score}
-		if at >= 0 {
-			text := e.text.original
-			if len(text) != len(e.text.body) { // lowercasing moved the offsets
-				text = e.text.body
-			}
-			hit.Snippet = snippet(text, at)
-		}
-		hits = append(hits, hit)
+		hits = append(hits, Hit{Summary: e.sum, score: score, entry: e, word: word})
 	}
 	slices.SortFunc(hits, func(x, y Hit) int {
 		if x.score != y.score {
@@ -228,20 +225,56 @@ func (b *Bundle) Search(query string, limit int) []Hit {
 	if len(hits) > limit {
 		hits = hits[:limit]
 	}
+	// Snippets only for the hits kept: reading a body as prose costs more
+	// than finding a word in it.
+	for i := range hits {
+		if hits[i].word != "" {
+			hits[i].Snippet = snippet(withoutTitleHeading(hits[i].entry.text.original, hits[i].Title), hits[i].word)
+		}
+		hits[i].entry, hits[i].word = nil, ""
+	}
 	return hits
 }
 
-// snippet cuts about eighty bytes of text around at, on rune boundaries,
-// on one line.
-func snippet(text string, at int) string {
-	start, end := max(at-40, 0), min(at+80, len(text))
+var (
+	// titleHeading is a first-level heading opening a page's text.
+	titleHeading = regexp.MustCompile(`^\s*#[ \t]+(.+?)[ \t]*#*[ \t]*(?:\n|$)`)
+	// fenceLine opens or closes a block of code.
+	fenceLine = regexp.MustCompile("^\\s*(?:```|~~~)")
+	// ruleLine is the rule under a table's head, or one across the page.
+	ruleLine = regexp.MustCompile(`^\s*\|?\s*:?-{3,}`)
+)
+
+// snippet is about a hundred and twenty bytes of a page's text around the
+// first place word is in it, read as prose on one line (prose), on rune
+// boundaries and not through a Latin word; empty when the word is only in
+// the page's markup, a link's target say.
+func snippet(body, word string) string {
+	text := prose(body)
+	lower := strings.ToLower(text)
+	if len(lower) != len(text) { // lowercasing moved the offsets
+		text = lower
+	}
+	at := strings.Index(lower, word)
+	if at < 0 {
+		return ""
+	}
+	start, end := max(at-40, 0), min(at+len(word)+80, len(text))
 	for start > 0 && !utf8.RuneStart(text[start]) {
 		start--
 	}
 	for end < len(text) && !utf8.RuneStart(text[end]) {
 		end++
 	}
-	s := strings.Join(strings.Fields(text[start:end]), " ")
+	// A word cut in two starts or ends where it is whole, if near.
+	for n := 0; start > 0 && n < 16 && wordByte(text[start-1]); n++ {
+		start--
+	}
+	for n := 0; end < len(text) && n < 16 && wordByte(text[end]); n++ {
+		end++
+	}
+	// Nor with the stop that ended the sentence before.
+	s := strings.TrimRight(strings.TrimLeft(text[start:end], " 。，；：、！？）,;:!?)"), " ")
 	if start > 0 {
 		s = "…" + s
 	}
@@ -249,4 +282,46 @@ func snippet(text string, at int) string {
 		s += "…"
 	}
 	return s
+}
+
+// withoutTitleHeading drops the heading a page's text opens with when it
+// only says the page's title again, which a result shows above its
+// snippet, as the page shows it above its text (the web client's
+// withoutTitleHeading).
+func withoutTitleHeading(body, title string) string {
+	m := titleHeading.FindStringSubmatchIndex(body)
+	if m == nil || strings.TrimSpace(title) == "" || strings.TrimSpace(body[m[2]:m[3]]) != strings.TrimSpace(title) {
+		return body
+	}
+	return body[m[1]:]
+}
+
+// wordByte is part of a Latin word or a number.
+func wordByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '_'
+}
+
+// prose is a page's text as it reads, on one line: headings, list items
+// and quotes without their marks, code and emphasis without theirs, links
+// as their text and a table's cells side by side. The lines fencing code
+// and the rules under a table's head go.
+func prose(body string) string {
+	var words []string
+	for _, line := range strings.Split(body, "\n") {
+		if fenceLine.MatchString(line) || ruleLine.MatchString(line) {
+			continue
+		}
+		words = append(words, strings.Fields(readable(line))...)
+	}
+	return strings.Join(words, " ")
+}
+
+// readable is one line of markdown as it reads, the way sentenceAt reads a
+// link's sentence, but with links as their text alone.
+func readable(line string) string {
+	line = lineMarker.ReplaceAllString(line, "")
+	line = markdownLink.ReplaceAllString(line, "$1")
+	line = footnoteRef.ReplaceAllString(line, "")
+	line = inlineMarks.Replace(line)
+	return strings.ReplaceAll(line, "|", " ")
 }
