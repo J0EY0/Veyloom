@@ -1,4 +1,4 @@
-import { useId, useState } from 'react'
+import { useId, useMemo, useState } from 'react'
 import { ChevronLeftIcon, SearchIcon, SlidersHorizontalIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import type { GraphEdgeKind, GraphNode, WikiGraph } from '@/api/types'
@@ -19,21 +19,23 @@ import { KindIcon, label } from './FocusCard'
 import { defaultFilters, type FileNodes, type GraphFilters } from './model'
 
 // The graph's tools, over its top left corner (docs/design.md 5.17):
-// finding a node by title or path, and the filters. On a phone, a way
-// back to the list of pages.
+// finding a node by title or path, and the filters. In a narrow page, a
+// way back to the list of pages. They come before the canvas, so the
+// keyboard reaches them first.
 
 export interface GraphToolbarProps {
   space: WikiSpace
   // The whole graph, for the filters to offer what it holds.
   graph: WikiGraph
-  // What is on screen, to find in.
+  // What is on screen, to find in, and the paths named in each directory.
   shown: GraphNode[]
+  paths: Map<string, string[]>
   filters: GraphFilters
   onFilters: (filters: GraphFilters) => void
   onFind: (id: string) => void
 }
 
-export function GraphToolbar({ space, graph, shown, filters, onFilters, onFind }: GraphToolbarProps) {
+export function GraphToolbar({ space, graph, shown, paths, filters, onFilters, onFind }: GraphToolbarProps) {
   const t = useT()
   return (
     <div className="flex items-center gap-1.5">
@@ -42,17 +44,40 @@ export function GraphToolbar({ space, graph, shown, filters, onFilters, onFind }
           <ChevronLeftIcon />
         </Link>
       </Button>
-      <FindNode nodes={shown} onFind={onFind} />
+      <FindNode nodes={shown} paths={paths} onFind={onFind} />
       <FiltersButton graph={graph} filters={filters} onFilters={onFilters} />
     </div>
   )
 }
 
-function FindNode({ nodes, onFind }: { nodes: GraphNode[]; onFind: (id: string) => void }) {
+// The list shows the first so many nodes that match: a big wiki has
+// hundreds, and a few letters narrow them down.
+const findCap = 50
+
+function FindNode({ nodes, paths, onFind }: { nodes: GraphNode[]; paths: Map<string, string[]>; onFind: (id: string) => void }) {
   const t = useT()
   const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  // A directory is found by the paths in it too.
+  const matches = useMemo(() => {
+    const words = query.trim().toLowerCase()
+    const found = words
+      ? nodes.filter((node) =>
+          [label(t, node), node.page?.path ?? '', ...(paths.get(node.id) ?? []).map((path) => `${node.file ?? ''}${path}`)].some((text) =>
+            text.toLowerCase().includes(words),
+          ),
+        )
+      : nodes
+    return found.slice(0, findCap)
+  }, [nodes, paths, query, t])
   return (
-    <Popover open={open} onOpenChange={setOpen}>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) setQuery('')
+      }}
+    >
       <PopoverTrigger asChild>
         <Button variant="outline" size="sm" className="bg-card">
           <SearchIcon />
@@ -60,17 +85,17 @@ function FindNode({ nodes, onFind }: { nodes: GraphNode[]; onFind: (id: string) 
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[min(20rem,calc(100vw-2rem))] p-0">
-        <Command>
-          <CommandInput placeholder={t('wiki.graph.findPlaceholder')} />
+        <Command shouldFilter={false}>
+          <CommandInput placeholder={t('wiki.graph.findPlaceholder')} value={query} onValueChange={setQuery} />
           <CommandList>
             <CommandEmpty>{t('wiki.graph.noMatch')}</CommandEmpty>
-            {nodes.map((node) => (
+            {matches.map((node) => (
               <CommandItem
                 key={node.id}
                 value={node.id}
-                keywords={[label(t, node)]}
                 onSelect={() => {
                   setOpen(false)
+                  setQuery('')
                   onFind(node.id)
                 }}
                 className="items-start"
@@ -80,9 +105,9 @@ function FindNode({ nodes, onFind }: { nodes: GraphNode[]; onFind: (id: string) 
                   <span className={cn('block break-words', node.file && 'font-mono text-xs break-all')} translate={node.file ? 'no' : undefined}>
                     {label(t, node)}
                   </span>
-                  {node.page ? (
-                    <span className="block font-mono text-[0.6875rem] break-all text-subtle" translate="no">
-                      {node.page.path}
+                  {node.page || paths.has(node.id) ? (
+                    <span className="line-clamp-2 block font-mono text-[0.6875rem] break-all text-subtle" translate="no">
+                      {node.page ? node.page.path : paths.get(node.id)?.join(', ')}
                     </span>
                   ) : null}
                 </span>
@@ -95,12 +120,12 @@ function FindNode({ nodes, onFind }: { nodes: GraphNode[]; onFind: (id: string) 
   )
 }
 
-// The kinds of relation a person can leave out, each with a sample of its
-// line, so the list reads as the graph's legend too.
-const kinds: { kind: GraphEdgeKind; key: MessageKey; width: number }[] = [
-  { kind: 'link', key: 'wiki.graph.kind.link', width: 1.25 },
-  { kind: 'supersedes', key: 'wiki.graph.kind.supersedes', width: 2 },
-  { kind: 'source', key: 'wiki.graph.kind.source', width: 0.75 },
+// The kinds of relation a person can leave out. They are drawn alike; the
+// card says which is which.
+const kinds: { kind: GraphEdgeKind; key: MessageKey }[] = [
+  { kind: 'link', key: 'wiki.graph.kind.link' },
+  { kind: 'supersedes', key: 'wiki.graph.kind.supersedes' },
+  { kind: 'source', key: 'wiki.graph.kind.source' },
 ]
 
 const fileChoices: { value: FileNodes; key: MessageKey }[] = [
@@ -126,7 +151,12 @@ function FiltersButton({ graph, filters, onFilters }: { graph: WikiGraph; filter
         <Button variant="outline" size="sm" className="bg-card">
           <SlidersHorizontalIcon />
           {t('wiki.graph.filters')}
-          {changed ? <span aria-hidden="true" className="size-1.5 rounded-full bg-foreground" /> : null}
+          {changed ? (
+            <>
+              <span aria-hidden="true" className="size-1.5 rounded-full bg-foreground" />
+              <span className="sr-only">{t('wiki.graph.filtersChanged')}</span>
+            </>
+          ) : null}
         </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="flex max-h-[min(36rem,calc(100vh-10rem))] w-[min(18rem,calc(100vw-2rem))] flex-col gap-4 overflow-y-auto">
@@ -153,7 +183,7 @@ function FiltersButton({ graph, filters, onFilters }: { graph: WikiGraph; filter
           <FieldLegend variant="label" className="mb-0 text-xs text-subtle">
             {t('wiki.graph.kinds')}
           </FieldLegend>
-          {kinds.map(({ kind, key, width }) => (
+          {kinds.map(({ kind, key }) => (
             <Field key={kind} orientation="horizontal" className="gap-2">
               <Checkbox
                 id={`${id}-kind-${kind}`}
@@ -163,22 +193,8 @@ function FiltersButton({ graph, filters, onFilters }: { graph: WikiGraph; filter
               <FieldLabel htmlFor={`${id}-kind-${kind}`} className="flex-1 text-[0.8125rem] font-normal">
                 {t(key)}
               </FieldLabel>
-              <svg aria-hidden="true" viewBox="0 0 32 8" className="h-2 w-8 flex-none text-ring">
-                <line x1="1" y1="4" x2="27" y2="4" stroke="currentColor" strokeWidth={width} />
-                <path d="M26 1 L31 4 L26 7 Z" fill="currentColor" />
-              </svg>
             </Field>
           ))}
-          {has('file') || has('topic') ? (
-            <p className="flex items-center gap-2 text-xs text-muted-foreground">
-              <span className="flex-1">
-                {[has('file') ? t('wiki.graph.kind.names') : '', has('topic') ? t('wiki.graph.kind.from') : ''].filter(Boolean).join(' · ')}
-              </span>
-              <svg aria-hidden="true" viewBox="0 0 32 8" className="h-2 w-8 flex-none text-ring">
-                <line x1="1" y1="4" x2="31" y2="4" stroke="currentColor" strokeWidth={1} strokeDasharray="5 5" />
-              </svg>
-            </p>
-          ) : null}
         </FieldSet>
         <FieldSet className="gap-2.5">
           <FieldLegend variant="label" className="mb-0 text-xs text-subtle">

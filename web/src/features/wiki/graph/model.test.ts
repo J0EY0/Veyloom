@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest'
 import type { GraphNode, WikiGraph, WikiPageInfo } from '@/api/types'
-import { defaultFilters, filtersShowing, layout, neighborhood, pageRelations, relationsOf, visibleGraph } from './model'
+import { foldPaths } from './fold'
+import { clusterGraph, layout } from './layout'
+import { defaultFilters, filtersShowing, neighborhood, pageRelations, relationsOf, steps, visibleGraph } from './model'
 
 function page(id: string, overrides: Partial<WikiPageInfo> = {}): GraphNode {
   return {
@@ -106,15 +108,90 @@ describe('the relation graph', () => {
     expect(relations.topics).toEqual([])
   })
 
-  it('lays the same graph out the same, nodes apart', () => {
-    const shown = visibleGraph(graph, { ...defaultFilters, files: 'all', topics: true, deprecated: true })
-    const first = layout(shown, () => 40)
-    const again = layout(shown, () => 40)
-    expect([...first.entries()]).toEqual([...again.entries()])
-    const points = [...first.values()]
-    for (const [i, p] of points.entries()) {
-      expect(Number.isFinite(p.x) && Number.isFinite(p.y)).toBe(true)
-      for (const q of points.slice(i + 1)) expect(Math.hypot(p.x - q.x, p.y - q.y)).toBeGreaterThan(40)
-    }
+  it('counts the steps out from the node in focus', () => {
+    const shown = visibleGraph(graph, { ...defaultFilters, deprecated: true })
+    expect(Object.fromEntries(steps(shown, '/old.md', 2))).toEqual({ '/old.md': 0, '/b.md': 1, 'file:internal/hub/brief.go': 1, '/a.md': 2, 'file:go.mod': 2 })
+  })
+
+  it('folds the paths pages name into their directories, each edge saying which paths', () => {
+    const folded = foldPaths(graph)
+    expect(folded.graph.nodes.filter((node) => node.kind === 'file')).toEqual([
+      { id: 'file:./', kind: 'file', file: './', dir: true, pages: 2 },
+      { id: 'file:internal/hub/', kind: 'file', file: 'internal/hub/', dir: true, pages: 2 },
+    ])
+    expect(folded.graph.edges.filter((edge) => edge.kind === 'names')).toEqual([
+      { from: '/a.md', to: 'file:./', kind: 'names', context: 'go.mod' },
+      { from: '/b.md', to: 'file:./', kind: 'names', context: 'go.mod, only.go' },
+      { from: '/a.md', to: 'file:internal/hub/', kind: 'names', context: 'brief.go' },
+      { from: '/old.md', to: 'file:internal/hub/', kind: 'names', context: 'brief.go' },
+    ])
+    expect(folded.into.get('file:only.go')).toBe('file:./')
+    expect(folded.paths.get('file:./')).toEqual(['go.mod', 'only.go'])
+    // A directory two pages shown name a path in shows; one only a
+    // deprecated page shares does not.
+    expect(ids(visibleGraph(folded.graph, defaultFilters))).toEqual(['/@acme/x.md', '/a.md', '/b.md', 'file:./'])
+    expect(filtersShowing(folded.graph, defaultFilters, 'file:internal/hub/').files).toBe('all')
+  })
+
+  it('puts each page in the module it relates to, or the general cluster', () => {
+    const clustering = clusterGraph(modular)
+    expect(Object.fromEntries(clustering.of)).toEqual({
+      '/m/store.md': '/m/store.md',
+      '/m/sync.md': '/m/sync.md',
+      '/f/where.md': '/m/store.md',
+      // Two steps out, by way of the page it links to.
+      '/d/json.md': '/m/store.md',
+      // It links to a page about storage, and to the sync module itself.
+      '/p/lww.md': '/m/sync.md',
+      '/c/vet.md': '',
+      '/c/fmt.md': '',
+      // A deprecated module is a page like any other.
+      '/m/old.md': '/m/store.md',
+      // With the most of the pages naming a path in it.
+      'file:internal/store/': '/m/store.md',
+    })
+    expect(clustering.clusters.map((cluster) => [cluster.id, cluster.members.length])).toEqual([
+      ['/m/store.md', 5],
+      ['/m/sync.md', 2],
+      ['', 2],
+    ])
+  })
+
+  it('lays the same graph out the same, each cluster an island round its module', () => {
+    const clustering = clusterGraph(modular)
+    const first = layout(modular, clustering)
+    expect([...first.entries()]).toEqual([...layout(modular, clustering).entries()])
+    // The cluster most tied to the others in the middle.
+    expect(first.get('/m/store.md')).toEqual({ x: 0, y: 0 })
+    const distance = (a: string, b: string) => Math.hypot(first.get(a)!.x - first.get(b)!.x, first.get(a)!.y - first.get(b)!.y)
+    for (const id of ['/f/where.md', '/d/json.md', '/m/old.md', 'file:internal/store/'])
+      expect(distance(id, '/m/store.md')).toBeLessThan(distance(id, '/m/sync.md'))
+    expect(distance('/p/lww.md', '/m/sync.md')).toBeLessThan(distance('/p/lww.md', '/m/store.md'))
+    // Islands, with room between them.
+    expect(distance('/m/store.md', '/m/sync.md')).toBeGreaterThan(150)
   })
 })
+
+const modular: WikiGraph = {
+  nodes: [
+    page('/m/store.md', { type: 'Module' }),
+    page('/m/sync.md', { type: 'Module' }),
+    page('/f/where.md'),
+    page('/d/json.md', { type: 'Decision' }),
+    page('/p/lww.md', { type: 'Decision' }),
+    page('/c/vet.md', { type: 'Convention' }),
+    page('/c/fmt.md', { type: 'Convention' }),
+    page('/m/old.md', { type: 'Module', status: 'deprecated' }),
+    { id: 'file:internal/store/', kind: 'file', file: 'internal/store/', dir: true, pages: 2 },
+  ],
+  edges: [
+    { from: '/f/where.md', to: '/m/store.md', kind: 'link' },
+    { from: '/d/json.md', to: '/f/where.md', kind: 'link' },
+    { from: '/p/lww.md', to: '/f/where.md', kind: 'link' },
+    { from: '/p/lww.md', to: '/m/sync.md', kind: 'link' },
+    { from: '/c/vet.md', to: '/c/fmt.md', kind: 'link' },
+    { from: '/m/old.md', to: '/m/store.md', kind: 'supersedes' },
+    { from: '/f/where.md', to: 'file:internal/store/', kind: 'names' },
+    { from: '/d/json.md', to: 'file:internal/store/', kind: 'names' },
+  ],
+}

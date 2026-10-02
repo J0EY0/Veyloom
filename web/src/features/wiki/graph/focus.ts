@@ -1,19 +1,34 @@
 import { createContext } from 'react'
+import type { Labels } from './labels'
 
-// What the relation graph is focused on (docs/design.md 5.17): the node a
-// person picked and those near it, which stay lit while the rest fade.
-// Nodes read it from here rather than from their own data, so that
-// focusing leaves the nodes, their measured sizes and where they were
-// dragged, as they are.
-export interface GraphFocus {
+// What the relation graph lights and writes (docs/design.md 5.17, webui.md
+// 4.14): the node in focus, the one lit, which is the one hovered while
+// nothing is in focus, those near it, which stay lit while the rest fade,
+// and the names that have room. Nodes read it from here rather than from
+// their own data, so that lighting and naming leave the nodes, where they
+// were laid out or dragged, as they are.
+export interface GraphView {
   focus: string
-  near: ReadonlySet<string>
+  lead: string
+  near: { has: (id: string) => boolean }
+  // A node hovered while another is in focus.
+  hover: string
+  labels: Labels
+  // The view has been set: the clusters fade in.
+  shown: boolean
 }
 
-export const GraphFocusContext = createContext<GraphFocus>({ focus: '', near: new Set() })
+export const GraphViewContext = createContext<GraphView>({
+  focus: '',
+  lead: '',
+  near: new Set(),
+  hover: '',
+  labels: { names: new Map(), regions: new Map() },
+  shown: false,
+})
 
-// fades says whether a node fades: something else is in focus, and the
-// node is not near it.
-export function fades({ focus, near }: GraphFocus, id: string): boolean {
-  return focus !== '' && !near.has(id)
+// fades says whether a node fades: something else is lit, and the node is
+// not near it.
+export function fades({ lead, near, hover }: GraphView, id: string): boolean {
+  return lead !== '' && !near.has(id) && id !== hover
 }

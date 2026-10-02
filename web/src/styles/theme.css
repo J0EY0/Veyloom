@@ -430,6 +430,77 @@
   background-color: var(--sidebar);
 }
 
+/* React Flow's credit on the wiki's graph, quiet in either theme: a line
+   of faint words, without the light box it brings (docs/webui.md 4.14). */
+.react-flow {
+  --xy-attribution-background-color: transparent;
+}
+.react-flow__attribution a {
+  color: var(--subtle);
+}
+
+/* The relation graph (docs/webui.md 4.14): grey dots on the plain canvas,
+   the colour of the cards; lines darker within a cluster and faint across
+   them; the clusters' names large and faint. Dark draws the dots flat,
+   without the gradient and shadow that make light dots on a dark ground
+   read as stars. A name has a halo of the ground, so lines under it do
+   not cut it; a node fades to --graph-dim when another is lit. */
+:root {
+  --graph-halo: var(--card);
+  --graph-hub: radial-gradient(circle at 35% 30%, #5a5f69, #262a31);
+  --graph-leaf: #9a98a1;
+  --graph-ring: #9a98a0;
+  --graph-dir: #b4b2b9;
+  --graph-dot-shadow: 0 0.0625rem 0.15rem rgb(0 0 0 / 0.11);
+  --graph-inside: #b9b7bf;
+  --graph-inside-path: #d6d4da;
+  --graph-across: #e2e0e5;
+  --graph-lit: #6f6d76;
+  --graph-region: #bcbac2;
+  --graph-icon: #a3a1a8;
+  --graph-dim: 0.22;
+}
+.dark {
+  --graph-hub: linear-gradient(#9ea2ab, #9ea2ab);
+  --graph-leaf: #5f636c;
+  --graph-ring: #5f636c;
+  --graph-dir: #4f525b;
+  --graph-dot-shadow: none;
+  --graph-inside: #4f525b;
+  --graph-inside-path: #2f3137;
+  --graph-across: #24262b;
+  --graph-lit: #c4c8d0;
+  --graph-region: #4b4e57;
+  --graph-icon: #5d616b;
+  --graph-dim: 0.25;
+}
+@utility graph-halo {
+  text-shadow:
+    0 0 0.125rem var(--graph-halo),
+    0 0 0.125rem var(--graph-halo),
+    0 0 0.1875rem var(--graph-halo);
+}
+@utility graph-halo-wide {
+  text-shadow:
+    0 0 0.1875rem var(--graph-halo),
+    0 0 0.1875rem var(--graph-halo),
+    0 0 0.25rem var(--graph-halo);
+}
+/* The graph's ground is plain, the cards' colour, without React Flow's
+   dots. */
+.graph-canvas {
+  --xy-background-color: var(--card);
+}
+.graph-canvas .react-flow__background {
+  display: none;
+}
+/* As the graph opens, its clusters fade in one after another. */
+@keyframes graph-in {
+  from {
+    opacity: 0;
+  }
+}
+
 /* A side panel slides in from the right edge it lives on, and out. The
    way out holds its last frame and the transition ends with it: a view
    transition lasts 250ms by default, and without "forwards" the panel,

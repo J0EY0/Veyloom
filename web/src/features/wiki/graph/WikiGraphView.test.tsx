@@ -1,4 +1,4 @@
-import { fireEvent, screen, within } from '@testing-library/react'
+import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import type { WikiGraph } from '@/api/types'
@@ -7,8 +7,9 @@ import { renderWithProviders } from '@/test/render'
 import { WikiView } from '../WikiView'
 import { info, routes } from '../wikiTesting'
 
-// The relation graph of a project's wiki (docs/design.md 5.17): what it
-// draws by default, what the filters add, and what focusing on a node says.
+// The relation graph of a project's wiki (docs/design.md 5.17, webui.md
+// 4.14): what it draws by default, what the filters add, and what focusing
+// on a node says. The paths pages name fold into their directories.
 
 const graph: WikiGraph = {
   nodes: [
@@ -47,11 +48,14 @@ function renderGraph(search = '', onOpenThread = vi.fn(), wiki: WikiGraph = grap
 const card = (name: string) => screen.getByRole('region', { name })
 
 describe('WikiGraphView', () => {
-  it('draws the pages and the paths two of them name; the filters add the rest', async () => {
+  it('draws the pages and the directories two of them name a path in; the filters add the rest', async () => {
     renderGraph()
     expect(await screen.findByText('Brief shape')).toBeInTheDocument()
     expect(screen.getByText('Empty room')).toBeInTheDocument()
-    expect(screen.getByText('internal/hub/brief.go')).toBeInTheDocument()
+    // A directory's name waits for a closer view; its dot is named for a
+    // screen reader.
+    expect(screen.getByLabelText('仓库目录：internal/hub/')).toHaveAttribute('role', 'group')
+    expect(screen.getByLabelText('决定：Brief shape')).toHaveAttribute('role', 'group')
     expect(screen.queryByText('Old news')).not.toBeInTheDocument()
     expect(screen.queryByText('话题 #3')).not.toBeInTheDocument()
     expect(screen.getByRole('link', { name: '关系图' })).toHaveAttribute('href', '/rooms/r1/wiki/graph')
@@ -77,8 +81,13 @@ describe('WikiGraphView', () => {
     expect(within(brief).getByText('常驻')).toBeInTheDocument()
     expect(within(brief).getByRole('link', { name: '打开页面' })).toHaveAttribute('href', '/rooms/r1/wiki/decisions/brief.md')
     const linked = within(brief).getByRole('region', { name: '引用此页的页面' })
-    expect(within(linked).getByText('An empty room once broke [the brief].')).toBeInTheDocument()
-    expect(within(within(brief).getByRole('region', { name: '提及的路径' })).getByText('internal/hub/brief.go')).toBeInTheDocument()
+    // The sentence a link is in, without the brackets the graph writes it with.
+    expect(
+      within(linked).getByText((_, element) => element?.textContent === 'An empty room once broke the brief.' && element.tagName === 'P'),
+    ).toBeInTheDocument()
+    const named = within(brief).getByRole('region', { name: '提及的路径' })
+    expect(within(named).getByText('internal/hub/')).toBeInTheDocument()
+    expect(within(named).getByText('brief.go')).toBeInTheDocument()
     // The deprecated page it took over from is not on screen, so not listed.
     expect(within(brief).queryByRole('region', { name: '取代了' })).not.toBeInTheDocument()
 
@@ -89,6 +98,8 @@ describe('WikiGraphView', () => {
     await userEvent.keyboard('{Escape}')
     expect(screen.queryByRole('region', { name: 'Empty room' })).not.toBeInTheDocument()
     expect(router.state.location.search).toBe('')
+    // The keyboard is back on the node the card was about.
+    await waitFor(() => expect(document.activeElement).toHaveAttribute('data-id', '/pitfalls/empty.md'))
   })
 
   it('focuses on a node picked on the canvas, or found by name', async () => {
@@ -97,14 +108,24 @@ describe('WikiGraphView', () => {
     fireEvent.click(await screen.findByText('Empty room'))
     expect(await screen.findByRole('region', { name: 'Empty room' })).toBeInTheDocument()
 
+    // A directory is found by a path in it.
     await userEvent.click(screen.getByRole('button', { name: '查找节点' }))
-    await userEvent.type(screen.getByPlaceholderText('按标题或路径查找…'), 'brief.go')
-    await userEvent.click(screen.getByRole('option', { name: /internal\/hub\/brief\.go/ }))
-    const file = card('internal/hub/brief.go')
-    expect(within(file).getByText('仓库路径')).toBeInTheDocument()
-    expect(within(file).getByText('2 页提及')).toBeInTheDocument()
-    expect(within(within(file).getByRole('region', { name: '提及它的页面' })).getAllByRole('button')).toHaveLength(2)
-    expect(router.state.location.search).toBe(`?${new URLSearchParams({ focus: 'file:internal/hub/brief.go' })}`)
+    await userEvent.type(screen.getByPlaceholderText('按标题或路径查找…'), 'hub/brief.go')
+    expect(screen.getAllByRole('option')).toHaveLength(1)
+    await userEvent.click(screen.getByRole('option', { name: /internal\/hub\// }))
+    const dir = card('internal/hub/')
+    expect(within(dir).getByText('仓库目录')).toBeInTheDocument()
+    expect(within(dir).getByText('2 页提及')).toBeInTheDocument()
+    const namedBy = within(dir).getByRole('region', { name: '提及它的页面' })
+    expect(within(namedBy).getAllByRole('button')).toHaveLength(2)
+    // Each with the paths it names in it.
+    expect(within(namedBy).getAllByText('brief.go')).toHaveLength(2)
+    expect(router.state.location.search).toBe(`?${new URLSearchParams({ focus: 'file:internal/hub/' })}`)
+  })
+
+  it('focuses a link to a path on its directory', async () => {
+    renderGraph(`?${new URLSearchParams({ focus: 'file:internal/hub/brief.go' })}`)
+    expect(await screen.findByRole('region', { name: 'internal/hub/' })).toBeInTheDocument()
   })
 
   it('shows what a link asks to focus on, a deprecated page or a topic, and opens the topic', async () => {

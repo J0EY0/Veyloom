@@ -11,6 +11,7 @@ import type { OpenTopic } from '../CommitRow'
 import { pageHref } from '../links'
 import { relationNames, typeName } from '../names'
 import { reviewText } from '../review'
+import { contextParts } from '../textParts'
 import { TypeIcon } from './icons'
 import { relationsOf } from './model'
 
@@ -19,6 +20,8 @@ export interface FocusCardProps {
   // The graph as shown: the card lists what is on screen.
   graph: WikiGraph
   id: string
+  // The paths pages name in a directory in focus, as they go on from it.
+  paths?: string[]
   onFocus: (id: string) => void
   onOpenThread: OpenTopic
   onClose: () => void
@@ -26,13 +29,17 @@ export interface FocusCardProps {
 
 // FocusCard is what the graph says about the node in focus (docs/design.md
 // 5.17): what it is, how it relates to the rest, grouped by kind, links
-// with the sentence they are in, and a way to open the page or the topic.
-// Picking a relation focuses on it.
-export function FocusCard({ space, graph, id, onFocus, onOpenThread, onClose }: FocusCardProps) {
+// with the sentence they are in, the paths named with the page naming
+// them, and a way to open the page or the topic. Picking a relation
+// focuses on it.
+export function FocusCard({ space, graph, id, paths, onFocus, onOpenThread, onClose }: FocusCardProps) {
   const t = useT()
   const node = graph.nodes.find((known) => known.id === id)
   if (!node) return null
   const groups = relationsOf(graph, id)
+  // A link written as a page's path, in the sentence a link is in, reads as
+  // the page's title, as under a page (PageRelations).
+  const titleOf = (path: string) => graph.nodes.find((known) => known.id === path)?.page?.title
   const page = node.page
   const topic = node.topic
   return (
@@ -49,6 +56,11 @@ export function FocusCard({ space, graph, id, onFocus, onOpenThread, onClose }: 
           {page ? (
             <p className="mt-0.5 font-mono text-[0.6875rem] break-all text-subtle" translate="no">
               {page.path}
+            </p>
+          ) : null}
+          {paths && paths.length > 0 ? (
+            <p className="mt-0.5 font-mono text-[0.6875rem] break-all text-subtle" translate="no">
+              {paths.join(', ')}
             </p>
           ) : null}
           {page?.description ? <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{page.description}</p> : null}
@@ -78,8 +90,23 @@ export function FocusCard({ space, graph, id, onFocus, onOpenThread, onClose }: 
                     <KindIcon node={other} className="mt-0.5" />
                     <ItemContent className="min-w-0 gap-0.5">
                       <ItemTitle className={cn('text-xs font-normal break-words', other.file && 'font-mono break-all')}>{label(t, other)}</ItemTitle>
+                      {context && (group.key === 'names' || group.key === 'namedBy') ? (
+                        <ItemDescription className="line-clamp-none font-mono text-[0.6875rem] break-all" translate="no">
+                          {context}
+                        </ItemDescription>
+                      ) : null}
                       {context && (group.key === 'linksTo' || group.key === 'linkedFrom') ? (
-                        <ItemDescription className="line-clamp-none text-[0.6875rem] leading-relaxed break-words">{context}</ItemDescription>
+                        <ItemDescription className="line-clamp-none text-[0.6875rem] leading-relaxed break-words">
+                          {contextParts(context, titleOf).map((part, index) =>
+                            part.hit ? (
+                              <span key={index} className="text-foreground/80">
+                                {part.text}
+                              </span>
+                            ) : (
+                              part.text
+                            ),
+                          )}
+                        </ItemDescription>
                       ) : null}
                     </ItemContent>
                   </button>
@@ -117,7 +144,8 @@ export function label(t: T, node: GraphNode): string {
   return node.file ?? node.id
 }
 
-function kindText(t: T, node: GraphNode): string {
+// kindText is what kind of node it is: a page's type, a directory, a topic.
+export function kindText(t: T, node: GraphNode): string {
   if (node.page) return [node.page.mount ? t('wiki.mount', { name: node.page.mount }) : '', typeName(t, node.page.type)].filter(Boolean).join(' · ')
   if (node.topic) return t('wiki.graph.topic', { n: node.topic.number })
   return node.dir ? t('wiki.graph.dir') : t('wiki.graph.file')

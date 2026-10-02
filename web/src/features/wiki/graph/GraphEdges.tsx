@@ -1,39 +1,35 @@
 import type { CSSProperties } from 'react'
-import { BaseEdge, getStraightPath, MarkerType, useInternalNode, type Edge as FlowEdge, type EdgeProps, type EdgeTypes, type InternalNode } from '@xyflow/react'
+import { useInternalNode, type Edge as FlowEdge, type EdgeProps, type EdgeTypes, type InternalNode } from '@xyflow/react'
 import type { GraphEdge, GraphEdgeKind } from '@/api/types'
 import type { MessageKey } from '@/i18n/zh-CN'
-import { useT } from '@/lib/i18n'
 import { cn } from '@/lib/utils'
+import type { Point } from './layout'
 
-// The edges of the relation graph (docs/design.md 5.17). A force layout
-// puts nodes on every side of each other, so an edge runs straight from
-// one card's border to the other's rather than between handles on their
-// left and right.
+// The edges of the relation graph (docs/design.md 5.17, webui.md 4.14):
+// a slight curve from dot to dot, without an arrow; the card says which
+// way a relation runs. Within a cluster an edge is darker, one to a
+// directory lighter; across clusters thin and faint, behind the islands.
+// Those of the node lit are dark, the rest fade. Like the dots, a line
+// keeps its width on screen at any zoom.
 
 export interface RelationData extends Record<string, unknown> {
   edge: GraphEdge
-  // How the edge stands to the focus: lit when both its ends are near the
-  // node in focus, faded when something else is in focus.
+  // Both its ends in one cluster.
+  inside: boolean
   lit: boolean
   faded: boolean
 }
 
 export type GraphFlowEdge = FlowEdge<RelationData, 'relation'>
 
-// How each kind is drawn: a link solid, with an arrow to the page it
-// leads to; which page took over from which heavier, with the word on it;
-// what a page rests on thin; a path named, a topic come from and what a
-// directory holds dashed, the way AI Elements draws its temporary edge.
-const strokes: Record<GraphEdgeKind, CSSProperties> = {
-  link: { strokeWidth: 1.25 },
-  supersedes: { strokeWidth: 2 },
-  source: { strokeWidth: 0.75 },
-  names: { strokeWidth: 1, strokeDasharray: '5 5' },
-  from: { strokeWidth: 1, strokeDasharray: '5 5' },
-  contains: { strokeWidth: 1, strokeDasharray: '5 5' },
-}
+const width = (px: number) => `calc(${px}px * var(--graph-k, 1))`
 
-const arrowed: GraphEdgeKind[] = ['link', 'supersedes', 'source']
+const strokes: Record<'inside' | 'path' | 'across' | 'lit', CSSProperties> = {
+  inside: { stroke: 'var(--graph-inside)', strokeWidth: width(1.35) },
+  path: { stroke: 'var(--graph-inside-path)', strokeWidth: width(0.9) },
+  across: { stroke: 'var(--graph-across)', strokeWidth: width(0.7) },
+  lit: { stroke: 'var(--graph-lit)', strokeWidth: width(1.6) },
+}
 
 // How each kind reads as a sentence.
 export const edgeSentences: Record<GraphEdgeKind, MessageKey> = {
@@ -45,67 +41,52 @@ export const edgeSentences: Record<GraphEdgeKind, MessageKey> = {
   contains: 'wiki.graph.edge.contains',
 }
 
-// toFlowEdge is an edge as React Flow takes it, coloured for the focus,
-// and said in words for a screen reader.
-export function toFlowEdge(edge: GraphEdge, lit: boolean, faded: boolean, ariaLabel: string): GraphFlowEdge {
-  const color = lit ? 'var(--foreground)' : 'var(--ring)'
+// toFlowEdge is an edge as React Flow takes it, drawn for where its ends
+// are and for the focus, and said in words for a screen reader.
+export function toFlowEdge(edge: GraphEdge, inside: boolean, lit: boolean, faded: boolean, ariaLabel: string): GraphFlowEdge {
   return {
     id: `${edge.kind} ${edge.from} ${edge.to}`,
     source: edge.from,
     target: edge.to,
     type: 'relation',
     ariaLabel,
-    data: { edge, lit, faded },
-    markerEnd: arrowed.includes(edge.kind) ? { type: MarkerType.ArrowClosed, width: 14, height: 14, color } : undefined,
+    data: { edge, inside, lit, faded },
     zIndex: lit ? 1 : 0,
     focusable: false,
     selectable: false,
   }
 }
 
-function RelationEdge({ id, source, target, data, markerEnd }: EdgeProps<GraphFlowEdge>) {
-  const t = useT()
+function RelationEdge({ source, target, data }: EdgeProps<GraphFlowEdge>) {
   const from = useInternalNode(source)
   const to = useInternalNode(target)
   if (!from || !to || !data) return null
-  const [sx, sy] = borderPoint(from, to)
-  const [tx, ty] = borderPoint(to, from)
-  const [path, labelX, labelY] = getStraightPath({ sourceX: sx, sourceY: sy, targetX: tx, targetY: ty })
-  const kind = data.edge.kind
+  const path = data.edge.kind === 'names' || data.edge.kind === 'from'
+  const tone = data.lit ? 'lit' : !data.inside ? 'across' : path ? 'path' : 'inside'
   return (
-    <g className={cn('transition-opacity', data.faded && 'opacity-15')}>
-      <BaseEdge
-        id={id}
-        path={path}
-        markerEnd={markerEnd}
-        style={{ ...strokes[kind], stroke: data.lit ? 'var(--foreground)' : 'var(--ring)' }}
-        label={kind === 'supersedes' ? t('wiki.graph.kind.supersedes') : undefined}
-        labelX={labelX}
-        labelY={labelY}
-        labelBgPadding={[4, 2]}
-        labelBgBorderRadius={4}
-      />
-    </g>
+    <path
+      d={curve(centre(from), centre(to), data.inside ? 0.1 : 0.16)}
+      fill="none"
+      strokeLinecap="round"
+      className={cn('pointer-events-none transition-[stroke,opacity] duration-150', data.faded && 'opacity-30')}
+      style={strokes[tone]}
+    />
   )
 }
 
 export const edgeTypes: EdgeTypes = { relation: RelationEdge }
 
-// borderPoint is where the line from the node's centre to the other's
-// leaves the node's card.
-function borderPoint(node: InternalNode, other: InternalNode): [number, number] {
-  const [cx, cy] = centre(node)
-  const [ox, oy] = centre(other)
-  const halfWidth = (node.measured.width ?? 0) / 2
-  const halfHeight = (node.measured.height ?? 0) / 2
-  const dx = ox - cx
-  const dy = oy - cy
-  if (dx === 0 && dy === 0) return [cx, cy]
-  const scale = Math.min(dx === 0 ? Infinity : halfWidth / Math.abs(dx), dy === 0 ? Infinity : halfHeight / Math.abs(dy))
-  return [cx + dx * scale, cy + dy * scale]
+// curve is a line from one point to another bowed a little to one side,
+// always the same side for the same two in the same order.
+export function curve(a: Point, b: Point, bow: number): string {
+  const mx = (a.x + b.x) / 2
+  const my = (a.y + b.y) / 2
+  const dx = b.x - a.x
+  const dy = b.y - a.y
+  return `M${a.x},${a.y} Q${mx - dy * bow},${my + dx * bow} ${b.x},${b.y}`
 }
 
-function centre(node: InternalNode): [number, number] {
+function centre(node: InternalNode): Point {
   const { x, y } = node.internals.positionAbsolute
-  return [x + (node.measured.width ?? 0) / 2, y + (node.measured.height ?? 0) / 2]
+  return { x: x + (node.measured.width ?? 0) / 2, y: y + (node.measured.height ?? 0) / 2 }
 }

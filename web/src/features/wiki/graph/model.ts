@@ -1,12 +1,13 @@
-import { forceCollide, forceLink, forceManyBody, forceSimulation, forceX, forceY, type SimulationLinkDatum, type SimulationNodeDatum } from 'd3-force'
 import type { GraphEdgeKind, GraphNode, WikiGraph } from '@/api/types'
 
-// What the relation graph shows (docs/design.md 5.17): the part of a wiki's
-// graph a person's filters let through, the pages about the one in focus,
-// and where each node goes.
+// What the relation graph shows (docs/design.md 5.17, webui.md 4.14): the
+// part of a wiki's graph a person's filters let through, the pages about
+// the one in focus, and how a node relates to the rest. The paths are
+// folded into their directories first (fold.ts); where nodes go is
+// layout.ts's.
 
-// Which nodes for paths of the repository: those two or more pages shown
-// name (the default), all of them, or none.
+// Which nodes for the repository's directories: those two or more pages
+// shown name a path in (the default), all of them, or none.
 export type FileNodes = 'shared' | 'all' | 'none'
 
 export interface GraphFilters {
@@ -22,12 +23,13 @@ export interface GraphFilters {
   hiddenKinds: GraphEdgeKind[]
 }
 
-// The defaults the user settled on: paths two pages share, no topics.
+// The defaults the user settled on: directories two pages share, no
+// topics.
 export const defaultFilters: GraphFilters = { hiddenTypes: [], deprecated: false, files: 'shared', topics: false, external: true, depth: 1, hiddenKinds: [] }
 
 // visibleGraph is what the filters let through: the nodes, and the edges
-// between them. A path or topic stands for nothing without the pages shown
-// that name it or came from it.
+// between them. A directory or topic stands for nothing without the pages
+// shown that name a path in it or came from it.
 export function visibleGraph(graph: WikiGraph, filters: GraphFilters): WikiGraph {
   const pages = new Set<string>()
   for (const node of graph.nodes) {
@@ -66,27 +68,32 @@ export function filtersShowing(graph: WikiGraph, filters: GraphFilters, id: stri
   return next
 }
 
-// neighborhood is the node in focus and those up to depth steps from it,
-// whichever way the edges run.
-export function neighborhood(graph: WikiGraph, focus: string, depth: number): Set<string> {
-  const near = new Set([focus])
-  let frontier = [focus]
-  for (let step = 0; step < depth; step++) {
-    const next: string[] = []
+// steps is how far each node within depth steps of the one in focus is
+// from it, whichever way the edges run: the node itself 0 steps.
+export function steps(graph: WikiGraph, focus: string, depth: number): Map<string, number> {
+  const seen = new Map([[focus, 0]])
+  let frontier = new Set([focus])
+  for (let step = 1; step <= depth; step++) {
+    const next = new Set<string>()
     for (const edge of graph.edges) {
       for (const [from, to] of [
         [edge.from, edge.to],
         [edge.to, edge.from],
       ]) {
-        if (frontier.includes(from) && !near.has(to)) {
-          near.add(to)
-          next.push(to)
+        if (frontier.has(from) && !seen.has(to)) {
+          seen.set(to, step)
+          next.add(to)
         }
       }
     }
     frontier = next
   }
-  return near
+  return seen
+}
+
+// neighborhood is the node in focus and those up to depth steps from it.
+export function neighborhood(graph: WikiGraph, focus: string, depth: number): Set<string> {
+  return new Set(steps(graph, focus, depth).keys())
 }
 
 // A relation of a node, as the panel beside the graph and a page list them
@@ -180,61 +187,4 @@ export function nodeName(node: GraphNode): string {
   if (node.page) return node.page.title
   if (node.topic) return `#${node.topic.number}`
   return node.file ?? node.id
-}
-
-export interface Point {
-  x: number
-  y: number
-}
-
-type Placed = SimulationNodeDatum & { id: string; r: number }
-
-// layout places the nodes, each at its centre, the way a force layout
-// settles them: linked nodes near each other, none overlapping, pulled a
-// little harder to the middle up and down than across, as screens are
-// wider than they are tall. It starts
-// every node where its id puts it and draws its chance from a fixed seed,
-// so the same wiki lays out the same every time.
-export function layout(graph: WikiGraph, radius: (node: GraphNode) => number): Map<string, Point> {
-  const nodes: Placed[] = graph.nodes.map((node) => ({ id: node.id, r: radius(node), ...seed(node.id, graph.nodes.length) }))
-  const links: SimulationLinkDatum<Placed>[] = graph.edges.map((edge) => ({ source: edge.from, target: edge.to }))
-  const simulation = forceSimulation(nodes)
-    .randomSource(random(1))
-    .force(
-      'link',
-      forceLink<Placed, SimulationLinkDatum<Placed>>(links)
-        .id((node) => node.id)
-        .distance((link) => (link.source as Placed).r + (link.target as Placed).r + 40),
-    )
-    .force('charge', forceManyBody<Placed>().strength(-400))
-    .force(
-      'collide',
-      forceCollide<Placed>((node) => node.r + 12),
-    )
-    .force('x', forceX<Placed>(0).strength(0.03))
-    .force('y', forceY<Placed>(0).strength(0.08))
-    .stop()
-  simulation.tick(300)
-  return new Map(nodes.map((node) => [node.id, { x: node.x ?? 0, y: node.y ?? 0 }]))
-}
-
-// seed is where a node starts: on a spiral, at a turn its id picks.
-function seed(id: string, count: number): Point {
-  let hash = 2166136261
-  for (let i = 0; i < id.length; i++) {
-    hash = Math.imul(hash ^ id.charCodeAt(i), 16777619)
-  }
-  const unit = (hash >>> 0) / 4294967296
-  const angle = unit * Math.PI * 2
-  const distance = 40 * Math.sqrt(count) * (0.5 + unit)
-  return { x: Math.cos(angle) * distance, y: Math.sin(angle) * distance }
-}
-
-// random is a small seeded generator, for what the layout leaves to chance.
-function random(seed: number): () => number {
-  let state = seed >>> 0
-  return () => {
-    state = (Math.imul(state, 1664525) + 1013904223) >>> 0
-    return state / 4294967296
-  }
 }
