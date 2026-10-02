@@ -36,7 +36,7 @@ export function ViewerStage({ attachment }: { attachment: Attachment }) {
     case 'audio':
       return (
         <div className="flex h-full items-center justify-center p-6">
-          <AudioBar attachment={attachment} className="w-120" />
+          <AudioBar attachment={attachment} className="w-full max-w-120" />
         </div>
       )
     case 'pdf':

@@ -42,7 +42,7 @@ export function TurnDrawer({ roomId, turnId, onClose }: TurnDrawerProps) {
   const t = useT()
   return (
     <Sheet open={turnId !== ''} onOpenChange={(open) => (open ? undefined : onClose())}>
-      <SheetContent side="right" aria-label={t('drawer.label')} aria-describedby={undefined} className="w-140 gap-0 sm:max-w-140" showCloseButton>
+      <SheetContent side="right" aria-label={t('drawer.label')} aria-describedby={undefined} className="w-full gap-0 sm:w-140 sm:max-w-full" showCloseButton>
         {turnId ? <DrawerBody roomId={roomId} turnId={turnId} /> : null}
       </SheetContent>
     </Sheet>

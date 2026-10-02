@@ -91,7 +91,7 @@ test('ask, approve, read the report, find it in the inbox', async ({ page }) => 
   expect(served.headers()['content-type']).toBe('image/png')
 
   // The agent asks permission: the island, the title and the footer say so.
-  const island = page.getByRole('status', { name: '成员状态' })
+  const island = page.getByRole('group', { name: '成员状态' })
   await expect(island).toContainText('在等你审批 · make test', { timeout: 20_000 })
   await expect(page).toHaveTitle(`(1) ${project.name} · Veyloom`)
   await expect(page.getByRole('button', { name: /在等你审批/ })).toBeVisible()

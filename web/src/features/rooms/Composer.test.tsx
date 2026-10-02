@@ -34,6 +34,37 @@ describe('Composer', () => {
     await waitFor(() => expect(box).toHaveValue(''))
   })
 
+  it('waits on Enter while the last message is still going out, keeping what was typed', async () => {
+    let release = () => {}
+    let posts = 0
+    stubApi({
+      '/rooms/r1/messages': async () => {
+        posts++
+        await new Promise<void>((resolve) => {
+          release = resolve
+        })
+        return Response.json({ message: message('m1', 1, { body: 'first' }) }, { status: 201 })
+      },
+    })
+    renderWithProviders(<Composer roomId="r1" roomName="main" />)
+    const box = screen.getByLabelText<HTMLTextAreaElement>('消息')
+    await userEvent.type(box, 'first{Enter}')
+    await waitFor(() => expect(posts).toBe(1))
+
+    // Enter again while it goes out: nothing is sent, and nothing lost.
+    // (user-event keeps its own idea of the box across the form's reset,
+    // so what it typed is taken as it stands.)
+    await userEvent.type(box, 'second')
+    const typed = box.value
+    expect(typed).toContain('second')
+    await userEvent.keyboard('{Enter}')
+    expect(box).toHaveValue(typed)
+    release()
+    await waitFor(() => expect(screen.getByRole('button', { name: '发送' })).toBeEnabled())
+    expect(box).toHaveValue(typed)
+    expect(posts).toBe(1)
+  })
+
   it('keeps Shift+Enter as a line break', async () => {
     const calls = stubApi({ '/users': { users: [] }, '/rooms/r1/members': { members: [] } })
     renderWithProviders(<Composer roomId="r1" roomName="main" />)

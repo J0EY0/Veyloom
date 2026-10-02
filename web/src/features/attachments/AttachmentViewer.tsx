@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type KeyboardEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore, type KeyboardEvent } from 'react'
 import { useQueryClient } from '@tanstack/react-query'
 import { ChevronLeftIcon, ChevronRightIcon, CopyIcon, MessageSquareIcon, XIcon } from 'lucide-react'
 import { useNavigate } from 'react-router'
@@ -11,12 +11,29 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { copyText } from '@/lib/clipboard'
 import { formatBytes, formatTime } from '@/lib/format'
 import { useT } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import { DownloadButton, FileBadge } from './FileCard'
 import { ViewerStage, VIEW_TEXT } from './ViewerStage'
 import { closeViewer, useViewerTarget, type ViewerTarget } from './viewerStore'
 
 // The header's buttons with words; on a phone only their icons.
 const labelled = 'border-viewer-line bg-transparent text-viewer-foreground hover:bg-viewer-hover hover:text-viewer-foreground max-sm:px-2'
+
+// A phone's width, Tailwind's below sm, where the header keeps only icons.
+const phoneQuery = '(max-width: 39.9375rem)'
+
+// usePhone says whether the viewer is on a phone's width, as it changes.
+function usePhone(): boolean {
+  return useSyncExternalStore(
+    (onChange) => {
+      const list = window.matchMedia(phoneQuery)
+      list.addEventListener('change', onChange)
+      return () => list.removeEventListener('change', onChange)
+    },
+    () => window.matchMedia(phoneQuery).matches,
+    () => false,
+  )
+}
 
 // Every attachment of the room, loaded the newest first: the ones people
 // open most are on the first page.
@@ -26,7 +43,9 @@ const everything: AttachmentFilter = { q: '', kinds: [], sender: '', sort: 'newe
 // from a message, the attachments tab or the search. The arrows, and the
 // arrow keys, step through the attachments of the room: from the tab in
 // its order, from anywhere else from the oldest on the left to the newest
-// on the right, as the chat reads.
+// on the right, as the chat reads. On a phone the arrows are in a bar
+// under the attachment, with where it is among them: over its sides they
+// covered a sound's play button and a video's.
 export function AttachmentViewer() {
   const target = useViewerTarget()
   if (!target) return null
@@ -37,6 +56,7 @@ function Viewer({ target }: { target: ViewerTarget }) {
   const t = useT()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const phone = usePhone()
   const content = useRef<HTMLDivElement>(null)
   const [current, setCurrent] = useState<Attachment>(target.attachment)
   const inTabOrder = target.filter !== undefined
@@ -146,16 +166,46 @@ function Viewer({ target }: { target: ViewerTarget }) {
         </header>
         <div className="relative min-h-0 flex-1">
           <ViewerStage key={current.id} attachment={current} />
-          <Step side="left" label={t('viewer.previous')} to={previous} onGo={setCurrent} />
-          <Step side="right" label={t('viewer.next')} to={next} onGo={setCurrent} />
+          {phone ? null : (
+            <>
+              <Step side="left" label={t('viewer.previous')} to={previous} onGo={setCurrent} className="absolute top-1/2 left-6 -translate-y-1/2" />
+              <Step side="right" label={t('viewer.next')} to={next} onGo={setCurrent} className="absolute top-1/2 right-6 -translate-y-1/2" />
+            </>
+          )}
         </div>
+        {phone && (previous || next) ? (
+          <footer className="flex h-15 flex-none items-center justify-between border-t border-viewer-line px-3">
+            <Step side="left" label={t('viewer.previous')} to={previous} onGo={setCurrent} />
+            {found && total > 0 ? (
+              <span className="font-mono text-[0.78125rem] text-viewer-muted tabular-nums">
+                {position} / {total}
+              </span>
+            ) : null}
+            <Step side="right" label={t('viewer.next')} to={next} onGo={setCurrent} />
+          </footer>
+        ) : null}
       </DialogContent>
     </Dialog>
   )
 }
 
-function Step({ side, label, to, onGo }: { side: 'left' | 'right'; label: string; to?: Attachment; onGo: (a: Attachment) => void }) {
-  if (!to) return null
+// Step is an arrow to the attachment before or after: over the stage's
+// side, or in the phone's bar, where one with nowhere to go keeps its room
+// so the others stay put.
+function Step({
+  side,
+  label,
+  to,
+  onGo,
+  className,
+}: {
+  side: 'left' | 'right'
+  label: string
+  to?: Attachment
+  onGo: (a: Attachment) => void
+  className?: string
+}) {
+  if (!to) return className ? null : <span aria-hidden="true" className="size-11" />
   return (
     <Tooltip>
       <TooltipTrigger asChild>
@@ -164,7 +214,7 @@ function Step({ side, label, to, onGo }: { side: 'left' | 'right'; label: string
           size="icon"
           onClick={() => onGo(to)}
           aria-label={label}
-          className={`absolute top-1/2 size-11 -translate-y-1/2 rounded-full bg-viewer-control text-viewer-foreground hover:bg-viewer-hover hover:text-viewer-foreground ${side === 'left' ? 'left-6' : 'right-6'}`}
+          className={cn('size-11 rounded-full bg-viewer-control text-viewer-foreground hover:bg-viewer-hover hover:text-viewer-foreground', className)}
         >
           {side === 'left' ? <ChevronLeftIcon className="size-5" /> : <ChevronRightIcon className="size-5" />}
         </Button>

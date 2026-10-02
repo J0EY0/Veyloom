@@ -164,7 +164,8 @@ export function MemberRow({
               variant="ghost"
               size="icon-sm"
               aria-label={t('common.more')}
-              className="text-subtle opacity-0 group-hover/member:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100"
+              // Shown on hover, and always where nothing hovers: a touch screen.
+              className="text-subtle opacity-0 group-hover/member:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100 any-pointer-coarse:opacity-100 [@media(hover:none)]:opacity-100"
             >
               <EllipsisIcon />
             </Button>

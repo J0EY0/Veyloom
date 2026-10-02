@@ -164,7 +164,7 @@ describe('RoomPage side panels', () => {
     vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 1200, 800))
     stubWaiting()
     renderWithProviders(<RoomPage />, { route: '/rooms/r1', path: '/rooms/:roomId' })
-    const island = await screen.findByRole('status', { name: '成员状态' })
+    const island = await screen.findByRole('group', { name: '成员状态' })
     expect(await within(island).findByRole('button', { name: '允许' })).toBeInTheDocument()
     expect(island.closest('header')).not.toBeNull()
   })
@@ -176,12 +176,12 @@ describe('RoomPage side panels', () => {
     stubWaiting()
     renderWithProviders(<RoomPage />, { route: '/rooms/r1', path: '/rooms/:roomId' })
     const allow = await screen.findByRole('button', { name: '允许' })
-    const island = allow.closest('[role="status"]') as HTMLElement
+    const island = allow.closest('[role="group"]') as HTMLElement
     expect(island).toHaveAccessibleName('成员状态')
     expect(island.closest('header')).toBeNull()
     expect(island).toHaveClass('w-full')
     // One island only, and the bar keeps the way to the members.
-    expect(screen.getAllByRole('status', { name: '成员状态' })).toHaveLength(1)
+    expect(screen.getAllByRole('group', { name: '成员状态' })).toHaveLength(1)
     expect(screen.getByRole('button', { name: '群聊信息' })).not.toHaveClass('hidden')
   })
 
@@ -203,7 +203,7 @@ describe('RoomPage side panels', () => {
     const views = await screen.findByRole('navigation', { name: '群聊视图' })
     expect(within(views).queryByRole('link')).not.toBeInTheDocument()
     // The island's faces, without the count, open the members instead.
-    const island = await screen.findByRole('status', { name: '成员状态' })
+    const island = await screen.findByRole('group', { name: '成员状态' })
     expect(island.closest('header')).not.toBeNull()
     expect(within(island).queryByRole('button', { name: /个成员空闲/ })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '群聊信息' })).toHaveClass('hidden')
@@ -224,7 +224,7 @@ describe('RoomPage side panels', () => {
     const views = await screen.findByRole('navigation', { name: '群聊视图' })
     expect(within(views).getByRole('button', { name: '聊天' })).toBeInTheDocument()
     await screen.findByText('好。')
-    expect(screen.queryByRole('status', { name: '成员状态' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('group', { name: '成员状态' })).not.toBeInTheDocument()
     expect(screen.getByRole('button', { name: '群聊信息' })).toHaveClass('hidden')
     await userEvent.click(screen.getByRole('button', { name: '群聊菜单' }))
     expect(await screen.findByRole('menuitem', { name: '群聊信息' })).toBeInTheDocument()

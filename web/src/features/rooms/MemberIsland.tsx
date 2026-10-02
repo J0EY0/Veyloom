@@ -59,6 +59,12 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers, facesOnly = 
   // list them, and the members button opens them).
   const idle = !islandSays(states)
   const bare = idle && facesOnly
+  // What a screen reader is told as it happens: a person waited for. The
+  // rest of the island, its clock among it, changes too often to be read
+  // out every time; it is there to read when the reader comes to it.
+  const said = waiting?.approval
+    ? `${waiting.member.display_name} ${t(waitingKeys[askKind(waiting.approval.kind)].island)} · ${approvalCommand(waiting.approval)}`
+    : ''
 
   // Short of room in the bar, the island gives way first, cutting its
   // words, before the title does (it shrinks eight times as fast; the views
@@ -67,7 +73,7 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers, facesOnly = 
   // under the bar (RoomPage, ISLAND_ROW_REM).
   return (
     <div
-      role="status"
+      role="group"
       aria-label={t('island.label')}
       className={cn(
         'flex h-8 max-w-[min(34rem,50vw)] items-center gap-2.5 rounded-full border px-1 text-[0.78125rem] whitespace-nowrap',
@@ -92,6 +98,9 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers, facesOnly = 
           </ItemGroup>
         </HoverCardContent>
       </HoverCard>
+      <span role="status" className="sr-only">
+        {said}
+      </span>
       {bare ? null : <Separator orientation="vertical" className="h-4.5! bg-input" />}
       {waiting?.approval && askKind(waiting.approval.kind) !== 'tool_use' ? (
         // A question, a form or a link is dealt with on its card, in its

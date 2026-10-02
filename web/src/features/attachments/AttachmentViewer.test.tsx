@@ -63,6 +63,30 @@ describe('the attachment viewer', () => {
     expect(screen.queryByRole('button', { name: '上一个附件' })).not.toBeInTheDocument()
   })
 
+  it('puts the arrows in a bar under the attachment on a phone, clear of what plays', async () => {
+    const wide = window.matchMedia
+    window.matchMedia = (query: string) => ({ ...wide(query), matches: query === '(max-width: 39.9375rem)' }) as MediaQueryList
+    try {
+      stubRoom()
+      open({ roomId: 'r1', attachment: clip })
+      const dialog = await screen.findByRole('dialog', { name: 'hang.mp4' })
+      const bar = await waitFor(() => {
+        const footer = dialog.querySelector('footer')
+        expect(footer).not.toBeNull()
+        return footer as HTMLElement
+      })
+      expect(await within(bar).findByText('2 / 3')).toBeInTheDocument()
+      // Only there, not over the video's sides.
+      expect(within(dialog).getAllByRole('button', { name: '上一个附件' })).toHaveLength(1)
+      await userEvent.setup().click(within(bar).getByRole('button', { name: '下一个附件' }))
+      await screen.findByRole('dialog', { name: '排期.xlsx' })
+      expect(within(bar).queryByRole('button', { name: '下一个附件' })).not.toBeInTheDocument()
+      expect(within(bar).getByText('3 / 3')).toBeInTheDocument()
+    } finally {
+      window.matchMedia = wide
+    }
+  })
+
   it('walks the attachments tab in its own order', async () => {
     const bySize = [clip, shot, sheet]
     const calls = stubRoom(bySize)

@@ -63,6 +63,9 @@ export function Composer({ roomId, roomName, threadId, compact }: ComposerProps)
   const pickerId = `${id}-mentions`
   const [error, setError] = useState<string>()
   const [uploading, setUploading] = useState(false)
+  // A message is going out, known at once: the busy state the button shows
+  // comes a render later.
+  const sending = useRef(false)
   const disabled = user === null
   const busy = post.isPending || uploading
   const t = useT()
@@ -101,9 +104,10 @@ export function Composer({ roomId, roomName, threadId, compact }: ComposerProps)
   // Rejecting tells the prompt input to keep the files for another try.
   async function onSubmit({ text, files }: PromptInputMessage) {
     const el = textarea.current
-    if (!el || !user || busy) return
+    if (!el || !user || busy || sending.current) return
     const body = text.trim()
     if (body === '' && files.length === 0) return
+    sending.current = true
     setUploading(files.length > 0)
     try {
       const attachmentIds: string[] = []
@@ -128,6 +132,7 @@ export function Composer({ roomId, roomName, threadId, compact }: ComposerProps)
       setError(errorText(err))
       throw err
     } finally {
+      sending.current = false
       setUploading(false)
     }
   }
@@ -136,7 +141,10 @@ export function Composer({ roomId, roomName, threadId, compact }: ComposerProps)
     if (mention.onKeyDown(event)) return
     if (event.key === 'Enter' && !event.shiftKey && !event.nativeEvent.isComposing) {
       event.preventDefault()
-      event.currentTarget.form?.requestSubmit()
+      // While the last message is still going out, Enter waits, as the
+      // send button does: submitting clears the box and the files before
+      // onSubmit sees it is busy, and both would be lost.
+      if (!busy && !sending.current && !disabled) event.currentTarget.form?.requestSubmit()
     }
   }
 

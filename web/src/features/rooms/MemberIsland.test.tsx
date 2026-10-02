@@ -41,7 +41,9 @@ describe('MemberIsland', () => {
         onOpenMembers={() => {}}
       />,
     )
-    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent(/Codex Implementer 正在工作 · 00:4[2-5]/)
+    expect(screen.getByRole('group', { name: '成员状态' })).toHaveTextContent(/Codex Implementer 正在工作 · 00:4[2-5]/)
+    // The clock goes by every second: nothing is read out for it.
+    expect(screen.getByRole('status')).toBeEmptyDOMElement()
     await userEvent.click(screen.getByRole('button', { name: /Codex Implementer · 工作中/ }))
     expect(onOpenThread).toHaveBeenCalledWith('t9')
   })
@@ -61,7 +63,7 @@ describe('MemberIsland', () => {
         onOpenMembers={() => {}}
       />,
     )
-    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent('Claude Architect 在提问 · Which database?')
+    expect(screen.getByRole('group', { name: '成员状态' })).toHaveTextContent('Claude Architect 在提问 · Which database?')
     expect(screen.getByLabelText('Claude Architect · 等你回答')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '允许' })).not.toBeInTheDocument()
     await userEvent.click(screen.getByRole('button', { name: '去回答' }))
@@ -104,7 +106,7 @@ describe('MemberIsland', () => {
         facesOnly
       />,
     )
-    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent('Codex Implementer 正在工作')
+    expect(screen.getByRole('group', { name: '成员状态' })).toHaveTextContent('Codex Implementer 正在工作')
   })
 })
 
@@ -126,7 +128,7 @@ describe('MemberIsland quiet', () => {
         onOpenMembers={vi.fn()}
       />,
     )
-    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent('Stuck · 12 分钟没有任何进展')
+    expect(screen.getByRole('group', { name: '成员状态' })).toHaveTextContent('Stuck · 12 分钟没有任何进展')
     expect(screen.getByRole('button', { name: /Stuck · 可能卡住/ })).toBeInTheDocument()
     const fresh = screen.getByRole('button', { name: '取消并开启新会话' })
     expect(fresh).toHaveTextContent('取消并开启新会话')
@@ -170,7 +172,7 @@ describe('MemberIsland waiting', () => {
       />,
     )
     const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
-    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent(`Slow · 额度用完 · ${hhmm} 恢复`)
+    expect(screen.getByRole('group', { name: '成员状态' })).toHaveTextContent(`Slow · 额度用完 · ${hhmm} 恢复`)
     await userEvent.click(screen.getByRole('button', { name: '继续' }))
     await waitFor(() => expect(lifted).toBe('DELETE'))
   })
@@ -199,7 +201,9 @@ describe('MemberIsland waiting', () => {
         onOpenMembers={() => {}}
       />,
     )
-    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent('Codex Implementer 在等你审批 · make test')
+    expect(screen.getByRole('group', { name: '成员状态' })).toHaveTextContent('Codex Implementer 在等你审批 · make test')
+    // A person waited for is said as it happens.
+    expect(screen.getByRole('status')).toHaveTextContent('Codex Implementer 在等你审批 · make test')
     await userEvent.click(screen.getByRole('button', { name: '允许' }))
     await waitFor(() => expect(posted).toEqual({ user_id: 'u1', allow: true, message: '' }))
   })
