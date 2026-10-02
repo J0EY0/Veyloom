@@ -16,7 +16,7 @@ import { useNow } from '@/lib/useNow'
 import { cn } from '@/lib/utils'
 import { isQuiet, pauseLabel, statusLabel, toneOf } from './memberStatus'
 import { QuietLead } from './QuietLead'
-import type { MemberState } from './useMemberStates'
+import { islandSays, type MemberState } from './useMemberStates'
 import { useT } from '@/lib/i18n'
 import { toast } from 'sonner'
 import { errorText } from '@/api/errorText'
@@ -25,6 +25,12 @@ export interface MemberIslandProps {
   states: MemberState[]
   onOpenThread: (threadId: string) => void
   onOpenMembers: () => void
+  // Idle in a bar with no room to say how many are idle: the faces alone.
+  facesOnly?: boolean
+  // Short of room for a button's full name: the short of it.
+  terse?: boolean
+  // A row of its own under a narrow chat's top bar, as wide as the chat.
+  className?: string
 }
 
 // The capsule in the chat's top bar (docs/webui.md §4.4): one avatar per
@@ -32,7 +38,7 @@ export interface MemberIslandProps {
 // saying, in the wait colour when a person is waited for. Hovering the
 // avatars lists every member; clicking a working one opens the topic it is
 // working in.
-export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIslandProps) {
+export function MemberIsland({ states, onOpenThread, onOpenMembers, facesOnly = false, terse = false, className }: MemberIslandProps) {
   const waiting = states.find((s) => s.status === 'waiting')
   const working = states.filter((s) => s.status === 'working')
   // One whose turn went quiet first: it may be stuck, and a person decides
@@ -47,14 +53,27 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
   const decide = useDecideApproval()
   const t = useT()
   const decideFailed = (err: Error) => toast.error(errorText(err, { 409: t('approval.raced') }))
+  // Nobody at work, waiting or held up: the faces, and after them how many
+  // are idle, which opens the members. In a narrow bar the faces alone, the
+  // count having no room beside the views and the bar's buttons (the faces
+  // list them, and the members button opens them).
+  const idle = !islandSays(states)
+  const bare = idle && facesOnly
 
+  // Short of room in the bar, the island gives way first, cutting its
+  // words, before the title does (it shrinks eight times as fast; the views
+  // never do); with only faces and a count it keeps its size, a small one.
+  // A chat too narrow for its buttons as well gives it a row of its own
+  // under the bar (RoomPage, ISLAND_ROW_REM).
   return (
     <div
       role="status"
       aria-label={t('island.label')}
       className={cn(
-        'flex h-8 max-w-[min(34rem,50vw)] min-w-0 items-center gap-2.5 rounded-full border px-1 text-[0.78125rem] whitespace-nowrap',
+        'flex h-8 max-w-[min(34rem,50vw)] items-center gap-2.5 rounded-full border px-1 text-[0.78125rem] whitespace-nowrap',
+        idle ? 'shrink-0' : 'min-w-0 shrink-8',
         waiting || quiet ? 'border-status-wait/40 bg-status-wait/8' : 'border-border',
+        className,
       )}
     >
       <HoverCard openDelay={200} closeDelay={100}>
@@ -73,12 +92,12 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
           </ItemGroup>
         </HoverCardContent>
       </HoverCard>
-      <Separator orientation="vertical" className="h-4.5! bg-input" />
+      {bare ? null : <Separator orientation="vertical" className="h-4.5! bg-input" />}
       {waiting?.approval && askKind(waiting.approval.kind) !== 'tool_use' ? (
         // A question, a form or a link is dealt with on its card, in its
         // topic, not from here.
         <>
-          <span className="min-w-0 truncate text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">
             <b className="font-medium text-foreground">{waiting.member.display_name}</b> {t(waitingKeys[askKind(waiting.approval.kind)].island)} ·{' '}
             {approvalCommand(waiting.approval)}
           </span>
@@ -88,7 +107,7 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
         </>
       ) : waiting?.approval ? (
         <>
-          <span className="min-w-0 truncate text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">
             <b className="font-medium text-foreground">{waiting.member.display_name}</b> {t('island.waiting')} ·{' '}
             <span className="font-mono text-[0.75rem]" translate="no">
               {approvalCommand(waiting.approval)}
@@ -112,9 +131,9 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
           </Button>
         </>
       ) : quiet ? (
-        <QuietLead state={lead} now={now} />
+        <QuietLead state={lead} now={now} terse={terse} />
       ) : lead?.turn ? (
-        <span className="min-w-0 truncate pr-2 text-muted-foreground">
+        <span className="min-w-0 flex-1 truncate pr-2 text-muted-foreground">
           <b className="font-medium text-foreground">{lead.member.display_name}</b>
           {live?.tool ? (
             <>
@@ -134,7 +153,7 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
         // Held up by a pause (docs/design.md 5.23.3): why, until when, and
         // the way on once a person has seen to it.
         <>
-          <span className="min-w-0 truncate text-muted-foreground">
+          <span className="min-w-0 flex-1 truncate text-muted-foreground">
             <b className="font-medium text-foreground">{paused.member.display_name}</b> · {pauseLabel(t, paused.pause)}
           </span>
           <Button
@@ -147,7 +166,7 @@ export function MemberIsland({ states, onOpenThread, onOpenMembers }: MemberIsla
             {t('pause.resume')}
           </Button>
         </>
-      ) : (
+      ) : bare ? null : (
         <Button
           variant="ghost"
           size="xs"

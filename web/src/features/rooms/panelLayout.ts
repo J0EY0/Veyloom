@@ -11,6 +11,34 @@ export const PANEL_MARGIN_REM = 0.75
 // SidePanel's widths: w-102, and w-75 for a list of names (narrow).
 export const PANEL_REM = 25.5
 export const NARROW_PANEL_REM = 18.75
+// What the chat's top bar holds at a width, measured in English, whose
+// views and island words run longest (docs/webui.md 4.4). The bar gives up
+// first the island's idle count, then a row of its own for what the island
+// says, then the row of views, which folds into a menu, and on a phone the
+// faces and the members button.
+//
+// How wide a bar must be to hold the views beside a title of 8rem, the
+// island's faces and the bar's buttons; narrower, the views fold into a
+// menu, and with the island in the bar the members button gives way to it
+// (the island opens the members too).
+export const VIEWS_ROW_REM = 41
+// How wide a bar must be to say, after the faces of an idle island, how
+// many are idle.
+export const ISLAND_COUNT_REM = 49
+// How wide a bar must be for an idle island's faces at all, beside the
+// folded views and a title of 6rem; narrower, a phone's, the bar holds the
+// title, the views, search and the chat's menu alone, which has the members.
+export const FACES_REM = 25
+// How wide a bar must be for the island in it to give a button its full
+// name ("Cancel and start a new session"); narrower, or under the bar, it
+// says the short of it.
+export const ISLAND_WORDY_REM = 56
+// How wide a chat must be for its top bar to hold what the island says,
+// buttons and all, beside the title, the views and the bar's own buttons;
+// narrower, the island takes a row of its own under the bar while it has
+// more to say than who is there. At this width the island, giving way eight
+// times as fast as the title, still holds its longest pair of buttons.
+export const ISLAND_ROW_REM = 50
 
 export type PanelMode = 'push' | 'overlay'
 

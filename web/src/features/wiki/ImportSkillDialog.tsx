@@ -10,6 +10,7 @@ import { Field, FieldDescription, FieldError, FieldGroup, FieldLabel } from '@/c
 import { Input } from '@/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useWidthRem } from '@/features/rooms/panelLayout'
 import { useT } from '@/lib/i18n'
 import { AgentPicker, LocalList, UploadPicker } from './library/ImportParts'
 import type { Picked } from './library/pickSkills'
@@ -19,6 +20,10 @@ import { pageHref } from './links'
 const noTeam = 'none'
 
 type Way = 'local' | 'upload' | 'folder'
+const ways: Way[] = ['local', 'upload', 'folder']
+// How wide the form must be for the three ways side by side, measured in
+// English, whose names run longest; narrower, a phone's, they are a menu.
+const WAYS_ROW_REM = 18
 
 // Adds skills to the library (docs/design.md 5.15), three ways: ticked
 // from the ones people keep for their runtimes on this machine, uploaded
@@ -43,6 +48,8 @@ export function ImportSkillDialog({ onClose }: { onClose: () => void }) {
   const [agents, setAgents] = useState<string[]>([])
   const [errors, setErrors] = useState<string[]>([])
   const [busy, setBusy] = useState(false)
+  const [formRef, formRem] = useWidthRem()
+  const waysInMenu = formRem > 0 && formRem < WAYS_ROW_REM
   const projectId = team === noTeam ? '' : team
 
   const ready = way === 'local' ? ticked.length > 0 : way === 'upload' ? picked !== undefined : true
@@ -106,6 +113,11 @@ export function ImportSkillDialog({ onClose }: { onClose: () => void }) {
     }
   }
 
+  function pickWay(next: Way) {
+    setWay(next)
+    setErrors([])
+  }
+
   function nameOf(path: string): string {
     return local.data?.find((skill) => skill.folder === path)?.name ?? path
   }
@@ -113,23 +125,34 @@ export function ImportSkillDialog({ onClose }: { onClose: () => void }) {
   return (
     <Dialog open onOpenChange={(next) => (next ? undefined : onClose())}>
       <DialogContent className="sm:max-w-xl">
-        <form onSubmit={(event) => void onSubmit(event)}>
+        {/* No wider than the dialog, whatever is in it. */}
+        <form ref={formRef} onSubmit={(event) => void onSubmit(event)} className="min-w-0">
           <DialogHeader>
             <DialogTitle>{t('library.import.title')}</DialogTitle>
           </DialogHeader>
-          <Tabs
-            value={way}
-            onValueChange={(next) => {
-              setWay(next as Way)
-              setErrors([])
-            }}
-            className="mt-4 gap-3"
-          >
-            <TabsList>
-              <TabsTrigger value="local">{t('library.import.tab.local')}</TabsTrigger>
-              <TabsTrigger value="upload">{t('library.import.tab.upload')}</TabsTrigger>
-              <TabsTrigger value="folder">{t('library.import.tab.folder')}</TabsTrigger>
-            </TabsList>
+          <Tabs value={way} onValueChange={(next) => pickWay(next as Way)} className="mt-4 gap-3">
+            {waysInMenu ? (
+              <Select value={way} onValueChange={(next) => pickWay(next as Way)}>
+                <SelectTrigger aria-label={t('library.import.ways')} className="w-full">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {ways.map((option) => (
+                    <SelectItem key={option} value={option}>
+                      {t(`library.import.tab.${option}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <TabsList aria-label={t('library.import.ways')}>
+                {ways.map((option) => (
+                  <TabsTrigger key={option} value={option}>
+                    {t(`library.import.tab.${option}`)}
+                  </TabsTrigger>
+                ))}
+              </TabsList>
+            )}
             <TabsContent value="local" className="min-h-48">
               <LocalList
                 skills={local.data}

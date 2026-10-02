@@ -42,7 +42,7 @@ export function WikiOverview({ space, catalog, onOpenThread }: WikiOverviewProps
   return (
     // At least as tall as the pane, so the note of an empty wiki takes the
     // rest of it and sits in the middle.
-    <div className="mx-auto flex min-h-full w-full max-w-[46rem] flex-col gap-8 px-5 pt-5 pb-12 md:px-10">
+    <div className="mx-auto flex min-h-full w-full max-w-[46rem] flex-col gap-8 px-5 pt-5 pb-12 @split/panel:px-10">
       <header className="flex flex-col gap-1">
         <BackToPages space={space} />
         <h1 className="text-xl font-semibold tracking-[-0.01em]">{t('wiki.title')}</h1>
@@ -154,7 +154,7 @@ export function WikiChanges({ space, catalog, onOpenThread, back }: WikiOverview
   const [limit, setLimit] = useState(50)
   const commits = useWikiHistory(space, '', limit)
   return (
-    <div className="mx-auto flex min-h-full w-full max-w-[46rem] flex-col gap-8 px-5 pt-5 pb-12 md:px-10">
+    <div className="mx-auto flex min-h-full w-full max-w-[46rem] flex-col gap-8 px-5 pt-5 pb-12 @split/panel:px-10">
       <header className="flex flex-col gap-1">
         {back ? <BackLink back={back} /> : <BackToPages space={space} />}
         <h1 className="text-xl font-semibold tracking-[-0.01em]">{t('wiki.changes')}</h1>
@@ -223,7 +223,7 @@ export function BackLink({ back }: { back: Back }) {
 export function BackToPages({ space }: { space: WikiSpace }) {
   const t = useT()
   return (
-    <Link to={pageHref(space)} className="-ml-1 flex w-fit items-center gap-0.5 text-xs text-subtle hover:text-foreground md:hidden">
+    <Link to={pageHref(space)} className="-ml-1 flex w-fit items-center gap-0.5 text-xs text-subtle hover:text-foreground @split/panel:hidden">
       <ChevronLeftIcon className="size-4" aria-hidden="true" />
       {t('wiki.pages')}
     </Link>

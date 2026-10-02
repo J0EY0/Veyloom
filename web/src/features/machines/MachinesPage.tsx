@@ -14,8 +14,8 @@ import { errorText } from '@/api/errorText'
 // The machines page (docs/webui.md §4.7): every machine connected to the
 // hub. One bar across the top, then the machines on the left and
 // the open one beside them, with its own check again. Nothing opens until a
-// machine is picked, as in the inbox: on a wide screen the pane beside the
-// list says to pick one. On a phone the list and a machine take turns, as
+// machine is picked, as in the inbox: on a wide page the pane beside the
+// list says to pick one. In a narrow one the list and a machine take turns, as
 // /machines and /machines/:machineId.
 export function MachinesPage() {
   const { machineId = '' } = useParams()
@@ -45,12 +45,12 @@ export function MachinesPage() {
       </Panel>
     )
   }
-  const detailClass = machineId ? 'flex' : 'hidden md:flex'
+  const detailClass = machineId ? 'flex' : 'hidden @split/panel:flex'
   return (
     <Panel>
       {header}
       <div className="flex min-h-0 flex-1 border-t">
-        <MachineList machines={machines.data} selectedId={selected?.id ?? ''} now={now} className={machineId ? 'hidden md:flex' : undefined} />
+        <MachineList machines={machines.data} selectedId={selected?.id ?? ''} now={now} className={machineId ? 'hidden @split/panel:flex' : undefined} />
         {machines.isPending ? null : !machineId ? (
           <MachinePick className={detailClass} />
         ) : selected ? (

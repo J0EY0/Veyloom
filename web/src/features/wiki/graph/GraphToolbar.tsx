@@ -37,7 +37,7 @@ export function GraphToolbar({ space, graph, shown, filters, onFilters, onFind }
   const t = useT()
   return (
     <div className="flex items-center gap-1.5">
-      <Button asChild variant="outline" size="icon-sm" className="md:hidden">
+      <Button asChild variant="outline" size="icon-sm" className="@split/panel:hidden">
         <Link to={pageHref(space)} aria-label={t('wiki.pages')}>
           <ChevronLeftIcon />
         </Link>

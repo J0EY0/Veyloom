@@ -18,7 +18,7 @@ import { errorText } from '@/api/errorText'
 // What waits for you, across every project: requests to approve first,
 // then everything that mentioned you, newest first, what you have not read
 // marked. A list on the left and the picked entry's topic on the right,
-// the way a mail client reads; on a phone one of the two at a time.
+// the way a mail client reads; in a narrow page one of the two at a time.
 // Opening a mention reads it (docs/webui.md 4.19).
 export function InboxPage() {
   const t = useT()
@@ -92,9 +92,9 @@ export function InboxPage() {
         hasMore={inbox.hasNextPage}
         loadingMore={inbox.isFetchingNextPage}
         onLoadMore={() => void inbox.fetchNextPage()}
-        className={selected ? 'hidden md:flex' : undefined}
+        className={selected ? 'hidden @split/panel:flex' : undefined}
       />
-      <InboxDetail entry={selected} listEmpty={entries.length === 0} onClose={close} className={selected ? 'flex' : 'hidden md:flex'} />
+      <InboxDetail entry={selected} listEmpty={entries.length === 0} onClose={close} className={selected ? 'flex' : 'hidden @split/panel:flex'} />
     </Panel>
   )
 }

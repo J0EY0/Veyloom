@@ -26,7 +26,7 @@ import { HitLink, ListSkeleton } from '../WikiSidebar'
 // AllWikis is the Wiki page of the sidebar with no project chosen
 // (docs/design.md 5.18): on the left a search through every project's
 // wiki, its hits under the projects whose they are, or else the projects;
-// on the right a line about each project's wiki. On a phone the left
+// on the right a line about each project's wiki. In a narrow page the left
 // column is the page.
 export function AllWikis() {
   const t = useT()
@@ -51,7 +51,7 @@ export function AllWikis() {
   }
   return (
     <div className="flex min-h-0 flex-1">
-      <Sidebar collapsible="none" aria-label={t('wikis.projects')} className="w-full md:w-68 md:flex-none md:border-r">
+      <Sidebar collapsible="none" aria-label={t('wikis.projects')} className="w-full @split/panel:w-68 @split/panel:flex-none @split/panel:border-r">
         <SidebarHeader className="px-3 pt-3 pb-1">
           <SidebarInput
             type="search"
@@ -88,8 +88,8 @@ export function AllWikis() {
           )}
         </SidebarContent>
       </Sidebar>
-      <div className="hidden min-w-0 flex-1 overflow-y-auto md:block">
-        <div className="mx-auto w-full max-w-[46rem] px-5 pt-6 pb-12 md:px-10">
+      <div className="hidden min-w-0 flex-1 overflow-y-auto @split/panel:block">
+        <div className="mx-auto w-full max-w-[46rem] px-5 pt-6 pb-12 @split/panel:px-10">
           <ItemGroup className="gap-2">
             {sorted.map((wiki) => (
               <WikiLine key={wiki.project_id} wiki={wiki} />

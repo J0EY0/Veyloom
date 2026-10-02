@@ -31,7 +31,7 @@ export interface MachineDetailProps {
   className?: string
 }
 
-// One machine, beside the list on a wide screen and on its own on a phone:
+// One machine, beside the list on a wide page and on its own on a narrow one:
 // the machine and when it was heard from, a line of counts, what the
 // machine did over the last day, the runtimes it detected, then every agent,
 // running or idle here. One column, each section the full width.
@@ -49,8 +49,8 @@ export function MachineDetail({ machine, now, className }: MachineDetailProps) {
 
   return (
     <div className={cn('min-w-0 flex-1 flex-col overflow-y-auto', className)}>
-      <div className="@container mx-auto flex w-full max-w-280 flex-col gap-6 px-5 py-5 md:px-7 md:py-6">
-        <Link to="/machines" className="-mb-2 flex items-center gap-1 self-start text-xs text-subtle hover:text-foreground md:hidden">
+      <div className="@container mx-auto flex w-full max-w-280 flex-col gap-6 px-5 py-5 @split/panel:px-7 @split/panel:py-6">
+        <Link to="/machines" className="-mb-2 flex items-center gap-1 self-start text-xs text-subtle hover:text-foreground @split/panel:hidden">
           <ChevronLeftIcon className="size-3.5" />
           {t('machines.backToList')}
         </Link>
@@ -118,7 +118,7 @@ export function MachineDetail({ machine, now, className }: MachineDetailProps) {
 }
 
 // No machine picked yet: the pane beside the list asks for one. Only on a
-// wide screen; a phone shows the list alone.
+// wide page; a narrow one shows the list alone.
 export function MachinePick({ className }: { className?: string }) {
   const t = useT()
   return (
@@ -135,8 +135,8 @@ export function MachinePick({ className }: { className?: string }) {
   )
 }
 
-// A machine in the address that is not connected. On a phone this pane is
-// all there is, so it offers the way back.
+// A machine in the address that is not connected. In a narrow page this
+// pane is all there is, so it offers the way back.
 export function MachineGone({ className }: { className?: string }) {
   const t = useT()
   return (

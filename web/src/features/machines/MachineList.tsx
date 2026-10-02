@@ -18,7 +18,10 @@ export interface MachineListProps {
 export function MachineList({ machines, selectedId, now, className }: MachineListProps) {
   const t = useT()
   return (
-    <nav aria-label={t('machines.title')} className={cn('flex w-full flex-col gap-1 overflow-y-auto p-2.5 md:w-72 md:flex-none md:border-r', className)}>
+    <nav
+      aria-label={t('machines.title')}
+      className={cn('flex w-full flex-col gap-1 overflow-y-auto p-2.5 @split/panel:w-72 @split/panel:flex-none @split/panel:border-r', className)}
+    >
       {machines ? (
         <>
           <p className="px-2 pt-0.5 pb-1.5 text-xs text-subtle">{t('machines.machineCount', { n: machines.length })}</p>

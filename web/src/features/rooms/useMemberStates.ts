@@ -56,3 +56,16 @@ export function useMemberStates(roomId: string): MemberState[] {
     })
   }, [members.data, running.data, pending.data, machines.data, pauses.data, lookOf])
 }
+
+// islandSays is whether the island has more to say than who is there
+// (MemberIsland): a request waiting for a person, a member at work, one held
+// up by a pause. Its words and buttons then need more room than the top bar
+// of a narrow chat has (RoomPage).
+export function islandSays(states: MemberState[]): boolean {
+  return states.some(
+    (state) =>
+      (state.status === 'waiting' && state.approval !== undefined) ||
+      (state.status === 'working' && state.turn !== undefined) ||
+      (state.status === 'paused' && state.pause !== undefined),
+  )
+}

@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import { setLocale } from '@/lib/i18n'
 import { stubApi } from '@/test/fetch'
 import { renderWithProviders } from '@/test/render'
@@ -296,5 +296,29 @@ describe('LibraryPage', () => {
     expect(await screen.findByRole('heading', { name: 'Go table tests' })).toBeInTheDocument()
     expect(sent[1].getAll('path')).toEqual(['go-table-tests/SKILL.md', 'go-table-tests/scripts/run.sh'])
     expect(sent[1].getAll('file')).toHaveLength(2)
+  })
+})
+
+describe('LibraryPage in a narrow page', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('folds its views into a menu, imports from its "…" menu, and picks the way to import from a list', async () => {
+    // A 17.5rem page, a phone's (jsdom's root font is 16px).
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 280, 800))
+    stubApi(routes({ '/library': { wiki: market }, '/agents': { agents }, '/library/local': { skills: [] } }))
+    const { router } = renderWithProviders(<LibraryPage />, { route: '/library', path: '/library/*' })
+    await screen.findByRole('list', { name: '技能' })
+    const views = screen.getByRole('navigation', { name: '技能库视图' })
+    await userEvent.click(within(views).getByRole('button', { name: '技能' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: '模式' }))
+    expect(router.state.location.pathname).toBe('/library/patterns')
+
+    expect(screen.queryByRole('button', { name: '导入技能' })).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '更多' }))
+    await userEvent.click(await screen.findByRole('menuitem', { name: '导入技能' }))
+    const dialog = await screen.findByRole('dialog', { name: '导入技能' })
+    expect(within(dialog).queryByRole('tablist')).toBeNull()
+    await pickOption('导入方式', '文件夹路径')
+    expect(within(dialog).getByLabelText('文件夹')).toBeInTheDocument()
   })
 })

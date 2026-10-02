@@ -1,4 +1,4 @@
-import { Children, Fragment, type ReactNode } from 'react'
+import { Children, Fragment, type ReactNode, type Ref } from 'react'
 import { ChevronLeftIcon } from 'lucide-react'
 import { Link } from 'react-router'
 import { Button } from '@/components/ui/button'
@@ -7,13 +7,13 @@ import { useT } from '@/lib/i18n'
 
 // One kind of setting on the right of the settings column: a large title,
 // then its groups. The column beside it already says these are settings, so
-// there is no caption over the title. On a phone the section stands alone,
-// and its top row leads back to the column.
+// there is no caption over the title. In a narrow page the section stands
+// alone, and its top row leads back to the column.
 export function SettingsSection({ title, children }: { title: string; children: ReactNode }) {
   const t = useT()
   return (
     <>
-      <header className="flex h-12 flex-none items-center px-3 md:hidden">
+      <header className="flex h-12 flex-none items-center px-3 @split/panel:hidden">
         <Button variant="ghost" size="sm" asChild className="-ml-1 gap-1 font-normal text-muted-foreground">
           <Link to="/settings">
             <ChevronLeftIcon />
@@ -21,7 +21,7 @@ export function SettingsSection({ title, children }: { title: string; children: 
           </Link>
         </Button>
       </header>
-      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-10 md:pt-12">
+      <div className="min-h-0 flex-1 overflow-y-auto px-6 pb-10 @split/panel:pt-12">
         <div className="mx-auto flex max-w-160 flex-col gap-8">
           <h1 className="text-[1.75rem] font-bold tracking-[-0.03em] text-foreground">{title}</h1>
           {children}
@@ -53,9 +53,19 @@ export function SettingsGroup({ title, children }: { title?: string; children: R
 // whose name does not say enough has one short line under it, no more.
 // The name never breaks; when the two do not fit side by side the control
 // moves under it, still on the right.
-export function SettingRow({ label, description, children }: { label: ReactNode; description?: ReactNode; children: ReactNode }) {
+export function SettingRow({
+  ref,
+  label,
+  description,
+  children,
+}: {
+  ref?: Ref<HTMLDivElement>
+  label: ReactNode
+  description?: ReactNode
+  children: ReactNode
+}) {
   return (
-    <Item role="listitem" size="sm" className="min-h-14 gap-x-4 gap-y-2 py-3">
+    <Item ref={ref} role="listitem" size="sm" className="min-h-14 gap-x-4 gap-y-2 py-3">
       <ItemContent className={description ? 'min-w-0 gap-0.5' : 'flex-none'}>
         <ItemTitle className="text-[0.8125rem] whitespace-nowrap">{label}</ItemTitle>
         {description ? <ItemDescription className="text-xs">{description}</ItemDescription> : null}

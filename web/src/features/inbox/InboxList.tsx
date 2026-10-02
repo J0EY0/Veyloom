@@ -57,7 +57,11 @@ export function InboxList({ entries, unread, onReadAll, selectedId, loading, err
     ) : null
 
   return (
-    <Sidebar collapsible="none" aria-label={t('inbox.title')} className={cn('w-full md:w-85 md:flex-none md:border-r', className)}>
+    <Sidebar
+      collapsible="none"
+      aria-label={t('inbox.title')}
+      className={cn('w-full @split/panel:w-85 @split/panel:flex-none @split/panel:border-r', className)}
+    >
       <SidebarHeader className="gap-0 border-b p-0 pb-3">
         <PanelHeader
           title={t('inbox.title')}

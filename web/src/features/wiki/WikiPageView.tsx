@@ -83,7 +83,7 @@ export function WikiPageView({ space, path, history, teams = [], onOpenThread, b
   // A page of a bundle the project mounts is read, never changed here.
   const mounted = Boolean(data.mount)
   return (
-    <article className="mx-auto w-full max-w-[46rem] px-5 pt-5 pb-12 md:px-10">
+    <article className="mx-auto w-full max-w-[46rem] px-5 pt-5 pb-12 @split/panel:px-10">
       <PageHead page={data} space={space} onOpenThread={onOpenThread} back={back} byline={!skill} beside={skill ? <SkillTrialHead page={data} /> : undefined} />
       {/* A skill says all about it above its text, a line apart from it;
           under it are only the skill and its files. */}
@@ -165,7 +165,11 @@ function PageHead({
           <BackLink back={back} />
         ) : (
           <>
-            <Link to={pageHref(space)} className="-ml-1 flex flex-none items-center rounded hover:text-foreground md:hidden" aria-label={t('wiki.overview')}>
+            <Link
+              to={pageHref(space)}
+              className="-ml-1 flex flex-none items-center rounded hover:text-foreground @split/panel:hidden"
+              aria-label={t('wiki.overview')}
+            >
               <ChevronLeftIcon className="size-4" />
             </Link>
             <span className="flex-none">{typeName(t, page.type)}</span>
@@ -287,7 +291,7 @@ function PageHead({
 function PageSkeleton() {
   const t = useT()
   return (
-    <div role="status" aria-label={t('common.loading')} className="mx-auto flex w-full max-w-[46rem] flex-col gap-3 px-5 pt-6 md:px-10">
+    <div role="status" aria-label={t('common.loading')} className="mx-auto flex w-full max-w-[46rem] flex-col gap-3 px-5 pt-6 @split/panel:px-10">
       <Skeleton className="h-3 w-40" />
       <Skeleton className="h-6 w-2/3" />
       <Skeleton className="h-4 w-full" />

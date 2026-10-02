@@ -27,8 +27,8 @@ export interface WikiViewProps {
 // A wiki read in two columns (docs/design.md 5.14, step 4; webui.md 4.9):
 // the pages on the left, the one open on the right, the way the inbox
 // reads. A chat's Wiki tab shows the project's; the library page the skill
-// library. On a phone one of the two at a time: the list at the wiki's
-// root, a page otherwise.
+// library. In a narrow page one of the two at a time (see Panel): the list
+// at the wiki's root, a page otherwise.
 export function WikiView({ space, rest, onOpenThread }: WikiViewProps) {
   const t = useT()
   const navigate = useNavigate()
@@ -67,8 +67,8 @@ export function WikiView({ space, rest, onOpenThread }: WikiViewProps) {
   }
   return (
     <div className="flex min-h-0 flex-1">
-      <WikiSidebar space={space} catalog={catalog.data} loading={catalog.isPending} route={route} className={atRoot ? 'flex' : 'hidden md:flex'} />
-      <div className={cn('min-w-0 flex-1', route.kind === 'graph' ? 'overflow-hidden' : 'overflow-y-auto', atRoot ? 'hidden md:block' : 'block')}>
+      <WikiSidebar space={space} catalog={catalog.data} loading={catalog.isPending} route={route} className={atRoot ? 'flex' : 'hidden @split/panel:flex'} />
+      <div className={cn('min-w-0 flex-1', route.kind === 'graph' ? 'overflow-hidden' : 'overflow-y-auto', atRoot ? 'hidden @split/panel:block' : 'block')}>
         {route.kind === 'graph' && space.kind === 'project' ? (
           <WikiGraphView space={space} onOpenThread={openTopic} />
         ) : route.kind === 'page' ? (
@@ -81,7 +81,7 @@ export function WikiView({ space, rest, onOpenThread }: WikiViewProps) {
             onOpenThread={openTopic}
           />
         ) : !catalog.data ? (
-          <div role="status" aria-label={t('common.loading')} className="mx-auto flex w-full max-w-[46rem] flex-col gap-3 px-5 pt-6 md:px-10">
+          <div role="status" aria-label={t('common.loading')} className="mx-auto flex w-full max-w-[46rem] flex-col gap-3 px-5 pt-6 @split/panel:px-10">
             <Skeleton className="h-6 w-40" />
             <Skeleton className="h-3 w-64" />
           </div>

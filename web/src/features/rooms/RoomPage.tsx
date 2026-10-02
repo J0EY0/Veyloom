@@ -27,14 +27,25 @@ import { rememberChat } from '@/lib/lastChat'
 import { openPalette } from '@/lib/palette'
 import { useOutsidePress } from '@/lib/useOutsidePress'
 import { MemberIsland } from './MemberIsland'
-import { NARROW_PANEL_REM, PANEL_REM, panelLayout, useWidthRem } from './panelLayout'
+import {
+  FACES_REM,
+  ISLAND_COUNT_REM,
+  ISLAND_ROW_REM,
+  ISLAND_WORDY_REM,
+  NARROW_PANEL_REM,
+  PANEL_REM,
+  VIEWS_ROW_REM,
+  panelLayout,
+  useWidthRem,
+} from './panelLayout'
 import { Composer } from './Composer'
 import { ConnectionHint } from './ConnectionHint'
 import { RoomMenu } from './RoomMenu'
 import { RoomTabs } from './RoomTabs'
 import { Timeline } from './Timeline'
-import { useMemberStates } from './useMemberStates'
+import { islandSays, useMemberStates } from './useMemberStates'
 import { useT } from '@/lib/i18n'
+import { cn } from '@/lib/utils'
 import { errorText } from '@/api/errorText'
 
 export function RoomPage() {
@@ -139,6 +150,17 @@ export function RoomPage() {
   const [bodyRef, bodyRem] = useWidthRem()
   // The chat's info is narrow, unless it lists branches.
   const layout = panelLayout(bodyRem, panel === 'members' && !project?.repo_path ? NARROW_PANEL_REM : PANEL_REM)
+  // The top bar is as wide as the chat (see panelLayout): a narrow one, a
+  // tablet's beside the sidebar, gives up the idle count, then what the
+  // island says takes a row of its own under the bar, as wide as the chat
+  // (and the bar gets back the members button), then the views fold into a
+  // menu; a phone's keeps out the faces and the members button too.
+  const narrowBar = (rem: number) => bodyRem > 0 && bodyRem < rem
+  const islandBelow = narrowBar(ISLAND_ROW_REM) && islandSays(memberStates)
+  const viewsFolded = narrowBar(VIEWS_ROW_REM)
+  const phoneBar = narrowBar(FACES_REM)
+  const islandInBar = memberStates.length > 0 && !islandBelow && !phoneBar
+  const terse = islandBelow || narrowBar(ISLAND_WORDY_REM)
   const beside = sideOpen && !wide
   const closeSide = useCallback(() => {
     if (panel) closePanel()
@@ -175,12 +197,20 @@ export function RoomPage() {
         actions={
           <>
             <RoomMenu roomId={roomId} />
-            <RoomTabs roomId={roomId} view={wikiMatch ? 'wiki' : tasksMatch ? 'tasks' : attachmentsMatch ? 'attachments' : 'chat'} />
+            <RoomTabs roomId={roomId} view={wikiMatch ? 'wiki' : tasksMatch ? 'tasks' : attachmentsMatch ? 'attachments' : 'chat'} folded={viewsFolded} />
           </>
         }
         trailing={
           <>
-            {memberStates.length > 0 ? <MemberIsland states={memberStates} onOpenThread={openThread} onOpenMembers={() => openPanel('members')} /> : null}
+            {islandInBar ? (
+              <MemberIsland
+                states={memberStates}
+                onOpenThread={openThread}
+                onOpenMembers={() => openPanel('members')}
+                facesOnly={narrowBar(ISLAND_COUNT_REM)}
+                terse={terse}
+              />
+            ) : null}
             <ConnectionHint />
             <Tooltip>
               <TooltipTrigger asChild>
@@ -191,7 +221,10 @@ export function RoomPage() {
                   aria-pressed={panel === 'members'}
                   data-opens-panel
                   onClick={() => (panel === 'members' ? closePanel() : openPanel('members'))}
-                  className="text-subtle hover:text-foreground"
+                  // In a narrow bar, beside the island there is no room for it,
+                  // nor in a phone's at all; the island and the chat's menu open
+                  // the same.
+                  className={cn('text-subtle hover:text-foreground', (phoneBar || (islandInBar && viewsFolded)) && 'hidden')}
                 >
                   <UsersIcon />
                 </Button>
@@ -209,6 +242,11 @@ export function RoomPage() {
           </>
         }
       />
+      {islandBelow ? (
+        <div className="flex-none px-3 pb-2">
+          <MemberIsland states={memberStates} onOpenThread={openThread} onOpenMembers={() => openPanel('members')} terse className="w-full max-w-none" />
+        </div>
+      ) : null}
       {/* Under the top bar, which never moves: the chat, and on its right the open panel. */}
       <div ref={bodyRef} className="relative flex min-h-0 flex-1 flex-col">
         <div

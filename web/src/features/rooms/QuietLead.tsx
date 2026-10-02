@@ -9,8 +9,9 @@ import type { MemberState } from './useMemberStates'
 // A working member whose turn went quiet (docs/design.md 5.23.8), as the
 // island says it: what it was doing, for how long it has shown no sign of
 // life, and the ways out, a person's to choose. The hub stops nothing
-// itself: a long build is quiet too.
-export function QuietLead({ state, now }: { state: MemberState; now: number }) {
+// itself: a long build is quiet too. Terse, short of room, the second way
+// out says the short of its name, which its full name holds.
+export function QuietLead({ state, now, terse = false }: { state: MemberState; now: number; terse?: boolean }) {
   const t = useT()
   const live = useLiveTurn(state.turn?.id)
   const cancel = useCancelTurn()
@@ -19,7 +20,7 @@ export function QuietLead({ state, now }: { state: MemberState; now: number }) {
   const name = state.member.display_name
   return (
     <>
-      <span className="min-w-0 truncate text-muted-foreground">
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">
         <b className="font-medium text-foreground">{name}</b>
         {live?.tool ? (
           <>
@@ -41,8 +42,9 @@ export function QuietLead({ state, now }: { state: MemberState; now: number }) {
         className="mr-1 rounded-full px-3"
         disabled={cancel.isPending}
         onClick={() => cancel.mutate({ turnId: turn.id, newSession: true }, { onSuccess: () => toast(t('member.newSessionDone', { name })) })}
+        aria-label={terse ? t('turn.cancelFresh') : undefined}
       >
-        {t('turn.cancelFresh')}
+        {terse ? t('turn.cancelFreshShort') : t('turn.cancelFresh')}
       </Button>
     </>
   )

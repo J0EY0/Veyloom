@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { beforeEach, describe, expect, it } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { getCurrentUser, setCurrentUser } from '@/lib/currentUser'
 import { getLocale, setLocale } from '@/lib/i18n'
 import { getTheme, setTheme } from '@/lib/theme'
@@ -8,6 +8,7 @@ import { getUiSize, setUiSize } from '@/lib/uiSize'
 import { stubApi } from '@/test/fetch'
 import { user } from '@/test/fixtures'
 import { renderWithProviders } from '@/test/render'
+import { pickOption } from '@/test/select'
 import { SettingsPage } from './SettingsPage'
 
 function open(section = '') {
@@ -160,5 +161,24 @@ describe('SettingsPage', () => {
     await userEvent.click(screen.getByRole('button', { name: '退出登录' }))
     await waitFor(() => expect(calls).toContain('POST /auth/logout'))
     await waitFor(() => expect(getCurrentUser()).toBeNull())
+  })
+})
+
+describe('SettingsPage in a narrow page', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('picks from a menu what does not fit side by side in its row', async () => {
+    // Rows 16.25rem wide, a phone's at a large interface size (jsdom's root
+    // font is 16px): too narrow for the three colour schemes, not for the
+    // sizes or the languages.
+    document.documentElement.style.fontSize = ''
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 260, 56))
+    stubApi({})
+    open('general')
+    expect(await screen.findByRole('tablist', { name: '界面大小' })).toBeInTheDocument()
+    expect(screen.queryByRole('tablist', { name: '主题' })).toBeNull()
+    await pickOption('主题', '深色')
+    expect(getTheme()).toBe('dark')
+    expect(screen.getByRole('combobox', { name: '主题' })).toHaveTextContent('深色')
   })
 })

@@ -84,6 +84,28 @@ describe('MemberIsland', () => {
     expect(onOpenMembers).toHaveBeenCalled()
     expect(screen.getByLabelText('Pi Tester · 机器离线')).toBeInTheDocument()
   })
+
+  it('shows the faces alone in a bar with no room for the count, but says what is going on', () => {
+    const idle = [
+      { member: member('a1', 'Codex Implementer'), status: 'idle' as const },
+      { member: member('a2', 'Pi Tester'), status: 'offline' as const },
+    ]
+    const { unmount } = renderWithProviders(<MemberIsland states={idle} onOpenThread={() => {}} onOpenMembers={() => {}} facesOnly />)
+    expect(screen.queryByRole('button', { name: '2 个成员空闲' })).not.toBeInTheDocument()
+    expect(screen.getByLabelText('Pi Tester · 机器离线')).toBeInTheDocument()
+    unmount()
+
+    // Only the count gives way: a member at work is still told.
+    renderWithProviders(
+      <MemberIsland
+        states={[{ ...idle[0], status: 'working', turn: turn('x1', 't9', { status: 'running', ended_at: undefined }) }, idle[1]]}
+        onOpenThread={() => {}}
+        onOpenMembers={() => {}}
+        facesOnly
+      />,
+    )
+    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent('Codex Implementer 正在工作')
+  })
 })
 
 describe('MemberIsland quiet', () => {
@@ -106,9 +128,25 @@ describe('MemberIsland quiet', () => {
     )
     expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent('Stuck · 12 分钟没有任何进展')
     expect(screen.getByRole('button', { name: /Stuck · 可能卡住/ })).toBeInTheDocument()
+    const fresh = screen.getByRole('button', { name: '取消并开启新会话' })
+    expect(fresh).toHaveTextContent('取消并开启新会话')
     await userEvent.click(screen.getByRole('button', { name: '取消' }))
-    await userEvent.click(screen.getByRole('button', { name: '取消并开启新会话' }))
+    await userEvent.click(fresh)
     await waitFor(() => expect(bodies).toEqual([{}, { new_session: true }]))
+  })
+
+  it('says the short of the second way out where it is short of room, which its full name holds', () => {
+    const quiet = new Date(Date.now() - 12 * 60_000).toISOString()
+    renderWithProviders(
+      <MemberIsland
+        states={[{ member: member('a2', 'Stuck'), status: 'working', turn: turn('x2', 't2', { status: 'running', ended_at: undefined, quiet_since: quiet }) }]}
+        onOpenThread={vi.fn()}
+        onOpenMembers={vi.fn()}
+        terse
+      />,
+    )
+    const fresh = screen.getByRole('button', { name: '取消并开启新会话' })
+    expect(fresh).toHaveTextContent(/^开启新会话$/)
   })
 })
 
@@ -132,7 +170,7 @@ describe('MemberIsland waiting', () => {
       />,
     )
     const hhmm = `${String(at.getHours()).padStart(2, '0')}:${String(at.getMinutes()).padStart(2, '0')}`
-    expect(screen.getByRole('status')).toHaveTextContent(`Slow · 额度用完 · ${hhmm} 恢复`)
+    expect(screen.getByRole('status', { name: '成员状态' })).toHaveTextContent(`Slow · 额度用完 · ${hhmm} 恢复`)
     await userEvent.click(screen.getByRole('button', { name: '继续' }))
     await waitFor(() => expect(lifted).toBe('DELETE'))
   })

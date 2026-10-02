@@ -4,7 +4,7 @@ import type { ReactNode } from 'react'
 import { describe, expect, it } from 'vitest'
 import { stubApi } from '@/test/fetch'
 import { approval, turn } from '@/test/fixtures'
-import { useMemberStates } from './useMemberStates'
+import { islandSays, useMemberStates, type MemberState } from './useMemberStates'
 
 function wrapper({ children }: { children: ReactNode }) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -88,5 +88,20 @@ describe('useMemberStates', () => {
     })
     const { result } = renderHook(() => useMemberStates('r1'), { wrapper })
     await waitFor(() => expect(result.current.map((s) => s.member.display_name)).toEqual(['A']))
+  })
+})
+
+describe('islandSays', () => {
+  const state = (status: MemberState['status'], extra: Partial<MemberState> = {}): MemberState => ({
+    member: { id: 'a1', display_name: 'A' } as MemberState['member'],
+    status,
+    ...extra,
+  })
+
+  it('says more than who is there while a request waits, a member works or a pause holds one up', () => {
+    expect(islandSays([state('idle'), state('offline'), state('disabled')])).toBe(false)
+    expect(islandSays([state('idle'), state('waiting', { approval: approval('ap1') })])).toBe(true)
+    expect(islandSays([state('working', { turn: turn('x1', 't1', { status: 'running' }) })])).toBe(true)
+    expect(islandSays([state('paused', { pause: { id: 'p1', reason: 'quota', detail: '', created_at: '2026-09-30T00:00:00Z' } })])).toBe(true)
   })
 })

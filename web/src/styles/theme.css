@@ -235,6 +235,9 @@
   --shadow-elev: var(--shadow-elev);
   --shadow-pop: var(--shadow-pop);
 
+  /* A page's list beside what it opens (Panel): narrower, one at a time. */
+  --container-split: 40rem;
+
   --radius-sm: calc(var(--radius) * 0.6);
   --radius-md: calc(var(--radius) * 0.8);
   --radius-lg: var(--radius);

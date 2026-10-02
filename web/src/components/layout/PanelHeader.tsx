@@ -50,9 +50,10 @@ export function PanelHeader({ title, prefix, parent, actions, trailing }: PanelH
           </BreadcrumbList>
         </Breadcrumb>
       ) : (
-        <h1 className="mr-1 flex min-w-0 items-center truncate text-sm font-semibold tracking-[-0.01em]">
+        <h1 className="mr-1 flex min-w-0 items-center text-sm font-semibold tracking-[-0.01em]">
           {prefix ? <span className="mr-[0.1875rem] font-normal text-subtle">{prefix}</span> : null}
-          {title}
+          {/* Cut with an ellipsis, which a flex box's own text never gets. */}
+          <span className="min-w-0 truncate">{title}</span>
         </h1>
       )}
       {actions}

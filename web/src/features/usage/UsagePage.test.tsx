@@ -1,6 +1,6 @@
 import { screen, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
-import { describe, expect, it } from 'vitest'
+import { afterEach, describe, expect, it, vi } from 'vitest'
 import type { Usage, UsageRange } from '@/api/types'
 import { stubApi } from '@/test/fetch'
 import { project } from '@/test/fixtures'
@@ -149,5 +149,20 @@ describe('UsagePage', () => {
   it('says so when nothing ran in the range', async () => {
     open(() => ({ ...today(), turns: 0, points: [], runtimes: [], members: [], works: [] }))
     expect(await screen.findByText('这段时间还没有轮次')).toBeInTheDocument()
+  })
+})
+
+describe('UsagePage in a narrow page', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('picks the range from a menu like the project', async () => {
+    // A 22.5rem page, a phone's: the three ranges beside the project would be cut.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 360, 800))
+    const { router, calls } = open()
+    await screen.findByRole('group', { name: '总览' })
+    expect(screen.queryByRole('tablist', { name: '时间范围' })).toBeNull()
+    await pickOption('时间范围', '7 天')
+    expect(router.state.location.search).toBe('?range=7d')
+    expect(calls).toContainEqual(expect.stringMatching(/^GET \/usage\?range=7d&tz=[^&]+$/))
   })
 })

@@ -165,3 +165,23 @@ describe('the attachments tab', () => {
     expect(screen.getByText('61 个附件')).toBeInTheDocument()
   })
 })
+
+describe('the attachments tab in a narrow page', () => {
+  afterEach(() => vi.restoreAllMocks())
+
+  it('picks the kind from a menu like the sender and the order', async () => {
+    // A 17.5rem row, a phone's: the four kinds side by side would be cut.
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(new DOMRect(0, 0, 280, 40))
+    const calls = stubRoom()
+    const { router } = show()
+    const user = userEvent.setup()
+    await screen.findByText('shot.png')
+    expect(screen.queryByRole('tablist', { name: '附件类型' })).toBeNull()
+
+    await user.click(screen.getByRole('button', { name: '附件类型: 全部' }))
+    await user.click(await screen.findByRole('menuitemradio', { name: '文档' }))
+    await waitFor(() => expect(router.state.location.search).toBe('?kind=docs'))
+    await waitFor(() => expect(asked(calls).at(-1)?.get('kind')).toBeTruthy())
+    expect(screen.getByRole('button', { name: '附件类型: 文档' })).toBeInTheDocument()
+  })
+})

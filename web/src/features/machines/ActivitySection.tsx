@@ -136,7 +136,8 @@ function ActivityCard({ title, loading, summary, error, actions, children }: Act
       <CardHeader className="flex flex-col gap-2 px-4">
         <div className="flex w-full flex-wrap items-center justify-between gap-2">
           <CardTitle id={id}>{title}</CardTitle>
-          <div className="flex items-center gap-2">{actions}</div>
+          {/* A narrow card puts the range under the runtime rather than cut it. */}
+          <div className="flex flex-wrap items-center gap-2">{actions}</div>
         </div>
         {line ? <CardDescription>{line}</CardDescription> : null}
       </CardHeader>

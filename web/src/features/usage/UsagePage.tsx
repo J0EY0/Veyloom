@@ -10,6 +10,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyTitle } from '@/components/u
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useWidthRem } from '@/features/rooms/panelLayout'
 import { formatCompactCount } from '@/lib/format'
 import { useT } from '@/lib/i18n'
 import { totalTokens } from '@/lib/tokens'
@@ -23,6 +24,10 @@ const ranges: UsageRange[] = ['today', '7d', '30d']
 
 // A Select cannot hold the empty string, which stands for every project.
 const allProjects = 'all'
+// How wide the top bar must be, measured in English, whose words run
+// longest, for the ranges side by side beside the title and the project;
+// narrower, a phone's, the range is picked from a menu like the project.
+const RANGES_ROW_REM = 26
 
 // UsagePage is where the tokens went, across every machine (docs/webui.md
 // 4.20): four figures, what each turn or day spent, the runtimes' shares,
@@ -36,6 +41,8 @@ export function UsagePage() {
   const project = params.get('project') ?? ''
   const usage = useUsage(range, project)
   const projects = useProjects()
+  const [panelRef, panelRem] = useWidthRem()
+  const rangesInMenu = panelRem > 0 && panelRem < RANGES_ROW_REM
 
   function set(key: string, value: string, fallback: string) {
     setParams((prev) => {
@@ -47,21 +54,36 @@ export function UsagePage() {
   }
 
   return (
-    <Panel>
+    <Panel ref={panelRef}>
       <PanelHeader
         title={t('usage.title')}
         trailing={
           // On a narrow screen the project gives way first, then the title.
           <div className="flex min-w-0 shrink-[100] items-center gap-2 sm:gap-2.5">
-            <Tabs value={range} onValueChange={(value) => set('range', value, 'today')} className="flex-none">
-              <TabsList aria-label={t('usage.range')} className="h-8">
-                {ranges.map((r) => (
-                  <TabsTrigger key={r} value={r} className="px-2 text-xs sm:px-2.5">
-                    {t(`usage.range.${r}`)}
-                  </TabsTrigger>
-                ))}
-              </TabsList>
-            </Tabs>
+            {rangesInMenu ? (
+              <Select value={range} onValueChange={(value) => set('range', value, 'today')}>
+                <SelectTrigger size="sm" aria-label={t('usage.range')} className="flex-none px-2.5 text-xs">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent align="end">
+                  {ranges.map((r) => (
+                    <SelectItem key={r} value={r}>
+                      {t(`usage.range.${r}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            ) : (
+              <Tabs value={range} onValueChange={(value) => set('range', value, 'today')} className="flex-none">
+                <TabsList aria-label={t('usage.range')} className="h-8">
+                  {ranges.map((r) => (
+                    <TabsTrigger key={r} value={r} className="px-2 text-xs sm:px-2.5">
+                      {t(`usage.range.${r}`)}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+              </Tabs>
+            )}
             <Select value={project || allProjects} onValueChange={(value) => set('project', value === allProjects ? '' : value, '')}>
               <SelectTrigger
                 size="sm"

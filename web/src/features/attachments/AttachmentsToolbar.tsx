@@ -13,6 +13,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { InputGroup, InputGroupAddon, InputGroupInput } from '@/components/ui/input-group'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { useWidthRem } from '@/features/rooms/panelLayout'
 import { useMentionTargets } from '@/features/rooms/useMentionTargets'
 import { formatCount } from '@/lib/format'
 import { useT } from '@/lib/i18n'
@@ -35,6 +36,11 @@ export interface AttachmentsToolbarProps {
 
 // How long typing rests before the words are looked for.
 const TYPING_MS = 250
+const kindGroups: KindGroup[] = ['all', 'media', 'docs', 'other']
+// How wide the row must be for the kinds side by side, measured in English,
+// whose names run longest; narrower, a phone's, they are a menu like the
+// sender's and the order's.
+const KINDS_ROW_REM = 18.5
 
 // The quiet row over the attachments tab's cards (docs/webui.md 4.21): a
 // search box without a frame, the kinds, then buttons without frames for
@@ -56,12 +62,14 @@ export function AttachmentsToolbar({ roomId, filter, onChange, total, picking, o
     return () => clearTimeout(timer)
   }, [words, filter.q, onChange])
 
+  const [rowRef, rowRem] = useWidthRem()
+  const kindsInMenu = rowRem > 0 && rowRem < KINDS_ROW_REM
   const senders = all.map((target) => ({ value: `${target.mention.kind === 'agent' ? 'member' : 'user'}:${target.mention.id}`, name: target.name }))
   const sender = senders.find((s) => s.value === filter.sender)
   const ghost = 'h-7.5 gap-1.5 px-2.5 text-[0.8125rem] font-normal text-foreground [&_svg]:text-subtle'
 
   return (
-    <div className="flex flex-wrap items-center gap-2">
+    <div ref={rowRef} className="flex flex-wrap items-center gap-2">
       <InputGroup className="h-8 w-75 max-w-full border-0 bg-muted/70 shadow-none has-[[data-slot=input-group-control]:focus-visible]:ring-2 dark:bg-input/30">
         <InputGroupAddon align="inline-start">
           <SearchIcon className="size-3.5 text-subtle" />
@@ -75,15 +83,35 @@ export function AttachmentsToolbar({ roomId, filter, onChange, total, picking, o
           className="text-[0.8125rem]"
         />
       </InputGroup>
-      <Tabs value={filter.group} onValueChange={(group) => onChange({ group: group as KindGroup })}>
-        <TabsList aria-label={t('attachments.kinds')} className="h-8">
-          {(['all', 'media', 'docs', 'other'] as const).map((group) => (
-            <TabsTrigger key={group} value={group} className="px-2.5 text-xs">
-              {t(`attachments.kind.${group}`)}
-            </TabsTrigger>
-          ))}
-        </TabsList>
-      </Tabs>
+      {kindsInMenu ? (
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button variant="ghost" size="sm" aria-label={`${t('attachments.kinds')}: ${t(`attachments.kind.${filter.group}`)}`} className={ghost}>
+              {t(`attachments.kind.${filter.group}`)}
+              <ChevronDownIcon />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="start" className="w-40">
+            <DropdownMenuRadioGroup value={filter.group} onValueChange={(group) => onChange({ group: group as KindGroup })}>
+              {kindGroups.map((group) => (
+                <DropdownMenuRadioItem key={group} value={group}>
+                  {t(`attachments.kind.${group}`)}
+                </DropdownMenuRadioItem>
+              ))}
+            </DropdownMenuRadioGroup>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      ) : (
+        <Tabs value={filter.group} onValueChange={(group) => onChange({ group: group as KindGroup })}>
+          <TabsList aria-label={t('attachments.kinds')} className="h-8">
+            {kindGroups.map((group) => (
+              <TabsTrigger key={group} value={group} className="px-2.5 text-xs">
+                {t(`attachments.kind.${group}`)}
+              </TabsTrigger>
+            ))}
+          </TabsList>
+        </Tabs>
+      )}
       <span className="grow" />
       {total !== undefined ? <span className="px-1 text-xs text-subtle tabular-nums">{t('attachments.count', { n: formatCount(total) })}</span> : null}
       <DropdownMenu>

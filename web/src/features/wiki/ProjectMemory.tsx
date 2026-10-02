@@ -14,7 +14,7 @@ export function ProjectMemory({ space, onOpenThread }: { space: MemorySpace; onO
   const prefs = useMemoryPrefs()
   const off = prefs.data !== undefined && !(prefs.data.enabled && prefs.data.project)
   return (
-    <div className="mx-auto flex w-full max-w-[46rem] flex-col gap-5 px-5 pt-5 pb-12 md:px-10">
+    <div className="mx-auto flex w-full max-w-[46rem] flex-col gap-5 px-5 pt-5 pb-12 @split/panel:px-10">
       <header className="flex flex-col gap-1">
         <BackToPages space={space} />
         <h1 className="text-xl font-semibold tracking-[-0.01em]">{t('wiki.memory')}</h1>

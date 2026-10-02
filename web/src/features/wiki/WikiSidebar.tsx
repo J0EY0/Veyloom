@@ -48,7 +48,11 @@ export function WikiSidebar({ space, catalog, loading, route, className }: WikiS
   const current = route.kind === 'page' ? route.path : ''
 
   return (
-    <Sidebar collapsible="none" aria-label={t('wiki.pages')} className={cn('w-full md:w-56 md:flex-none md:border-r xl:w-68', className)}>
+    <Sidebar
+      collapsible="none"
+      aria-label={t('wiki.pages')}
+      className={cn('w-full @split/panel:w-56 @split/panel:flex-none @split/panel:border-r @min-[55rem]/panel:w-68', className)}
+    >
       <SidebarHeader className="px-3 pt-3 pb-1">
         <SidebarInput
           type="search"
