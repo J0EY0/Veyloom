@@ -45,6 +45,16 @@ describe('branches in the chat’s info', () => {
     expect(within(coder).getByRole('button', { name: '合并' })).toBeEnabled()
   })
 
+  it('says a checkout on no branch on the card, and merges nothing into it until it is on one', async () => {
+    stub({}, {}, { ...branches, main: { ...branches.main, branch: '' } })
+    renderView()
+    const panel = screen.getByRole('complementary', { name: '群聊信息' })
+    await waitFor(() => expect(within(panel).getByText('不在分支上').parentElement).toHaveTextContent('主线 不在分支上'))
+    // Greyed, and no line under the card on what to do.
+    expect(within(await rowOf('Coder')).getByRole('button', { name: '合并' })).toBeDisabled()
+    expect(panel).not.toHaveTextContent('请先切换')
+  })
+
   it('merges a member’s work, naming the work on its branch and the files another member changed too', async () => {
     let merged: unknown
     stub({

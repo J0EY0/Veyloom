@@ -5,7 +5,6 @@ import { errorText } from '@/api/errorText'
 import { useProject, useUpdateProject } from '@/api/projects'
 import { keepsNoWiki } from '@/api/upkeep'
 import { useRuntimeTraits } from '@/api/runtimes'
-import { runtimeName } from '@/lib/runtimes'
 import { Button } from '@/components/ui/button'
 import { byLeader, KeeperSelect } from '@/features/projects/MaintainerFields'
 import { useT } from '@/lib/i18n'
@@ -24,13 +23,17 @@ export function OfferControls({ projectId, roomId }: { projectId: string; roomId
   const [picked, setPicked] = useState(byLeader)
   const candidates = (members.data ?? []).filter((member) => member.enabled)
   const leader = (members.data ?? []).find((member) => member.id === project?.leader_id)
-  const keeper = picked === byLeader ? leader : candidates.find((m) => m.id === picked)
-  const noWiki = keepsNoWiki(keeper, agents.data, traits.data)
+  const memberOf = (value: string) => (value === byLeader ? leader : candidates.find((m) => m.id === value))
+  // One who cannot write the wiki is not picked: the leader unless it
+  // cannot, else the first member who can; nobody, and it cannot be on.
+  const canKeep = (value: string) => memberOf(value) !== undefined && !keepsNoWiki(memberOf(value), agents.data, traits.data)
+  const chosen = [picked, byLeader, ...candidates.map((m) => m.id)].find(canKeep)
+  const keeper = chosen ? memberOf(chosen) : undefined
 
   function enable() {
     if (!keeper) return
     update.mutate(
-      { wiki_upkeep: true, wiki_maintainer_member_id: picked === byLeader ? '' : keeper.id, wiki_maintainer_trigger: 'daily' },
+      { wiki_upkeep: true, wiki_maintainer_member_id: chosen === byLeader ? '' : keeper.id, wiki_maintainer_trigger: 'daily' },
       {
         onSuccess: () => toast.success(t('maintainer.enabled', { name: keeper.display_name })),
         onError: (err) => toast.error(t('maintainer.enableFailed', { error: errorText(err) })),
@@ -43,25 +46,23 @@ export function OfferControls({ projectId, roomId }: { projectId: string; roomId
   }
 
   return (
-    <>
-      <div className="flex flex-wrap items-center gap-2">
-        <KeeperSelect
-          size="sm"
-          className="w-44 bg-background"
-          label={t('maintainer.who')}
-          value={picked}
-          leader={leader}
-          candidates={candidates}
-          onChange={setPicked}
-        />
-        <Button size="sm" disabled={!keeper || update.isPending} onClick={enable}>
-          {t('maintainer.enable')}
-        </Button>
-        <Button variant="ghost" size="sm" className="text-muted-foreground" disabled={update.isPending} onClick={decline}>
-          {t('maintainer.decline')}
-        </Button>
-      </div>
-      {noWiki ? <p className="text-xs text-status-wait">{t('maintainer.readOnlyNoWiki', { runtime: runtimeName(noWiki) })}</p> : null}
-    </>
+    <div className="flex flex-wrap items-center gap-2">
+      <KeeperSelect
+        size="sm"
+        className="w-44 bg-background"
+        label={t('maintainer.who')}
+        value={chosen ?? picked}
+        leader={leader}
+        candidates={candidates}
+        canKeep={canKeep}
+        onChange={setPicked}
+      />
+      <Button size="sm" disabled={!keeper || update.isPending} onClick={enable}>
+        {t('maintainer.enable')}
+      </Button>
+      <Button variant="ghost" size="sm" className="text-muted-foreground" disabled={update.isPending} onClick={decline}>
+        {t('maintainer.decline')}
+      </Button>
+    </div>
   )
 }

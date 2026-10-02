@@ -31,9 +31,11 @@ describe('the skills on this machine', () => {
     expect(list).toHaveTextContent('同名的还有：~/.claude/skills')
     expect(list).not.toHaveTextContent('notes同名')
 
+    // The other is greyed; the line naming its twin says why, nothing more.
     await userEvent.click(claude)
     expect(agents).toBeDisabled()
-    expect(list).toHaveTextContent('已勾选 ~/.claude/skills 里的同名技能，只能导入一个')
+    expect(list).not.toHaveTextContent('只能导入一个')
+    expect(list).toHaveTextContent('同名的还有：~/.claude/skills')
     await userEvent.click(within(list).getByRole('checkbox', { name: /notes/ }))
     expect(within(dialog).getByRole('button', { name: '导入 2 个技能' })).toBeEnabled()
     // Unticked, the other can be ticked again.

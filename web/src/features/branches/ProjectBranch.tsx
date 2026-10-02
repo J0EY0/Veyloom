@@ -13,16 +13,15 @@ export interface ProjectBranchProps {
 }
 
 // ProjectBranch is the project's side of its branches, under its card in
-// the chat's info (docs/design.md 5.21): a checkout not on any branch,
-// changes made in the checkout and not committed, which the members'
-// worktrees lack and a merge may trip on; and how new worktrees are got
-// ready. Only a project in a git repository has worktrees at all.
+// the chat's info (docs/design.md 5.21): changes made in the checkout and
+// not committed, which the members' worktrees lack and a merge may trip
+// on; and how new worktrees are got ready. A checkout on no branch says
+// so on the card, and the merges wait for one. Only a project in a git repository has worktrees at all.
 export function ProjectBranch({ project, main, onBranch, onOpenThread }: ProjectBranchProps) {
   const t = useT()
   const changed = main.changed ?? []
   return (
     <div className="flex flex-col gap-3">
-      {!main.branch ? <p className="text-xs text-status-wait">{t('branches.detached')}</p> : null}
       {changed.length > 0 ? (
         <section
           aria-label={t('branches.uncommittedTitle', { n: changed.length })}

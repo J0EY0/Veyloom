@@ -232,7 +232,8 @@ describe('MembersPanel', () => {
     })
     renderPanel()
     await userEvent.click(await screen.findByRole('button', { name: '更多' }))
-    expect(await screen.findByRole('menuitem', { name: '工作中，无法移出' })).toHaveAttribute('aria-disabled', 'true')
+    // Greyed, under its own name: nothing said about why.
+    expect(await screen.findByRole('menuitem', { name: '移出项目' })).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('says so when the hub finds it busy after all', async () => {
@@ -262,7 +263,7 @@ describe('MembersPanel', () => {
     })
     renderPanel()
     await userEvent.click(await screen.findByRole('button', { name: '更多' }))
-    expect(await screen.findByRole('menuitem', { name: '工作中，无法开启新会话' })).toHaveAttribute('aria-disabled', 'true')
+    expect(await screen.findByRole('menuitem', { name: '开启新会话' })).toHaveAttribute('aria-disabled', 'true')
   })
 
   it('tells how long a member has been in its session', async () => {
@@ -292,7 +293,7 @@ describe('MembersPanel', () => {
     renderPanel()
     await userEvent.click(await screen.findByText('Codex Implementer'))
     const dialog = await screen.findByRole('dialog')
-    expect(await within(dialog).findByText('还没有会话，下一轮开始时会新建。')).toBeInTheDocument()
+    expect(await within(dialog).findByText('还没有会话')).toBeInTheDocument()
     expect(within(dialog).queryByText('修改路径后，下一轮会开启新会话。')).not.toBeInTheDocument()
   })
 })

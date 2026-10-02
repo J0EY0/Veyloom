@@ -3,6 +3,7 @@ import { SearchIcon, XIcon } from 'lucide-react'
 import { Link, useNavigate } from 'react-router'
 import { useAgents, useMachines } from '@/api/agents'
 import { useCreateProject } from '@/api/projects'
+import { useRuntimeTraits } from '@/api/runtimes'
 import type { Agent } from '@/api/types'
 import { AgentAvatar } from '@/components/shared/agent-avatar'
 import { Badge } from '@/components/ui/badge'
@@ -18,7 +19,7 @@ import { useT } from '@/lib/i18n'
 import { runtimeName } from '@/lib/runtimes'
 import { errorText } from '@/api/errorText'
 import { byLeader } from './MaintainerFields'
-import { NewProjectMaintainer } from './NewProjectMaintainer'
+import { keeperFor, NewProjectMaintainer } from './NewProjectMaintainer'
 
 export interface NewProjectDialogProps {
   open: boolean
@@ -39,13 +40,15 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
   const [picked, setPicked] = useState<ReadonlySet<string>>(new Set())
   const [upkeep, setUpkeep] = useState(false)
   const [maintainer, setMaintainer] = useState(byLeader)
+  const traits = useRuntimeTraits()
   const id = useId()
   const t = useT()
   // In the order they were picked, which is the order they join: the first
   // leads the project (docs/design.md 5.21).
   const joining = pickedAgents(agents.data, picked)
-  // One taken off the list keeps the wiki no more.
-  const keeper = picked.has(maintainer) ? maintainer : byLeader
+  // One taken off the list keeps the wiki no more, nor one who cannot
+  // write it; with nobody who can, it is not kept.
+  const keeper = keeperFor(joining, picked.has(maintainer) ? maintainer : byLeader, traits.data)
 
   function toggle(agentId: string, on: boolean) {
     setPicked((current) => {
@@ -72,7 +75,7 @@ export function NewProjectDialog({ open, onClose }: NewProjectDialogProps) {
         name,
         repo_path: String(data.get('repo_path') ?? '').trim(),
         agent_ids: joining.map((agent) => agent.id),
-        ...(upkeep ? { wiki_upkeep: true, ...(keeper !== byLeader ? { wiki_maintainer_agent_id: keeper } : {}) } : {}),
+        ...(upkeep && keeper ? { wiki_upkeep: true, ...(keeper !== byLeader ? { wiki_maintainer_agent_id: keeper } : {}) } : {}),
       },
       {
         onSuccess: ({ rooms }) => {

@@ -65,11 +65,6 @@ export function LinkCard({ approval, memberName, names }: ApprovalCardProps) {
         {host ? <br /> : null}
         {link.url}
       </p>
-      {safe ? null : (
-        <p role="alert" className="text-xs text-status-fail">
-          {t('link.unsafe')}
-        </p>
-      )}
       {pending ? (
         <div className="flex items-center gap-1.5">
           <span className="text-xs text-subtle">

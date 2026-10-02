@@ -57,7 +57,6 @@ describe('MemoryEditor', () => {
     expect(within(list).getByText('9月23日 · Claude · Veyloom 的话题 #4')).toBeInTheDocument()
     // How full it is is said once that matters, not before.
     expect(screen.queryByText('60 / 2000 字')).toBeNull()
-    expect(screen.queryByText(/快满了/)).toBeNull()
   })
 
   it('adds an entry, saved at once from what was read', async () => {
@@ -94,7 +93,7 @@ describe('MemoryEditor', () => {
     expect(screen.getByRole('textbox', { name: '新的一条' })).toBeInTheDocument()
   })
 
-  it('says why a save was refused, in words, and warns when nearly full', async () => {
+  it('says why a save was refused, in words, and how full it is when nearly full', async () => {
     stubApi({
       '/memory': async (req: Request) =>
         req.method === 'PUT'
@@ -102,7 +101,8 @@ describe('MemoryEditor', () => {
           : { memory: { ...memory, chars: 1900 } },
     })
     renderMemory()
-    expect(await screen.findByText(/快满了/)).toBeInTheDocument()
+    // The count alone, nothing on what to do about it.
+    expect(await screen.findByText('1900 / 2000 字')).toBeInTheDocument()
     await userEvent.type(screen.getByRole('textbox', { name: '新的一条' }), '再加一条。{Enter}')
     expect(await screen.findByRole('alert')).toHaveTextContent('超出字数上限：保存后会有 2100 字，最多 2000 字。')
   })

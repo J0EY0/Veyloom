@@ -43,6 +43,8 @@ export interface MemberRowProps {
   holds?: string[]
   // The leader of a project with worktrees works in the checkout itself.
   inCheckout?: boolean
+  // The checkout is on no branch: nothing can be merged into it.
+  detached?: boolean
   onEdit: (member: Member) => void
   onMakeLeader: (member: Member) => void
   onRemove: (member: Member) => void
@@ -62,6 +64,7 @@ export function MemberRow({
   overlaps = [],
   holds = [],
   inCheckout,
+  detached = false,
   onEdit,
   onMakeLeader,
   onRemove,
@@ -95,6 +98,7 @@ export function MemberRow({
   const branchBusy = Boolean(worktree?.busy) || busy
   const open = (kind: 'merge' | 'diff' | 'setAside' | 'settle') => onBranch?.({ kind, memberId: member.id, name })
   const action = worktree && onBranch ? (merging ? 'settle' : changed > 0 ? 'merge' : undefined) : undefined
+  const unmergeable = action === 'merge' && detached
 
   function bringIn() {
     sync.mutate(member.id, {
@@ -151,8 +155,8 @@ export function MemberRow({
       </Item>
       <div className="absolute top-1.5 right-1 flex items-center gap-1">
         {action ? (
-          <Busy why={branchBusy ? t('branches.busy', { name }) : undefined}>
-            <Button size="xs" variant="outline" disabled={branchBusy} onClick={() => open(action)}>
+          <Busy why={branchBusy ? t('branches.busy', { name }) : unmergeable ? t('branches.detachedWhy') : undefined}>
+            <Button size="xs" variant="outline" disabled={branchBusy || unmergeable} onClick={() => open(action)}>
               {action === 'merge' ? <GitMergeIcon aria-hidden="true" /> : null}
               {action === 'merge' ? t('tasks.merge') : t('branches.settle')}
             </Button>
@@ -217,11 +221,11 @@ export function MemberRow({
                 })
               }
             >
-              {busy ? t('member.newSessionBusy') : t('member.newSession')}
+              {t('member.newSession')}
             </DropdownMenuItem>
             <DropdownMenuSeparator />
             <DropdownMenuItem variant="destructive" disabled={busy} onSelect={() => onRemove(member)}>
-              {busy ? t('member.removeBusy') : t('member.remove')}
+              {t('member.remove')}
             </DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>

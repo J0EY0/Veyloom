@@ -144,9 +144,10 @@ describe('AgentDialog', () => {
     })
     renderWithProviders(<AgentDialog agent={{ ...existing, skills: ['claude-only', 'gone-one', 'old-habit'] }} onClose={vi.fn()} />)
     await waitFor(() => expect(skillBoxes()).toEqual(['Claude only ✓', 'Go table tests', 'gone-one ✓', 'Old habit ✓']))
-    expect(screen.getByText('仅适用于 Claude Code，取消勾选即可卸载。')).toBeInTheDocument()
-    expect(screen.getByText('技能库中已没有这个技能，取消勾选即可卸载。')).toBeInTheDocument()
-    expect(screen.getByText('已停用，不会再提供给 agent，取消勾选即可卸载。')).toBeInTheDocument()
+    // How each stands, and no more.
+    expect(screen.getByText('只适用于 Claude Code')).toBeInTheDocument()
+    expect(screen.getByText('技能库里已经没有了')).toBeInTheDocument()
+    expect(screen.getByText('已停用')).toBeInTheDocument()
 
     await userEvent.click(screen.getByRole('checkbox', { name: /gone-one/ }))
     await userEvent.click(screen.getByRole('checkbox', { name: /Go table tests/ }))

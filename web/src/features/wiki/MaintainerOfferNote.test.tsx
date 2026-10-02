@@ -3,7 +3,7 @@ import userEvent from '@testing-library/user-event'
 import { describe, expect, it } from 'vitest'
 import type { UpkeepStatus } from '@/api/types'
 import { stubApi } from '@/test/fetch'
-import { project, room } from '@/test/fixtures'
+import { project, room, runtimeTraits } from '@/test/fixtures'
 import { renderWithProviders } from '@/test/render'
 import { MaintainerOfferNote } from './MaintainerOfferNote'
 
@@ -39,7 +39,37 @@ describe('MaintainerOfferNote', () => {
     expect(screen.queryByRole('button', { name: '暂不开启' })).toBeNull()
   })
 
-  it('keeps a no, and says where to change one’s mind', async () => {
+  it('offers one who can write the wiki: past a read-only Codex leader to the next member', async () => {
+    let patched: unknown
+    stubApi({
+      '/projects': { projects: [{ ...project('p1', 'Veyloom'), leader_id: 'm1' }] },
+      '/projects/p1/wiki/maintainer': { upkeep: waiting },
+      '/rooms/r1/members': {
+        members: [
+          { id: 'm1', agent_id: 'a1', display_name: 'Codex', enabled: true, permission_preset: '' },
+          { id: 'm2', agent_id: 'a2', display_name: 'Claude', enabled: true, permission_preset: '' },
+        ],
+      },
+      '/agents': {
+        agents: [
+          { id: 'a1', runtime: 'codex', permission_preset: 'read_only' },
+          { id: 'a2', runtime: 'claude', permission_preset: 'read_only' },
+        ],
+      },
+      '/runtime-traits': runtimeTraits,
+      '/projects/p1': async (req: Request) => {
+        patched = await req.json()
+        return { project: { ...project('p1', 'Veyloom'), leader_id: 'm1', wiki_upkeep: true }, rooms: [room('r1', 'p1', 'main')] }
+      },
+    })
+    const user = userEvent.setup()
+    renderWithProviders(<MaintainerOfferNote projectId="p1" roomId="r1" />)
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '由谁整理' })).toHaveTextContent('Claude'))
+    await user.click(screen.getByRole('button', { name: '开启（每天一次）' }))
+    await waitFor(() => expect(patched).toEqual({ wiki_upkeep: true, wiki_maintainer_member_id: 'm2', wiki_maintainer_trigger: 'daily' }))
+  })
+
+  it('keeps a no, and says only that there is no maintainer', async () => {
     let patched: unknown
     stubApi({
       '/projects': { projects: [project('p1', 'Veyloom')] },
@@ -54,7 +84,7 @@ describe('MaintainerOfferNote', () => {
     renderWithProviders(<MaintainerOfferNote projectId="p1" roomId="r1" />)
     await user.click(await screen.findByRole('button', { name: '暂不开启' }))
     await waitFor(() => expect(patched).toEqual({ wiki_offer_declined: true }))
-    expect(await screen.findByText(/你选择暂不开启维护员/)).toBeInTheDocument()
+    expect(await screen.findByText('没有开启维护员')).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: '开启（每天一次）' })).toBeNull()
   })
 })

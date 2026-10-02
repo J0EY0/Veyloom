@@ -103,7 +103,7 @@ describe('attachments in the chat', () => {
     const log = attachment('t1', 'huge.log', 'text', { size: 900000 })
     renderWithProviders(<MessageAttachments attachments={[log]} roomId="r1" />)
     await userEvent.click(await screen.findByRole('button', { name: '展开' }))
-    await userEvent.click(screen.getByRole('button', { name: '文件过长，请在预览中查看全文' }))
+    await userEvent.click(screen.getByRole('button', { name: '查看全文' }))
     expect(openViewer).toHaveBeenCalledWith({ roomId: 'r1', attachment: log, threadId: undefined })
     // How many lines a file has is not known from its start.
     expect(screen.queryByText(/行 ·/)).not.toBeInTheDocument()

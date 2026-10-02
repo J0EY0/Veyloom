@@ -172,11 +172,7 @@ export function MemoryComposer({ edit }: { edit: MemoryEdit }) {
           {errorText(save.error)}
         </p>
       ) : null}
-      {view && edit.full ? (
-        <p className="text-xs text-status-wait tabular-nums">
-          {t('memory.usage', { chars: view.chars, budget: view.budget })} · {t('memory.nearlyFull')}
-        </p>
-      ) : null}
+      {view && edit.full ? <p className="text-xs text-status-wait tabular-nums">{t('memory.usage', { chars: view.chars, budget: view.budget })}</p> : null}
     </div>
   )
 }

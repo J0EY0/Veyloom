@@ -17,11 +17,7 @@ export function MaintainerOfferNote({ projectId, roomId }: { projectId: string; 
         <div className="mb-1 text-[0.8125rem] leading-tight font-medium text-foreground">
           {t(status.leader ? 'maintainer.keepsLeader' : 'maintainer.keeps', { name: status.member_name ?? '' })}
         </div>
-        <p className="text-[0.8125rem] text-muted-foreground">
-          {t(triggerWhenKeys[status.trigger], { n: status.idle_minutes })}
-          <span aria-hidden="true"> · </span>
-          {t('maintainer.adjustHint')}
-        </p>
+        <p className="text-[0.8125rem] text-muted-foreground">{t(triggerWhenKeys[status.trigger], { n: status.idle_minutes })}</p>
       </div>
     )
   }

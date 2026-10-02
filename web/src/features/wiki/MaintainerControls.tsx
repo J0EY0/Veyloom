@@ -1,8 +1,10 @@
 import { toast } from 'sonner'
-import { useRoomMembers } from '@/api/agents'
+import { useAgents, useRoomMembers } from '@/api/agents'
 import { errorText } from '@/api/errorText'
 import { useProject, useUpdateProject } from '@/api/projects'
+import { useRuntimeTraits } from '@/api/runtimes'
 import type { UpdateProjectRequest, UpkeepStatus } from '@/api/types'
+import { keepsNoWiki } from '@/api/upkeep'
 import { byLeader, KeeperSelect, upkeepOff } from '@/features/projects/MaintainerFields'
 import { useT } from '@/lib/i18n'
 import { TriggerSelect } from './TriggerSelect'
@@ -15,10 +17,13 @@ export function MaintainerControls({ projectId, roomId, status }: { projectId: s
   const t = useT()
   const project = useProject(projectId)
   const members = useRoomMembers(roomId)
+  const agents = useAgents()
+  const traits = useRuntimeTraits()
   const update = useUpdateProject(projectId)
   const current = project?.wiki_maintainer_member_id || byLeader
   const candidates = (members.data ?? []).filter((member) => member.enabled || member.id === current)
   const leader = (members.data ?? []).find((member) => member.id === project?.leader_id)
+  const canKeep = (value: string) => !keepsNoWiki(value === byLeader ? leader : candidates.find((m) => m.id === value), agents.data, traits.data)
 
   function change(req: UpdateProjectRequest) {
     update.mutate(req, { onError: (err) => toast.error(t('maintainer.changeFailed', { error: errorText(err) })) })
@@ -39,6 +44,7 @@ export function MaintainerControls({ projectId, roomId, status }: { projectId: s
         leader={leader}
         candidates={candidates}
         offLabel={t('maintainer.none')}
+        canKeep={canKeep}
         onChange={keep}
         disabled={update.isPending}
       />

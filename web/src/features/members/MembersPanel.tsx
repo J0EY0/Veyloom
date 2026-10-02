@@ -172,6 +172,7 @@ export function MembersPanel({ roomId, roomName, onClose, onOpenThread }: Member
                     overlaps={overlapsOf(state.member.id, branches.data?.overlaps ?? [], names)}
                     holds={(branch?.contains ?? []).flatMap((held) => names.get(held) ?? [])}
                     inCheckout={Boolean(main?.git)}
+                    detached={Boolean(main?.git) && !main?.branch}
                     onEdit={setEditing}
                     onMakeLeader={makeLeader}
                     onRemove={setRemoving}
@@ -212,11 +213,18 @@ function ProjectCard({ project, branch, onEdit }: { project: Project; branch?: s
               {project.repo_path}
             </ItemDescription>
           ) : null}
-          {branch ? (
-            <span className="flex items-center gap-1 font-mono text-[0.71875rem] text-subtle" translate="no">
+          {branch !== undefined ? (
+            // A checkout on no branch says so where the branch would be.
+            <span className="flex items-center gap-1 text-[0.71875rem] text-subtle">
               <GitBranchIcon aria-hidden="true" className="size-3 flex-none" />
               <span className="sr-only">{t('branches.main')} </span>
-              {branch}
+              {branch ? (
+                <span className="font-mono" translate="no">
+                  {branch}
+                </span>
+              ) : (
+                t('branches.noBranch')
+              )}
             </span>
           ) : null}
         </ItemContent>

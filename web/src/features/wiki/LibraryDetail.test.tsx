@@ -121,10 +121,11 @@ describe('a skill of the library', () => {
     await userEvent.click(screen.getByRole('button', { name: /管理…/ }))
     const menu = await screen.findByRole('menu')
     expect(within(menu).getByRole('menuitemcheckbox', { name: /Coder/ })).toHaveAttribute('aria-checked', 'true')
-    // Kept for Codex, it is not for a Claude Code agent.
+    // Kept for Codex, it is not for a Claude Code agent: greyed, its runtime
+    // under its name as for the others, and nothing more said.
     const thinker = within(menu).getByRole('menuitemcheckbox', { name: /Thinker/ })
     expect(thinker).toHaveAttribute('aria-disabled', 'true')
-    expect(thinker).toHaveTextContent('仅适用于 Codex')
+    expect(thinker).toHaveTextContent('ThinkerClaude Code')
     await userEvent.click(within(menu).getByRole('menuitemcheckbox', { name: /Writer/ }))
     await waitFor(() => expect(asked).toEqual({ name: 'go-table-tests', agent_id: 'a2', installed: true }))
     expect(await screen.findByText('Writer', { selector: 'dd span' })).toBeInTheDocument()

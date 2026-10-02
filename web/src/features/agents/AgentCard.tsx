@@ -88,7 +88,8 @@ export function AgentCard({ agent, onOpen, onDelete }: AgentCardProps) {
             <PencilIcon />
             {t('common.edit')}
           </DropdownMenuItem>
-          <DropdownMenuItem variant="destructive" onSelect={() => onDelete(agent)}>
+          {/* Still in a project, it stays: taken out there first. */}
+          <DropdownMenuItem variant="destructive" disabled={agent.projects.length > 0} onSelect={() => onDelete(agent)}>
             <Trash2Icon />
             {t('common.delete')}
           </DropdownMenuItem>

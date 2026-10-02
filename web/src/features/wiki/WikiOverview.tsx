@@ -62,7 +62,6 @@ export function WikiOverview({ space, catalog, onOpenThread }: WikiOverviewProps
             <TooltipContent side="bottom">{t('wiki.copyFolder')}</TooltipContent>
           </Tooltip>
         </div>
-        {!catalog.history ? <p className="text-xs text-status-wait">{t('wiki.noHistory')}</p> : null}
       </header>
 
       {space.kind === 'project' ? <MaintainerCard projectId={space.projectId} roomId={space.roomId} onOpenThread={onOpenThread} /> : null}
@@ -158,7 +157,6 @@ export function WikiChanges({ space, catalog, onOpenThread, back }: WikiOverview
       <header className="flex flex-col gap-1">
         {back ? <BackLink back={back} /> : <BackToPages space={space} />}
         <h1 className="text-xl font-semibold tracking-[-0.01em]">{t('wiki.changes')}</h1>
-        {!catalog.history ? <p className="text-xs text-status-wait">{t('wiki.noHistory')}</p> : null}
       </header>
       {commits.data?.length === 0 ? (
         <Empty>

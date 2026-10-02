@@ -153,9 +153,7 @@ export function AgentDialog({ agent, onClose }: AgentDialogProps) {
                 <FieldLabel htmlFor={`${id}-runtime`}>{t('agent.runtime')}</FieldLabel>
                 <Select value={runtime} onValueChange={setPickedRuntime} disabled={runtimeIds.length === 0}>
                   <SelectTrigger id={`${id}-runtime`} className="w-full">
-                    <SelectValue
-                      placeholder={machines.isPending ? t('common.loading') : machineId === '' ? t('agent.pickMachineFirst') : t('agent.noRuntimes')}
-                    />
+                    <SelectValue placeholder={machines.isPending ? t('common.loading') : machineId === '' ? undefined : t('agent.noRuntimes')} />
                   </SelectTrigger>
                   <SelectContent>
                     {runtimeIds.map((name) => (

@@ -38,7 +38,8 @@ describe('LinkCard', () => {
   it('never offers to open anything but a web link', () => {
     renderWithProviders(<RequestCard approval={link('javascript:alert(1)')} names={names} />)
     expect(screen.queryByRole('link', { name: '打开链接' })).not.toBeInTheDocument()
-    expect(screen.getByRole('alert')).toHaveTextContent('不是 http 或 https 链接')
+    // And nothing said about it.
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument()
   })
 
   it('says who dealt with it', () => {

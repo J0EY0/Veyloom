@@ -2,7 +2,7 @@ import { screen, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { stubApi } from '@/test/fetch'
-import { project, room } from '@/test/fixtures'
+import { project, room, runtimeTraits } from '@/test/fixtures'
 import { renderWithProviders } from '@/test/render'
 import { EditProjectDialog } from './EditProjectDialog'
 
@@ -94,6 +94,40 @@ describe('EditProjectDialog', () => {
     expect(bodies[1]).toMatchObject({ wiki_upkeep: true })
     expect(bodies[1]).not.toHaveProperty('wiki_maintainer_member_id')
     expect(bodies[1]).not.toHaveProperty('wiki_maintainer_trigger')
+  })
+
+  it('turned on, is kept by one who can write the wiki, past a read-only Codex it had', async () => {
+    let patched: unknown
+    stubApi({
+      '/rooms/p1-main/members': {
+        members: [
+          { id: 'm1', agent_id: 'a1', display_name: 'Codex', enabled: true, permission_preset: '' },
+          { id: 'm2', agent_id: 'a2', display_name: 'Claude', enabled: true, permission_preset: '' },
+        ],
+      },
+      '/agents': {
+        agents: [
+          { id: 'a1', runtime: 'codex', permission_preset: 'read_only' },
+          { id: 'a2', runtime: 'claude', permission_preset: 'read_only' },
+        ],
+      },
+      '/runtime-traits': runtimeTraits,
+      '/projects/p1/wiki/maintainer': { upkeep: { trigger: 'daily', idle_minutes: 30, waiting: { own: 0, uses: 0, settled: 0 }, queued: false } },
+      '/projects/p1': async (req: Request) => {
+        patched = await req.json()
+        return { project: veyloom, rooms: [room('p1-main', 'p1', 'main')] }
+      },
+    })
+    const user = userEvent.setup()
+    const onClose = vi.fn()
+    // Off, last kept by the Codex, whose preset has since gone read-only.
+    renderWithProviders(<EditProjectDialog project={{ ...veyloom, leader_id: 'm1', wiki_maintainer_member_id: 'm1' }} onClose={onClose} />)
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Wiki 维护员' })).toBeEnabled())
+    await user.click(screen.getByRole('switch', { name: 'Wiki 维护员' }))
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '由谁整理' })).toHaveTextContent('Claude'))
+    await user.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(onClose).toHaveBeenCalledOnce())
+    expect(patched).toMatchObject({ wiki_upkeep: true, wiki_maintainer_member_id: 'm2' })
   })
 
   it('turns the upkeep off, keeping who would keep it', async () => {

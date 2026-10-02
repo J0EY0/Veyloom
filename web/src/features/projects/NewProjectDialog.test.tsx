@@ -2,7 +2,7 @@ import { fireEvent, screen, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { describe, expect, it, vi } from 'vitest'
 import { stubApi } from '@/test/fetch'
-import { project, room } from '@/test/fixtures'
+import { project, room, runtimeTraits } from '@/test/fixtures'
 import { renderWithProviders } from '@/test/render'
 import { NewProjectDialog } from './NewProjectDialog'
 
@@ -107,6 +107,31 @@ describe('NewProjectDialog', () => {
     await userEvent.click(screen.getByRole('switch', { name: 'Wiki 维护员' }))
     await userEvent.click(screen.getByRole('button', { name: '创建项目' }))
     await waitFor(() => expect(posted[0]).toEqual({ name: 'New', repo_path: '', agent_ids: ['ag1'], wiki_upkeep: true }))
+  })
+
+  it('keeps the wiki by one who can write it: past a read-only Codex leader, and not at all with none', async () => {
+    const posted: unknown[] = []
+    stub({
+      '/agents': { agents: [...agents, agent('ag4', 'Codex Coder', 'codex')] },
+      '/runtime-traits': runtimeTraits,
+      '/projects': async (req: Request) => {
+        posted.push(await req.json())
+        return Response.json({ project: project('p9', 'New'), rooms: [room('r9', 'p9', 'main')] }, { status: 201 })
+      },
+    })
+    renderWithProviders(<NewProjectDialog open onClose={() => {}} />)
+    await userEvent.type(screen.getByLabelText('名称'), 'New')
+    // A read-only Codex alone writes no wiki: it cannot be kept.
+    await userEvent.click(await screen.findByRole('checkbox', { name: /Codex Coder/ }))
+    await waitFor(() => expect(screen.getByRole('switch', { name: 'Wiki 维护员' })).toBeDisabled())
+    // With a Claude after it, the Claude keeps it.
+    await userEvent.click(screen.getByRole('checkbox', { name: /Claude Architect/ }))
+    await userEvent.click(screen.getByRole('switch', { name: 'Wiki 维护员' }))
+    expect(screen.queryByText(/只读/)).toBeNull()
+    await userEvent.click(screen.getByRole('button', { name: '创建项目' }))
+    await waitFor(() =>
+      expect(posted[0]).toEqual({ name: 'New', repo_path: '', agent_ids: ['ag4', 'ag1'], wiki_upkeep: true, wiki_maintainer_agent_id: 'ag1' }),
+    )
   })
 
   it('picks the way an IM starts a group chat: chips in the search box, Enter and Backspace', async () => {

@@ -65,24 +65,24 @@ export function LocalList({
       {skills.map((skill) => {
         const box = `${id}-${skill.folder}`
         const updatable = skill.in_library && (skill.origin === 'changed' || skill.origin === 'unknown')
-        // Skills of one name in two folders: the library takes one of them.
+        // Skills of one name in two folders: the library takes one of them,
+        // the other greyed while one is ticked (the line naming its twins
+        // says why).
         const twins = skills.filter((other) => other.name === skill.name && other.folder !== skill.folder)
-        const twinTicked = twins.find((other) => ticked.includes(other.folder))
+        const twinTicked = twins.some((other) => ticked.includes(other.folder))
         const why = skill.in_library
           ? t('library.import.inLibrary')
           : skill.problem
             ? skill.problem in problems
               ? t(problems[skill.problem])
               : problemText(skill.problem, skill.problem_params, t('library.import.problem.skillUnreadable'))
-            : twinTicked
-              ? t('library.import.twinTicked', { where: twinTicked.where })
-              : undefined
+            : undefined
         return (
           <li key={skill.folder}>
-            <Field orientation="horizontal" className="px-3 py-2" data-disabled={why && !updatable ? true : undefined}>
+            <Field orientation="horizontal" className="px-3 py-2" data-disabled={(why && !updatable) || twinTicked ? true : undefined}>
               <Checkbox
                 id={box}
-                disabled={why !== undefined}
+                disabled={why !== undefined || twinTicked}
                 checked={ticked.includes(skill.folder)}
                 onCheckedChange={(on) => onTick(on === true ? [...ticked, skill.folder] : ticked.filter((folder) => folder !== skill.folder))}
               />

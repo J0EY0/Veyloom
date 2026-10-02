@@ -129,7 +129,7 @@ describe('MaintainerCard', () => {
     await waitFor(() => expect(patched).toEqual({ wiki_upkeep: true, wiki_maintainer_member_id: 'm2', wiki_maintainer_trigger: 'daily' }))
   })
 
-  it('warns that a read-only Codex member would write no wiki', async () => {
+  it('does not offer a read-only Codex member, who would write no wiki', async () => {
     stubApi({
       '/projects': { projects: [{ ...project('p1', 'Veyloom'), leader_id: 'm2' }] },
       '/projects/p1/wiki/maintainer': { upkeep: status({ waiting: { own: 1, uses: 0, settled: 1 } }) },
@@ -149,12 +149,13 @@ describe('MaintainerCard', () => {
     })
     const user = userEvent.setup()
     renderWithProviders(<MaintainerCard projectId="p1" roomId="r1" onOpenThread={() => {}} />)
-    // The leader, a Claude, writes it.
+    // The leader, a Claude, writes it; the Codex is there, greyed, and
+    // nothing is said about it.
     await waitFor(() => expect(screen.getByRole('combobox', { name: '由谁整理' })).toHaveTextContent('组长（Claude）'))
-    expect(screen.queryByText(/只读权限的 Codex/)).toBeNull()
     await user.click(screen.getByRole('combobox', { name: '由谁整理' }))
-    await user.click(await screen.findByRole('option', { name: 'Codex' }))
-    expect(await screen.findByText(/只读权限的 Codex/)).toBeInTheDocument()
+    expect(await screen.findByRole('option', { name: 'Codex' })).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.getByRole('option', { name: '组长（Claude）' })).not.toHaveAttribute('aria-disabled')
+    expect(screen.queryByText(/只读/)).toBeNull()
   })
 
   it('stops offering once declined, and offers nothing when nothing waits', async () => {

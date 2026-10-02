@@ -117,6 +117,14 @@ describe('AgentsPage', () => {
     expect(screen.getByRole('button', { name: /Claude Architect/ })).toBeInTheDocument()
   })
 
+  it('greys deleting an agent that is still in a project', async () => {
+    stubApi({ '/agents': { agents: [{ ...agents[1], projects: ['Veyloom'] }] } })
+    renderWithProviders(<AgentsPage />)
+    const card = (await screen.findByRole('button', { name: /Fake Implementer/ })).parentElement!
+    await userEvent.click(within(card).getByRole('button', { name: '更多' }))
+    expect(await screen.findByRole('menuitem', { name: '删除' })).toHaveAttribute('aria-disabled', 'true')
+  })
+
   it('treats an agent someone else already deleted as deleted', async () => {
     stubApi({
       '/agents': { agents },
